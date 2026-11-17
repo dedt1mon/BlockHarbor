@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BlockHarbor</title>
+    <link rel="icon" type="image/svg+xml" sizes="any" href="/icon.svg" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">
+        <img src="/icon.svg" width="40" height="40" alt="" />
+        <div>BlockHarbor</div>
+      </div>
+      <nav aria-label="Навигация">
+        <button data-view="home" class="nav sel">
+          <i data-icon="home"></i><span>Главная</span></button
+        ><button data-view="builds" class="nav">
+          <i data-icon="layers"></i><span>Сборки</span></button
+        ><button data-view="friends" class="nav">
+          <i data-icon="users"></i><span>Друзья</span></button
+        ><button data-view="profile" class="nav">
+          <i data-icon="user"></i><span>Профиль</span>
+        </button>
+      </nav>
+      <div class="aside-bottom">
+        <button class="nav" data-view="settings">
+          <i data-icon="settings"></i><span>Настройки</span>
+        </button>
+        <div class="appversion"><b></b> BlockHarbor <span>1.10</span></div>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="crumb">
+          <span>Лаунчер</span><span class="slash">/</span
+          ><strong id="crumb">Главная</strong>
+        </div>
+        <button id="accountChip" class="account-chip" data-view="profile">
+          <i data-icon="user"></i><span id="topUser">Мой профиль</span>
+        </button>
+      </header>
+      <div id="gameExit" hidden>
+        <span id="gameExitMessage" role="status" aria-live="polite"></span>
+        <button
+          class="icon-button"
+          data-act="dismissExit"
+          aria-label="Скрыть сообщение о завершении игры"
+        >
+          <i data-icon="close"></i>
+        </button>
+      </div>
+      <section id="view" aria-label="Содержимое"></section>
+    </main>
+    <div
+      id="notice"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      hidden
+    ></div>
+    <dialog id="dialog">
+      <div class="dialog-top">
+        <h2 id="dialogTitle"></h2>
+        <button class="icon-button" aria-label="Закрыть" id="dialogClose">
+          <i data-icon="close"></i>
+        </button>
+      </div>
+      <div id="dialogBody"></div>
+    </dialog>
+    <input type="file" id="filePick" multiple hidden /><input
+      type="file"
+      id="skinPick"
+      accept="image/png"
+      hidden
+    />
+    <input type="file" id="buildZipPick" accept=".zip,application/zip" hidden />
+    <input type="file" id="cardPick" accept=".bhplayer" hidden />
+    <script src="/island.js"></script>
+    <script src="/window.js"></script>
+    <script src="/catalog-filters.js"></script>
+    <script src="/compatibility.js"></script>
+    <script src="/catalog.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

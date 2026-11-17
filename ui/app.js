@@ -1,0 +1,1717 @@
+"use strict";
+const $ = (s) => document.querySelector(s);
+const tokens = location.hash.slice(1);
+if (tokens) {
+  sessionStorage.setItem("blockharbor-key", tokens);
+  history.replaceState(null, "", location.pathname);
+}
+const key = sessionStorage.getItem("blockharbor-key") || "";
+const paths = {
+  home: "M3 10 12 3l9 7v10H15v-6H9v6H3z",
+  layers: "m3 8 9-5 9 5-9 5z M3 12l9 5 9-5 M3 16l9 5 9-5",
+  users:
+    "M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M14 4a4 4 0 0 1 0 8 M19 15a4 4 0 0 1 3 4v2 M13 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+  user: "M20 21v-2a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5v2 M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+  settings:
+    "M4 7h8m4 0h4M4 17h3m4 0h9 M16 7a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M11 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0",
+  cube: "m3 7 9-5 9 5v10l-9 5-9-5z M3 7l9 5 9-5 M12 12v10",
+  play: "m7 3 14 9-14 9z",
+  plus: "M12 4v16M4 12h16",
+  arrow: "M4 12h15m-6-6 6 6-6 6",
+  gear: "m9.5 3-.6 2.2-1.4.8-2.2-.6-2.4 4.2 1.6 1.6v1.6l-1.6 1.6 2.4 4.2 2.2-.6 1.4.8.6 2.2h5l.6-2.2 1.4-.8 2.2.6 2.4-4.2-1.6-1.6v-1.6l1.6-1.6-2.4-4.2-2.2.6-1.4-.8-.6-2.2z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
+  download: "M12 3v12m-5-5 5 5 5-5 M4 16v4h16v-4",
+  search: "M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0 M15 15l6 6",
+  upload: "M12 15V3m-5 5 5-5 5 5 M4 15v5h16v-5",
+  trash: "M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
+  close: "m5 5 14 14M19 5 5 19",
+  folder: "M3 6h7l2 3h9v11H3z",
+  link: "M8 12l7-7m-5-2h8v8 M9 5H4v15h15v-5",
+  plug: "M8 3v5m8-5v5 M5 8h14v2a7 7 0 0 1-14 0z M12 17v5",
+  sun: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M12 1v3m0 16v3M1 12h3m16 0h3 M4 4l2 2m12 12 2 2M20 4l-2 2M6 18l-2 2",
+  texture: "M3 3h18v18H3z M3 9h18M3 15h18M9 3v6m6 0v6m-6 0v6",
+  copy: "M8 8h12v13H8z M16 8V3H3v13h5",
+  down: "m6 9 6 6 6-6",
+  check: "m3 12 6 6L21 6",
+  refresh: "M20 8a8 8 0 1 0 1 7 M20 3v5h-5",
+  back: "M20 12H4m6-6-6 6 6 6",
+  image: "M3 4h18v16H3z M3 17l6-6 4 4 3-4 5 5",
+  monitor: "M3 3h18v13H3z M12 16v4m-5 1h10",
+  game: "M6 7h12l3 10q0 4-4 2l-3-3h-4l-3 3q-4 2-4-2z M7 10v4m-2-2h4m7 1h.1m2-3h.1",
+};
+const ic = (n) =>
+  '<i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="' +
+  (paths[n] || paths.cube) +
+  '"/></svg></i>';
+document
+  .querySelectorAll("[data-icon]")
+  .forEach((el) => (el.outerHTML = ic(el.dataset.icon)));
+const esc = (v) =>
+  String(v ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const btn = (id, label, icon, cls = "") =>
+  '<button type="button" class="btn ' +
+  cls +
+  '" data-act="' +
+  id +
+  '">' +
+  (icon ? ic(icon) : "") +
+  label +
+  "</button>";
+const names = {
+  home: "Главная",
+  builds: "Сборки",
+  addons: "Настройки сборки",
+  friends: "Друзья",
+  profile: "Профиль",
+  settings: "Настройки",
+};
+const loaders = {
+  vanilla: "Vanilla",
+  fabric: "Fabric",
+  forge: "Forge",
+  neoforge: "NeoForge",
+  quilt: "Quilt",
+};
+const kinds = {
+  mods: ["Моды", "plug", ""],
+  shaderpacks: ["Шейдеры", "sun", "purple"],
+  resourcepacks: ["Ресурс-паки", "texture", "blue"],
+};
+const pages = {
+  steamInstall: "https://store.steampowered.com/about/",
+};
+let state,
+  view = "home",
+  kind = "mods",
+  lastJob = "",
+  lastPlayJob = "",
+  shownExit = "",
+  activePoll = false,
+  pollTimer = 0,
+  refreshAfterPlay = false,
+  pollError = "",
+  selectingBuild = false,
+  loadedSkin = 0;
+const active = () => state.profiles.find((p) => p.id === state.active);
+let noticeTimer = 0;
+let distancePreview = null;
+function moveNotice() {
+  const box = $("#notice");
+  const parent = $("#dialog").open ? $("#dialog") : document.body;
+  if (box.parentElement !== parent) parent.append(box);
+}
+function notice(msg, bad = false, busy = false) {
+  const box = $("#notice");
+  const style = bad ? "bad" : busy ? "busy" : "success";
+  if (busy && !box.hidden && box.className === style && box.textContent === msg)
+    return;
+  clearTimeout(noticeTimer);
+  box.hidden = !msg;
+  if (!msg) {
+    box.className = "";
+    box.replaceChildren();
+    return;
+  }
+  moveNotice();
+  box.className = style;
+  const text = document.createElement("span");
+  text.textContent = msg;
+  box.innerHTML = ic(bad ? "close" : busy ? "refresh" : "check");
+  box.append(text);
+  if (!busy) noticeTimer = setTimeout(() => notice(""), 5000);
+}
+function head(title, actions = "", sub = "") {
+  return (
+    '<div class="page-head"><div><h1>' +
+    esc(title) +
+    "</h1>" +
+    (sub ? "<p>" + sub + "</p>" : "") +
+    '</div><div class="actions">' +
+    actions +
+    "</div></div>"
+  );
+}
+function titleRow(title, extra = "") {
+  return '<div class="section-head"><h2>' + title + "</h2>" + extra + "</div>";
+}
+function fmt(size) {
+  return size >= 1048576
+    ? (size / 1048576).toFixed(1) + " МБ"
+    : Math.max(1, Math.round(size / 1024)) + " КБ";
+}
+async function api(path, opt = {}) {
+  const headers = { ...opt.headers, Authorization: "Bearer " + key };
+  let r;
+  try {
+    r = await fetch(path, { ...opt, headers });
+  } catch {
+    throw Error(
+      "Связь с приложением прервана. Открой BlockHarbor.exe ещё раз.",
+    );
+  }
+  if (
+    [
+      "/api/preview",
+      "/api/skin-preview",
+      "/api/skin.png",
+      "/api/card",
+    ].includes(path.split("?")[0]) &&
+    r.ok
+  )
+    return r.blob();
+  const data = await r.json();
+  if (!r.ok) throw Error(data.error || "Операция не удалась.");
+  return data;
+}
+const act = (action, data = {}) =>
+  api("/api/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...data }),
+  });
+async function refresh() {
+  state = await api("/api/state");
+  render();
+}
+function navigate(v) {
+  view = v;
+  render();
+  $("main").scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+function selectInfo(p) {
+  return (
+    '<span class="tag">' +
+    esc(p.version) +
+    '</span><span class="tag"><em></em>' +
+    esc(loaders[p.loader]) +
+    "</span>"
+  );
+}
+function localMode() {
+  return state.mode === "local";
+}
+function playControls() {
+  const identity = localMode()
+    ? '<label class="play-identity"><span>Ник в игре</span><input id="playNick" autocomplete="off" spellcheck="false" maxlength="16" required pattern="[A-Za-z0-9_]{3,16}" title="От 3 до 16 латинских букв, цифр или символов подчёркивания" value="' +
+      esc(state.nickname || "Player") +
+      '"></label>'
+    : '<span class="tag">' +
+      ic("user") +
+      esc(
+        state.mode === "prism"
+          ? "Microsoft · Prism"
+          : state.account || "Microsoft",
+      ) +
+      "</span>";
+  return (
+    '<div class="play-controls">' +
+    identity +
+    btn("play", "Играть", "play", "main") +
+    "</div>"
+  );
+}
+function updatePlayButtons() {
+  const unavailable = Boolean(
+    selectingBuild || state.gameRunning || state.job?.busy,
+  );
+  const enableSteam = document.querySelector('[data-act="enableSteam"]');
+  if (enableSteam) enableSteam.disabled = unavailable;
+  document.querySelectorAll('[data-act="play"]').forEach((button) => {
+    if (button.disabled !== unavailable) button.disabled = unavailable;
+    const label = state.gameRunning
+      ? "Игра запущена"
+      : state.job?.busy
+        ? "Подождите…"
+        : "Играть";
+    if (button.dataset.label !== label) {
+      button.innerHTML = ic(state.gameRunning ? "game" : "play") + label;
+      button.dataset.label = label;
+    }
+  });
+}
+function homeBuildPicker() {
+  if (state.profiles.length < 2) return "";
+  const options = state.profiles.map(
+    (p) =>
+      '<option value="' +
+      esc(p.id) +
+      '"' +
+      (p.id === state.active ? " selected" : "") +
+      ">" +
+      esc(p.name) +
+      " · " +
+      esc(p.version) +
+      " · " +
+      esc(loaders[p.loader]) +
+      "</option>",
+  );
+  return (
+    '<label class="build-picker"><span>Сборка</span><select id="homeBuild">' +
+    options.join("") +
+    "</select></label>"
+  );
+}
+function home() {
+  const p = active();
+  if (!p)
+    return emptyBuildView(
+      "Игровая панель",
+      "Чтобы запустить Minecraft, создай сборку или загрузи готовый ZIP из BlockHarbor.",
+    );
+  return (
+    head(
+      "Игровая панель",
+      homeBuildPicker() + btn("create", "Новая сборка", "plus"),
+    ) +
+    '<div class="hero"><canvas id="harborScene" aria-hidden="true"></canvas><div class="hero-body"><div class="eyebrow">Активная сборка</div><h2>' +
+    esc(p.name) +
+    '</h2><div class="tags">' +
+    selectInfo(p) +
+    '</div><div class="actions">' +
+    playControls() +
+    btn("addons", "Содержимое", "layers", "secondary") +
+    "</div></div></div>" +
+    titleRow(
+      "Дополнения сборки",
+      '<button class="linkbtn" data-act="addons">Управление ' +
+        ic("arrow") +
+        "</button>",
+    ) +
+    '<div class="tiles">' +
+    Object.entries(kinds)
+      .map(
+        ([k, [name, icon, col]]) =>
+          '<button class="tile" data-kind="' +
+          k +
+          '"><span class="tile-icon ' +
+          col +
+          '">' +
+          ic(icon) +
+          "</span><small>" +
+          String(state.contents[k].length).padStart(2, "0") +
+          "</small><h3>" +
+          name +
+          "</h3></button>",
+      )
+      .join("") +
+    "</div>"
+  );
+}
+function buildIdentity(p) {
+  return (
+    '<span class="mini-icon">' +
+    ic("cube") +
+    '</span><span class="build-name"><strong>' +
+    esc(p.name) +
+    "</strong><small>" +
+    esc(loaders[p.loader]) +
+    " · " +
+    esc(p.version) +
+    "</small></span>"
+  );
+}
+function buildRows(profiles) {
+  return profiles
+    .map((p) => {
+      const selected = p.id === state.active;
+      return (
+        '<div class="build-row' +
+        (selected ? " active" : "") +
+        '">' +
+        '<button type="button" class="build-pick" aria-pressed="' +
+        selected +
+        '" data-pick="' +
+        esc(p.id) +
+        '" title="Выбрать сборку «' +
+        esc(p.name) +
+        '»">' +
+        buildIdentity(p) +
+        "</button>" +
+        '<button type="button" class="btn build-settings" data-build-settings="' +
+        esc(p.id) +
+        '" aria-label="Настройки сборки «' +
+        esc(p.name) +
+        '»" title="Настройки сборки">' +
+        ic("gear") +
+        "<span>Настройки</span></button>" +
+        '<button type="button" class="btn build-settings" data-export-build="' +
+        esc(p.id) +
+        '" title="Выгрузить сборку в ZIP" aria-label="Выгрузить сборку «' +
+        esc(p.name) +
+        '»">' +
+        ic("download") +
+        "<span>Выгрузить</span></button>" +
+        '<button type="button" class="build-remove" data-remove-build="' +
+        esc(p.id) +
+        '" aria-label="Удалить сборку «' +
+        esc(p.name) +
+        '»" title="Удалить сборку">' +
+        ic("trash") +
+        "<span>Удалить</span></button></div>"
+      );
+    })
+    .join("");
+}
+function deletedBuilds() {
+  const profiles = state.deletedProfiles || [];
+  if (!profiles.length) return "";
+  return (
+    '<details class="deleted-builds"><summary>Удалённые сборки <span>' +
+    profiles.length +
+    "</span></summary>" +
+    profiles
+      .map(
+        (p) =>
+          '<div class="build-row archived-build">' +
+          buildIdentity(p) +
+          '<div class="archive-actions"><button type="button" class="btn" data-restore-build="' +
+          esc(p.id) +
+          '"' +
+          (p.purging ? ' disabled title="Удаление файлов уже началось"' : "") +
+          ' aria-label="Восстановить сборку «' +
+          esc(p.name) +
+          '»">' +
+          ic("refresh") +
+          "Восстановить</button>" +
+          '<button type="button" class="build-remove" data-purge-build="' +
+          esc(p.id) +
+          '" aria-label="Удалить сборку «' +
+          esc(p.name) +
+          '» с диска">' +
+          ic("trash") +
+          (p.purging ? "Продолжить удаление" : "Удалить с диска") +
+          "</button></div></div>",
+      )
+      .join("") +
+    "</details>"
+  );
+}
+function builds() {
+  return (
+    head(
+      "Мои сборки",
+      btn("importBuild", "Загрузить сборку", "upload") +
+        btn("create", "Новая сборка", "plus", "main"),
+      "У каждой сборки свои миры, дополнения и настройки.",
+    ) +
+    (state.profiles.length
+      ? buildRows(state.profiles)
+      : '<div class="empty">Сборок пока нет.</div>') +
+    deletedBuilds()
+  );
+}
+function emptyBuildView(title, message) {
+  const restore = state.deletedProfiles?.length
+    ? '<button type="button" class="btn" data-view="builds">К списку сборок</button>'
+    : "";
+  return (
+    head(title) +
+    '<section class="panel"><p>' +
+    message +
+    '</p><div class="actions">' +
+    btn("create", "Новая сборка", "plus", "main") +
+    btn("importBuild", "Загрузить сборку", "upload") +
+    restore +
+    "</div></section>"
+  );
+}
+// Reuse decoded images when tabs/state rebuild the list, without an unbounded cache.
+const installedIconImages = new Map();
+function installedIcon(file) {
+  return (
+    '<span class="installed-icon" aria-hidden="true" data-image="' +
+    esc(file.icon) +
+    '">' +
+    ic(kinds[kind][1]) +
+    "</span>"
+  );
+}
+function mountInstalledIcons() {
+  for (const slot of document.querySelectorAll("#view .installed-icon")) {
+    const url = slot.dataset.image;
+    if (!/^\/api\/content-icon\/[a-f0-9]{64}\.png$/.test(url)) continue;
+    const cached = installedIconImages.get(url);
+    if (cached && !cached.isConnected) {
+      slot.append(cached);
+      slot.dataset.loaded = "";
+      installedIconImages.delete(url);
+      installedIconImages.set(url, cached);
+      continue;
+    }
+    const image = new Image(36, 36);
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.onload = async () => {
+      image.onload = image.onerror = null;
+      try {
+        await image.decode();
+      } catch {
+        image.remove();
+        return;
+      }
+      slot.dataset.loaded = "";
+      installedIconImages.delete(url);
+      installedIconImages.set(url, image);
+      if (installedIconImages.size > 128) {
+        installedIconImages.delete(installedIconImages.keys().next().value);
+      }
+    };
+    image.onerror = () => {
+      image.onload = image.onerror = null;
+      image.remove();
+    };
+    slot.append(image);
+    image.src = url;
+  }
+}
+function addons() {
+  const p = active();
+  if (!p) return builds();
+  const desc = {
+    mods:
+      "Устанавливай JAR под " +
+      esc(loaders[p.loader]) +
+      " и Minecraft " +
+      esc(p.version) +
+      ".",
+    shaderpacks:
+      "Для отображения шейдеров нужен совместимый мод, например Iris. Выбор шейдерпака доступен в настройках графики игры.",
+    resourcepacks:
+      "После добавления ZIP открой в Minecraft «Настройки → Наборы ресурсов» и включи пакет.",
+  };
+  return (
+    head(p.name, playControls()) +
+    '<div class="tags">' +
+    selectInfo(p) +
+    btn("folder", "Папка сборки", "folder") +
+    (state.distanceSettings
+      ? btn("gameDistances", "Дальность в игре", "settings")
+      : "") +
+    "</div>" +
+    titleRow("Содержимое") +
+    '<div class="tabs">' +
+    Object.entries(kinds)
+      .map(
+        ([k, [v]]) =>
+          '<button class="' +
+          (k === kind ? "on" : "") +
+          '" data-kind="' +
+          k +
+          '">' +
+          v +
+          " · " +
+          state.contents[k].length +
+          "</button>",
+      )
+      .join("") +
+    "</div>" +
+    '<div class="splitbar"><p>' +
+    desc[kind] +
+    '</p><div class="actions">' +
+    btn("add", "Добавить файл", "plus") +
+    btn("openCatalog", "Скачать с Modrinth", "download", "main") +
+    "</div></div>" +
+    (state.contents[kind].length
+      ? state.contents[kind]
+          .map(
+            (x) =>
+              '<div class="file-row">' +
+              installedIcon(x) +
+              "<strong>" +
+              esc(x.name) +
+              '</strong><span class="meta">' +
+              fmt(x.size) +
+              "</span>" +
+              (x.managed
+                ? '<span class="pill" title="Сетевой компонент этой сборки обслуживается BlockHarbor">Встроено</span>'
+                : '<button aria-label="Удалить ' +
+                  esc(x.name) +
+                  '" class="icon-button danger" data-delete="' +
+                  esc(x.name) +
+                  '">' +
+                  ic("trash") +
+                  "</button>") +
+              "</div>",
+          )
+          .join("")
+      : '<div class="empty">Здесь появятся ' +
+        { mods: "моды", shaderpacks: "шейдеры", resourcepacks: "ресурс-паки" }[
+          kind
+        ] +
+        " этой сборки.</div>")
+  );
+}
+async function showSteamCheck() {
+  const profile = active();
+  if (!profile) return;
+  modal(
+    "Проверка игры по сети",
+    '<p id="steamCheckWaiting" role="status">Проверяем файлы и последний запуск…</p>',
+  );
+  const pending = $("#steamCheckWaiting");
+  const data = await api(
+    "/api/steam/check?" + new URLSearchParams({ id: profile.id }),
+  );
+  if (!pending.isConnected || !$("#dialog").open || state.active !== profile.id)
+    return;
+  const row = (title, value) =>
+    "<p><strong>" + esc(title) + "</strong><br>" + esc(value) + "</p>";
+  const when = data.logTime
+    ? new Date(data.logTime * 1000).toLocaleString("ru-RU")
+    : "";
+  const repairs = [];
+  if (data.issues.includes("host"))
+    repairs.push("В настройках e4steam отключено открытие мира через Steam.");
+  if (data.issues.includes("appid"))
+    repairs.push(
+      "В файле steam_appid.txt указан другой App ID. Для этой сборки e4steam нужен 480.",
+    );
+  const body = [
+    row(
+      data.profile,
+      ["Minecraft " + data.version, data.loader, data.loaderVersion]
+        .filter(Boolean)
+        .join(" · "),
+    ),
+    row(
+      "Компоненты Steam",
+      !data.supported
+        ? "У этой версии и загрузчика нет встроенного комплекта."
+        : (data.ready ? "Установлены" : "Требуется подготовка") +
+            " · e4steam " +
+            data.coreVersion +
+            " · Public Servers " +
+            data.addonVersion,
+    ),
+    repairs.map((text) => row("Настройка сборки", text)).join(""),
+    data.configNote ? row("Настройки", data.configNote) : "",
+    row(when ? "Последний журнал · " + when : "Журнал Minecraft", data.log),
+    data.modCode
+      ? '<label for="steamModCode">Код набора модов · ' +
+        Number(data.modCount) +
+        " JAR</label>" +
+        '<div class="actions steam-code"><input class="field" id="steamModCode" readonly value="' +
+        esc(data.modCode) +
+        '">' +
+        btn("copySteamCode", "Копировать", "copy") +
+        '</div><p class="note">Сравните код на обоих компьютерах. Он учитывает версию Minecraft, загрузчик и содержимое всех JAR. При расхождении сверьте моды или передайте другу ZIP сборки.</p>'
+      : row("Сравнение модов", data.modNote),
+    data.downloadProxy
+      ? '<p class="note">Для загрузок обнаружен прокси. Игровой трафик e4steam проходит через настольный Steam.</p>'
+      : "",
+    repairs.length
+      ? '<p class="note">Исправление восстановит отмеченные параметры. Копия исходных файлов сохранится в папке сборки.</p>'
+      : "",
+    '<div class="dialog-actions">' +
+      (data.supported && !data.ready
+        ? btn("prepareSteam", "Подготовить файлы Steam", "download", "main")
+        : "") +
+      (data.supported && repairs.length
+        ? btn("repairSteamSettings", "Исправить настройки Steam", "gear")
+        : "") +
+      btn("openSteam", "Открыть Steam", "users") +
+      "</div>",
+  ].join("");
+  modal("Проверка игры по сети", body);
+}
+
+function friendsView() {
+  const profile = active();
+  const steam = state.steam;
+  const readiness = !profile
+    ? "Для совместной игры создай сборку с поддержкой Steam или загрузи ZIP друга."
+    : steam.supported
+      ? steam.installed
+        ? "e4steam и Public Servers готовы в этой сборке."
+        : "Для этой сборки BlockHarbor подготовит сетевые компоненты при следующем запуске с главной страницы."
+      : steam.canEnable
+        ? "BlockHarbor установит Fabric и e4steam для существующих миров этой сборки. Миры останутся в той же папке, на той же версии Minecraft."
+        : steam.reason ||
+          "Для этой версии и загрузчика нет встроенной поддержки Steam.";
+  const controls = steam.supported
+    ? ""
+    : steam.canEnable
+      ? btn("enableSteam", "Включить Steam в этой сборке", "users", "main")
+      : btn("steamBuild", "Создать сборку для Steam", "plus");
+  return (
+    head("Игра через Steam", homeBuildPicker()) +
+    '<div class="friends-panels"><section class="panel"><div class="line">' +
+    ic("cube") +
+    "<h3>" +
+    esc(profile?.name || "Сборка для игры с друзьями") +
+    "</h3>" +
+    (profile ? selectInfo(profile) : "") +
+    "</div>" +
+    "<p>" +
+    esc(readiness) +
+    "</p>" +
+    '<div class="actions steam-actions">' +
+    controls +
+    (profile ? "" : btn("importBuild", "Загрузить сборку", "upload")) +
+    btn("openSteam", "Открыть Steam", "users") +
+    (profile ? btn("checkSteam", "Проверить подключение", "search") : "") +
+    '</div><p class="note">Войдите в разные аккаунты настольного Steam и добавьтесь в друзья. Запускайте Minecraft из BlockHarbor. На каждом компьютере Steam и BlockHarbor должны работать от одного пользователя с одинаковыми правами. ' +
+    '<a href="' +
+    pages.steamInstall +
+    '" target="_blank" rel="noopener noreferrer">Скачать Steam</a></p></section>' +
+    '<section class="panel"><h3>Пригласить друга</h3>' +
+    '<ol class="steam-steps"><li>В одиночном мире нажми <strong>Esc → Открыть для сети</strong>.</li>' +
+    "<li>Выбери <strong>Для друзей Steam</strong> или <strong>Только по приглашению</strong> и открой мир.</li>" +
+    "<li>Нажми <strong>Пригласить друзей</strong> и выбери друга в оверлее Steam.</li></ol></section>" +
+    '<section class="panel"><h3>Принять приглашение</h3>' +
+    '<ol class="steam-steps"><li>Запусти сборку и дождись главного меню Minecraft.</li>' +
+    "<li>Прими приглашение друга в Steam. Оверлей обычно открывается сочетанием <strong>Shift + Tab</strong>.</li>" +
+    '<li>Подтверди вход в Minecraft. Хозяин должен оставаться в мире.</li></ol><p class="note">Если приглашение не приходит, хозяин может открыть мир в режиме «Для друзей Steam». Вставь его полный зелёный адрес <code>s-…-….steam</code> из чата в «Сетевая игра → Прямое подключение». После повторного открытия мира понадобится новый адрес.</p><p class="note">С включённым VPN Steam выбирает доступное прямое соединение или ретранслятор Valve. Если подключение зависло, проверьте на обоих компьютерах, разрешает ли VPN игровой трафик Steam и UDP. Когда VPN поддерживает раздельную маршрутизацию, Steam и Java можно направить через рабочий маршрут.</p></section></div>'
+  );
+}
+let profileDraft = null;
+let profileJob = "";
+function characterDraft() {
+  if (!profileDraft || profileDraft.id !== state.active) {
+    profileDraft = {
+      id: state.active,
+      nickname: state.nickname || state.account || "Player",
+      model: state.model || "classic",
+      realName: state.account || state.realName || "",
+      file: null,
+    };
+  }
+  return profileDraft;
+}
+function profile() {
+  const hasBuild = Boolean(active());
+  const draft = characterDraft();
+  const pick = btn("pickSkin", "Выбрать скин игрока", "image");
+  return (
+    head(
+      "Профиль",
+      hasBuild
+        ? ""
+        : btn("create", "Новая сборка", "plus", "main") +
+            btn("importBuild", "Загрузить сборку", "upload"),
+      hasBuild
+        ? ""
+        : "Для настройки ника создай или загрузи сборку. Скин для Java-профиля можно выбрать уже сейчас.",
+    ) +
+    '<div class="panel side-panel"><div class="skin-stage" id="skinStage">' +
+    (state.skin || draft.file
+      ? '<img id="skinPreview" alt="Персонаж с выбранным скином">'
+      : ic("user") + "<small>Предпросмотр скина</small>") +
+    '</div><div class="stack"><h3>Мой персонаж</h3>' +
+    (hasBuild
+      ? '<label>Ник в игре<input id="nick" class="field" maxlength="16" autocomplete="off" placeholder="DedTimon" value="' +
+        esc(draft.nickname) +
+        '"></label>'
+      : "") +
+    (!hasBuild || localMode()
+      ? ""
+      : '<label>Имя профиля Minecraft<input id="realName" class="field" maxlength="16" value="' +
+        esc(draft.realName) +
+        '"></label>') +
+    '<label>Модель скина<select id="skinModel" class="field"><option value="classic">Classic · широкие руки</option><option value="slim"' +
+    (draft.model === "slim" ? " selected" : "") +
+    ">Slim · узкие руки</option></select></label>" +
+    '<div class="actions">' +
+    pick +
+    (draft.file
+      ? '<small class="note">' + esc(draft.file.name) + "</small>"
+      : "") +
+    "</div>" +
+    (state.canUseFabricSkin && state.skin && !draft.file
+      ? '<label><span><input type="checkbox" id="useFabricSkin"> Показывать сохранённый скин в этой сборке через Fabric</span></label>'
+      : "") +
+    '<div class="actions">' +
+    (hasBuild
+      ? btn("saveProfile", "Сохранить все параметры", "check", "main")
+      : "") +
+    ((draft.file || state.skin) &&
+    (!hasBuild || state.skinSupport || !draft.file)
+      ? btn(
+          "saveJavaSkin",
+          "Сохранить только для Java-профиля",
+          "check",
+          hasBuild ? "" : "main",
+        )
+      : "") +
+    "</div>" +
+    (state.skinNetwork
+      ? '<small class="note">В общем мире с поддержкой BlockHarbor другие участники увидят сохранённый скин при входе.</small>'
+      : "") +
+    (state.skin
+      ? '<div><button type="button" class="linkbtn" data-act="officialSkin">Установить скин в Java-профиле</button></div>'
+      : "") +
+    "</div></div>" +
+    (hasBuild
+      ? '<details class="panel"><summary>Карточки друзей</summary><p>Карточкой можно вручную передать другу скин и псевдоним для Fabric 1.20.1.</p><div class="actions">' +
+        btn("exportCard", "Сохранить мою карточку", "user") +
+        btn("importCard", "Импортировать карточку друга", "upload") +
+        "</div></details>"
+      : "")
+  );
+}
+function settings() {
+  const modes = [
+    ["local", "Локальный профиль"],
+    ["prism", "Microsoft через Prism"],
+    ["direct", "Свой Microsoft Client ID"],
+  ];
+  return (
+    head("Настройки") +
+    '<div class="panel stack"><h3>Запуск Minecraft</h3><label>Профиль запуска<select id="mode" class="field">' +
+    modes
+      .map(
+        ([k, v]) =>
+          '<option value="' +
+          k +
+          '" ' +
+          (state.mode === k ? "selected" : "") +
+          ">" +
+          v +
+          "</option>",
+      )
+      .join("") +
+    '</select></label><p id="modeHelp"></p><label>Оперативная память для игры, МБ<input id="ram" class="field" type="number" min="1024" max="32768" step="256" value="' +
+    (state.autoMemory ? "" : state.memory) +
+    '" placeholder="Автоматически · ' +
+    state.recommendedMemory +
+    '"></label><small class="note">Оставь поле пустым для автоматического выбора.</small>' +
+    '<div id="advancedAuth" class="stack"><label>Application (client) ID<input id="clientId" class="field" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" value="' +
+    esc(state.clientId) +
+    '"></label>' +
+    "<p>Требуется регистрация приложения для Minecraft Services с redirect URI <code>http://localhost:43821/callback</code>.</p></div>" +
+    '<div class="actions">' +
+    btn("saveSettings", "Сохранить настройки", "check", "main") +
+    '<span id="authAction">' +
+    (state.account
+      ? btn("logout", "Выйти (" + esc(state.account) + ")", "user")
+      : btn("signin", "Войти в Microsoft", "user")) +
+    "</span></div></div>"
+  );
+}
+function updateModeHelp() {
+  const mode = $("#mode").value;
+  const help = {
+    local:
+      "Minecraft запускается под ником с главного экрана. Подходит для одиночной игры и серверов, принимающих локальные профили. При первом запуске потребуется интернет для загрузки выбранной версии и Java.",
+    prism:
+      "Для серверов с проверкой аккаунта нужен Microsoft-аккаунт с Minecraft Java Edition. При первом запуске BlockHarbor подготовит Prism и предложит войти. Дальше запускай ту же сборку кнопкой «Играть».",
+    direct:
+      "Вход Microsoft через собственное приложение с одобренным Client ID. Этот режим использует имя и права твоего Java-профиля.",
+  };
+  $("#modeHelp").textContent = help[mode];
+  $("#advancedAuth").hidden = mode !== "direct";
+  $("#authAction").hidden = mode !== "direct";
+}
+function render() {
+  if (!state) return;
+  $("#crumb").textContent = names[view];
+  $("#topUser").textContent = localMode()
+    ? state.nickname || "Player"
+    : state.mode === "prism"
+      ? "Microsoft · Prism"
+      : state.account || "Мой профиль";
+  document.querySelectorAll("aside [data-view]").forEach((el) => {
+    el.classList.toggle(
+      "sel",
+      el.dataset.view === (view === "addons" ? "builds" : view),
+    );
+    el.title = el.textContent.trim();
+    el.setAttribute("aria-label", el.textContent.trim());
+  });
+  const archiveOpen = $(".deleted-builds")?.open;
+  $("#view").innerHTML = {
+    home,
+    builds,
+    addons,
+    friends: friendsView,
+    profile,
+    settings,
+  }[view]();
+  if (archiveOpen && $(".deleted-builds")) $(".deleted-builds").open = true;
+  updatePlayButtons();
+  if (view === "settings") updateModeHelp();
+  if (view === "addons") mountInstalledIcons();
+  if (view === "home") drawHarbor($("#harborScene"));
+  if (view === "profile" && (state.skin || characterDraft().file)) preview();
+}
+async function preview() {
+  let run = ++loadedSkin;
+  try {
+    const draft = characterDraft();
+    const query = "?model=" + encodeURIComponent(draft.model);
+    const blob = draft.file
+      ? await api("/api/skin-preview" + query, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: draft.file,
+        })
+      : await api("/api/preview" + query);
+    if (run !== loadedSkin || !$("#skinPreview")) return;
+    const data = await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
+    });
+    if (run === loadedSkin && $("#skinPreview")) $("#skinPreview").src = data;
+  } catch (e) {
+    notice(e.message, true);
+  }
+}
+function modal(title, body) {
+  const d = $("#dialog");
+  $("#dialogTitle").textContent = title;
+  $("#dialogBody").innerHTML = body;
+  if (!d.open) d.showModal();
+  moveNotice();
+}
+function closeDialog() {
+  $("#dialog").close();
+  moveNotice();
+}
+function confirmBox(title, text, ok, actName) {
+  modal(
+    title,
+    "<p>" +
+      text +
+      '</p><div class="dialog-actions">' +
+      btn("close", "Отмена", "") +
+      btn(actName, ok, "check", "main") +
+      "</div>",
+  );
+}
+function releaseOptions(versions, current) {
+  return versions
+    .map((version) => {
+      const value = esc(version);
+      return (
+        '<option value="' +
+        value +
+        '"' +
+        (version === current ? " selected" : "") +
+        ">" +
+        value +
+        "</option>"
+      );
+    })
+    .join("");
+}
+async function loadReleases(force = false) {
+  const select = $("#version"),
+    status = $("#catalogStatus");
+  if (!select) return;
+  const ticket = String(Number(select.dataset.request || 0) + 1);
+  select.dataset.request = ticket;
+  try {
+    const result = await api("/api/releases" + (force ? "?refresh=1" : ""));
+    if (!select.isConnected || select.dataset.request !== ticket) return;
+    const selected = select.value;
+    state.versions = result.versions;
+    if (
+      select.options.length !== result.versions.length ||
+      result.versions.some(
+        (version, index) => select.options[index].value !== version,
+      )
+    ) {
+      select.innerHTML = releaseOptions(result.versions, selected);
+    }
+    status.hidden = true;
+    if (force) notice("Список версий обновлён.");
+  } catch (error) {
+    if (!select.isConnected || select.dataset.request !== ticket) return;
+    status.hidden = false;
+    status.textContent =
+      "Не удалось обновить каталог Mojang. Доступны сохранённые версии.";
+    if (force) notice(status.textContent, true);
+  }
+}
+let pendingBuild = null;
+function finishBuild(form, destination) {
+  if (!form.isConnected || !$("#dialog").open) return;
+  closeDialog();
+  navigate(destination);
+}
+function createBox(preferredLoader = "fabric") {
+  modal(
+    "Новая сборка",
+    '<form id="newForm" class="stack"><label>Название<input class="field" id="buildName" placeholder="Название сборки" maxlength="48" required autofocus></label><div class="field-group"><label>Версия Minecraft<select class="field" id="version" required>' +
+      releaseOptions(state.versions, "1.20.1") +
+      '</select></label><label>Загрузчик<select class="field" id="loader">' +
+      Object.entries(loaders)
+        .sort(([a], [b]) => (a === "fabric" ? -1 : b === "fabric" ? 1 : 0))
+        .map(
+          ([k, v]) =>
+            '<option value="' +
+            k +
+            '"' +
+            (k === preferredLoader ? " selected" : "") +
+            ">" +
+            v +
+            (k === "vanilla" ? " · без модов" : "") +
+            "</option>",
+        )
+        .join("") +
+      '</select></label></div><button type="button" class="linkbtn" data-act="versions">' +
+      ic("refresh") +
+      ' Обновить список релизов</button><p id="catalogStatus" class="note" hidden></p><div class="dialog-actions">' +
+      btn("close", "Отмена", "") +
+      '<button class="btn main" type="submit">' +
+      ic("plus") +
+      "Создать сборку</button></div></form>",
+  );
+  loadReleases();
+}
+async function runJob(action, data = {}) {
+  const j = await act(action, data);
+  lastJob = j.job;
+  if (action === "play") lastPlayJob = j.job;
+  if (action === "purgeBuild" || action === "installModrinth") closeDialog();
+  notice("Подготовка…", false, true);
+  await tick();
+}
+function showGameExit(job) {
+  const box = $("#gameExit");
+  const failure = job.gameExit;
+  if (!failure || job.gameRunning) {
+    box.hidden = true;
+    return;
+  }
+  if (
+    !failure.id ||
+    failure.id === shownExit ||
+    job.busy ||
+    $("#notice").classList.contains("busy")
+  )
+    return;
+  if (
+    job.id === lastPlayJob &&
+    job.ok &&
+    $("#notice").textContent === job.message
+  )
+    notice("");
+  shownExit = failure.id;
+  box.hidden = false;
+  $("#gameExitMessage").textContent =
+    failure.message ||
+    "Minecraft завершился с ошибкой (код " +
+      failure.code +
+      "). Журнал находится в папке сборки.";
+}
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!state) return;
+  // Hidden pages still need an occasional heartbeat for the local server's idle timeout.
+  const delay = document.hidden
+    ? 60000
+    : state.job?.busy || lastJob
+      ? 900
+      : 15000;
+  pollTimer = setTimeout(tick, delay);
+}
+async function tick(wake = false) {
+  if (activePoll) return;
+  clearTimeout(pollTimer);
+  activePoll = true;
+  try {
+    const j = await api("/api/job");
+    pollError = "";
+    if (typeof j.gameRunning === "boolean") state.gameRunning = j.gameRunning;
+    state.job = j;
+    updatePlayButtons();
+    if (j.busy) {
+      lastJob = j.id;
+      notice(j.message, false, true);
+    } else if (j.id && lastJob === j.id) {
+      lastJob = "";
+      if (j.id === profileJob) {
+        if (j.ok) profileDraft = null;
+        profileJob = "";
+      }
+      const ended =
+        j.ok &&
+        j.id === lastPlayJob &&
+        !j.gameRunning &&
+        j.message.startsWith("Запущен Minecraft");
+      notice(ended ? "Игра завершена." : j.message, !j.ok);
+      if (j.id === lastPlayJob && j.ok && j.gameRunning)
+        refreshAfterPlay = true;
+      else await refresh();
+      if (pendingBuild && j.id === pendingBuild.id) {
+        const { form, destination } = pendingBuild;
+        pendingBuild = null;
+        if (j.ok) finishBuild(form, destination);
+        else form.querySelector('[type="submit"]').disabled = false;
+      }
+    }
+    if (refreshAfterPlay && !document.hidden && (!j.gameRunning || wake)) {
+      await refresh();
+      refreshAfterPlay = false;
+    }
+    showGameExit(j);
+    showStagedReview(j);
+  } catch (e) {
+    if (pollError !== e.message) notice(e.message, true);
+    pollError = e.message;
+  } finally {
+    activePoll = false;
+    schedulePoll();
+  }
+}
+async function putFile(file, type, id, check = false) {
+  const q = new URLSearchParams({ kind: type, id, name: file.name });
+  if (check) q.set("check", "1");
+  return api("/api/file?" + q, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+}
+let pendingDelete = "",
+  uploadTarget = null;
+async function downloadPlayerFile(path, filename) {
+  const file = await api(path);
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+async function dispatch(action) {
+  switch (action) {
+    case "close":
+      return closeDialog();
+    case "dismissExit":
+      $("#gameExit").hidden = true;
+      return;
+    case "importBuild":
+      $("#buildZipPick").click();
+      return;
+    case "create":
+      return createBox();
+    case "addons":
+      return navigate("addons");
+    case "play": {
+      const args = { id: state.active };
+      if (localMode()) {
+        const nameField = $("#playNick");
+        if (!nameField.reportValidity()) return;
+        args.nickname = nameField.value.trim();
+      }
+      return runJob("play", args);
+    }
+    case "versions":
+      return loadReleases(true);
+    case "gameDistances": {
+      const id = state.active;
+      const plan = await act("gameDistances", { id });
+      distancePreview = { id, expected: plan };
+      const labels = {
+        renderDistance: "Прорисовка",
+        simulationDistance: "Симуляция",
+      };
+      const rows = Object.entries(plan.changes)
+        .map(
+          ([k, value]) =>
+            "<p>" +
+            labels[k] +
+            " — " +
+            plan.current[k] +
+            " → " +
+            value +
+            " чанков</p>",
+        )
+        .join("");
+      const text =
+        plan.mode === "unavailable"
+          ? "<p>Сначала запусти эту сборку и закрой игру, чтобы Minecraft сохранил настройки.</p>"
+          : rows || "<p>Дальность уже соответствует выбранным значениям.</p>";
+      return modal(
+        "Дальность в игре",
+        text +
+          (plan.mode === "reduce" && rows
+            ? "<p>Меньше чанков снижает нагрузку при перемещении по миру.</p>"
+            : "") +
+          '<div class="dialog-actions">' +
+          btn("close", "Закрыть", "") +
+          (rows || plan.mode === "restore"
+            ? btn(
+                "applyDistances",
+                plan.mode === "restore"
+                  ? "Вернуть прежние значения"
+                  : "Снизить дальность",
+                "check",
+                "main",
+              )
+            : "") +
+          "</div>",
+      );
+    }
+    case "applyDistances":
+      await act("gameDistances", distancePreview);
+      closeDialog();
+      distancePreview = null;
+      return notice("Параметры дальности сохранены");
+    case "folder":
+      await act("folder", { id: state.active });
+      return;
+    case "openCatalog":
+      return openModrinth(active(), kind);
+    case "add":
+      uploadTarget = { id: state.active, kind };
+      $("#filePick").accept = kind === "mods" ? ".jar" : ".zip";
+      $("#filePick").click();
+      return;
+    case "delYes":
+      await act("remove", { id: state.active, kind, name: pendingDelete });
+      closeDialog();
+      await refresh();
+      return notice("Файл удалён из сборки.");
+    case "enableSteam":
+      return runJob("enableSteam", { id: state.active });
+    case "checkSteam":
+      return showSteamCheck();
+    case "prepareSteam":
+    case "repairSteamSettings":
+      closeDialog();
+      return runJob(action, { id: state.active });
+    case "copySteamCode": {
+      const input = $("#steamModCode");
+      input.focus();
+      input.select();
+      try {
+        await navigator.clipboard.writeText(input.value);
+        return notice("Код набора модов скопирован.");
+      } catch {
+        return notice("Код выделен. Нажми Ctrl+C, чтобы скопировать.");
+      }
+    }
+    case "openSteam": {
+      const result = await act("openSteam");
+      if (result.steamAction === "install")
+        notice("Открыта официальная страница установки Steam.");
+      return;
+    }
+    case "steamBuild":
+      createBox("forge");
+      $("#buildName").value = "Мир Steam";
+      return;
+    case "officialSkin": {
+      const signedIn = Boolean(state.account && state.mode === "direct");
+      const body = signedIn
+        ? "<p>Отправить сохранённый PNG и модель в профиль Minecraft <strong>" +
+          esc(state.account) +
+          "</strong>? Этот скин увидят игроки на серверах, где ты входишь под этим Java-профилем.</p>"
+        : "<p>Скачай сохранённый PNG и открой свой Java-профиль на Minecraft.net. В разделе смены скина выбери модель " +
+          (state.model === "slim" ? "Slim" : "Classic") +
+          " и загрузи этот файл. Затем зайди в игру под тем же аккаунтом.</p>";
+      return modal(
+        "Скин Java-профиля",
+        body +
+          '<div class="actions">' +
+          btn("downloadSkin", "Скачать мой PNG", "down") +
+          (signedIn
+            ? btn(
+                "confirmOfficialSkin",
+                "Применить к аккаунту",
+                "check",
+                "main",
+              )
+            : '<a class="btn main" target="_blank" rel="noopener noreferrer" href="https://www.minecraft.net/msaprofile/mygames">Открыть Minecraft.net</a>') +
+          "</div>",
+      );
+    }
+    case "confirmOfficialSkin":
+      closeDialog();
+      return runJob("uploadSkin");
+    case "downloadSkin":
+      return downloadPlayerFile(
+        "/api/skin.png",
+        (state.nickname || "BlockHarbor") + ".png",
+      );
+    case "exportCard": {
+      const real = localMode()
+        ? state.nickname || "Player"
+        : state.account || state.realName;
+      if (!real) throw Error("Введи настоящее имя Java-профиля.");
+      await downloadPlayerFile("/api/card", real + ".bhplayer");
+      return notice(
+        "Карточка готова. Отправь файл другу и попроси его импортировать карточку в свою сборку.",
+      );
+    }
+    case "importCard":
+      if (active().version !== "1.20.1" || active().loader !== "fabric")
+        throw Error("Выбери сборку Fabric 1.20.1 для импорта карточки.");
+      return confirmBox(
+        "Импортировать карточку друга?",
+        "Будут добавлены ник, скин (если он есть) и необходимые моды из Modrinth в сборку «" +
+          esc(active().name) +
+          "».",
+        "Выбрать файл",
+        "chooseCard",
+      );
+    case "chooseCard":
+      closeDialog();
+      $("#cardPick").click();
+      return;
+    case "pickSkin":
+      $("#skinPick").click();
+      return;
+    case "saveProfile": {
+      const draft = characterDraft();
+      if (
+        (draft.file || $("#useFabricSkin")?.checked) &&
+        state.canUseFabricSkin
+      ) {
+        return modal(
+          "Установить Fabric для скина?",
+          "<p>Для скина в сборке «" +
+            esc(active().name) +
+            "» нужен Fabric. Лаунчер установит его на ту же версию Minecraft, в папку твоих миров. Для Java-профиля можно сохранить только PNG и модель.</p>" +
+            '<div class="actions">' +
+            btn("saveWithFabric", "Установить и сохранить", "check", "main") +
+            btn("saveJavaSkin", "Сохранить только для Java-профиля", "user") +
+            "</div>",
+        );
+      }
+      if (draft.file && !state.skinSupport) {
+        return modal(
+          "Сохранить скин для Java-профиля?",
+          "<p>Для этой сборки доступна установка через Java-профиль. Сохрани PNG и модель, затем выбери «Установить скин в Java-профиле».</p>" +
+            '<div class="actions">' +
+            btn(
+              "saveJavaSkin",
+              "Сохранить только для Java-профиля",
+              "check",
+              "main",
+            ) +
+            btn("close", "Отмена", "") +
+            "</div>",
+        );
+      }
+      return saveAppearance();
+    }
+    case "saveWithFabric":
+      closeDialog();
+      return saveAppearance("fabric");
+    case "saveJavaSkin":
+      if ($("#dialog").open) closeDialog();
+      return saveAppearance("java");
+    case "saveSettings":
+      try {
+        await saveSettings();
+      } catch (error) {
+        return notice("Не удалось сохранить настройки. " + error.message, true);
+      }
+      await refresh();
+      return notice("Успешно сохранено");
+    case "signin":
+      await saveSettings();
+      return runJob("signin");
+    case "logout":
+      await act("logout");
+      await refresh();
+      return notice("Сессия завершена.");
+  }
+}
+async function saveAppearance(destination = "build") {
+  const draft = characterDraft();
+  draft.nickname = $("#nick")?.value.trim() || draft.nickname;
+  draft.realName = $("#realName")?.value.trim() || "";
+  draft.model = $("#skinModel").value;
+  if (destination !== "java" && !/^[a-zA-Z0-9_]{3,16}$/.test(draft.nickname))
+    throw Error(
+      "Ник должен содержать от 3 до 16 латинских букв, цифр или знаков подчёркивания.",
+    );
+  const query = new URLSearchParams({
+    id: draft.id,
+    nickname: draft.nickname,
+    realName: draft.realName,
+    model: draft.model,
+    fabric: destination === "fabric" ? "1" : "0",
+    skinDestination: destination,
+  });
+  if (profileJob) return;
+  const j = await api("/api/profile?" + query, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: draft.file,
+  });
+  profileJob = lastJob = j.job;
+  notice("Сохраняем параметры…", false, true);
+  await tick();
+}
+document.addEventListener("input", (e) => {
+  if (e.target.id === "nick") characterDraft().nickname = e.target.value;
+  if (e.target.id === "realName") characterDraft().realName = e.target.value;
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id === "skinModel") {
+    characterDraft().model = e.target.value;
+    if (state.skin || characterDraft().file) preview();
+  }
+});
+const saveSettings = () =>
+  act("settings", {
+    mode: $("#mode").value,
+    clientId: $("#clientId").value,
+    memory: $("#ram").value || "auto",
+  });
+document.addEventListener("change", async (e) => {
+  if (e.target.id === "mode") return updateModeHelp();
+  if (e.target.id !== "homeBuild" || selectingBuild) return;
+  const selection = e.target;
+  const draftName = $("#playNick")?.value;
+  selectingBuild = true;
+  selection.disabled = true;
+  updatePlayButtons();
+  try {
+    await act("select", { id: selection.value });
+    await refresh();
+    if (draftName !== undefined && $("#playNick"))
+      $("#playNick").value = draftName;
+    notice("Выбрана сборка «" + active().name + "»");
+  } catch (error) {
+    selection.value = state.active;
+    notice(error.message, true);
+  } finally {
+    selectingBuild = false;
+    selection.disabled = false;
+    updatePlayButtons();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "playNick") {
+    e.preventDefault();
+    document.querySelector('[data-act="play"]')?.click();
+  }
+});
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("button");
+  if (!el) return;
+  try {
+    if (el.dataset.view) return navigate(el.dataset.view);
+    if (el.dataset.kind) {
+      kind = el.dataset.kind;
+      return navigate("addons");
+    }
+    if (el.dataset.pick || el.dataset.buildSettings) {
+      if (selectingBuild) return;
+      selectingBuild = true;
+      try {
+        const id = el.dataset.pick || el.dataset.buildSettings;
+        if (id !== state.active) {
+          await act("select", { id });
+          await refresh();
+        }
+        if (el.dataset.buildSettings) {
+          kind = "mods";
+          return navigate("addons");
+        }
+        document.querySelector('[data-pick="' + CSS.escape(id) + '"]')?.focus();
+        return notice("Выбрана сборка «" + active().name + "»");
+      } finally {
+        selectingBuild = false;
+        updatePlayButtons();
+      }
+    }
+    if (el.dataset.exportBuild) {
+      const build = state.profiles.find((p) => p.id === el.dataset.exportBuild);
+      if (!build) return;
+      return modal(
+        "Выгрузить сборку «" + build.name + "»",
+        "<p>В ZIP войдут версия Minecraft, загрузчик, моды, шейдеры, ресурс-паки и настройки модов.</p>" +
+          '<label><input type="checkbox" id="archiveWorlds"> Включить сохранённые миры</label>' +
+          '<div class="dialog-actions">' +
+          btn("close", "Отмена", "") +
+          '<button type="button" class="btn main" data-save-archive="' +
+          esc(build.id) +
+          '">' +
+          ic("download") +
+          "Скачать ZIP</button></div>",
+      );
+    }
+    if (el.dataset.saveArchive) {
+      el.disabled = true;
+      try {
+        notice("Готовим ZIP сборки…", false, true);
+        const result = await api("/api/build-export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: el.dataset.saveArchive,
+            worlds: $("#archiveWorlds").checked,
+          }),
+        });
+        const link = document.createElement("a");
+        link.href = result.download;
+        link.download = result.name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        if (el.isConnected && $("#dialog").open) closeDialog();
+        notice("ZIP готов. Скачивание началось.");
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (el.dataset.removeBuild) {
+      const build = state.profiles.find((p) => p.id === el.dataset.removeBuild);
+      if (!build) return;
+      modal(
+        "Удалить сборку «" + build.name + "»?",
+        "<p>Сборка вместе с мирами и дополнениями переместится в папку удалённых сборок. Её можно вернуть через раздел «Удалённые сборки».</p>" +
+          '<div class="dialog-actions">' +
+          btn("close", "Отмена", "") +
+          '<button type="button" class="btn remove-confirm" data-confirm-build="' +
+          esc(build.id) +
+          '">' +
+          ic("trash") +
+          "Удалить сборку</button></div>",
+      );
+      return;
+    }
+    if (el.dataset.purgeBuild) {
+      const build = state.deletedProfiles.find(
+        (p) => p.id === el.dataset.purgeBuild,
+      );
+      if (!build) return;
+      modal(
+        "Навсегда удалить сборку «" + build.name + "»?",
+        "<p>Все миры, моды, шейдеры, ресурс-паки и настройки этой сборки будут удалены с диска. Восстановление через лаунчер станет невозможным.</p>" +
+          '<div class="dialog-actions">' +
+          btn("close", "Отмена", "") +
+          '<button type="button" class="btn remove-confirm" data-confirm-purge="' +
+          esc(build.id) +
+          '">' +
+          ic("trash") +
+          "Удалить навсегда</button></div>",
+      );
+      return;
+    }
+    if (el.dataset.confirmPurge) {
+      el.disabled = true;
+      try {
+        await runJob("purgeBuild", { id: el.dataset.confirmPurge });
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (el.dataset.confirmBuild || el.dataset.restoreBuild) {
+      const restore = Boolean(el.dataset.restoreBuild);
+      const id = el.dataset.restoreBuild || el.dataset.confirmBuild;
+      const build = (restore ? state.deletedProfiles : state.profiles).find(
+        (p) => p.id === id,
+      );
+      if (!build) return;
+      el.disabled = true;
+      try {
+        await act(restore ? "restoreBuild" : "deleteBuild", { id });
+        if (!restore) closeDialog();
+        await refresh();
+        notice(
+          "Сборка «" +
+            build.name +
+            (restore ? "» восстановлена." : "» удалена."),
+        );
+        if (restore)
+          document
+            .querySelector('[data-pick="' + CSS.escape(id) + '"]')
+            ?.focus();
+        else
+          document.querySelector('.build-pick, [data-act="create"]')?.focus();
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (el.dataset.delete) {
+      pendingDelete = el.dataset.delete;
+      return confirmBox(
+        "Удалить файл?",
+        "Из сборки «" +
+          esc(active().name) +
+          "» будет удалён " +
+          esc(pendingDelete) +
+          ".",
+        "Удалить",
+        "delYes",
+      );
+    }
+    if (el.dataset.act) {
+      el.disabled = true;
+      try {
+        await dispatch(el.dataset.act);
+      } finally {
+        el.disabled = false;
+        if (el.dataset.act === "play" || el.dataset.act === "enableSteam")
+          updatePlayButtons();
+      }
+    }
+  } catch (err) {
+    notice(err.message, true);
+    if ($("#dialog").open) {
+      let node = $("#dialogError");
+      if (!node) {
+        node = document.createElement("p");
+        node.id = "dialogError";
+        $("#dialogBody").append(node);
+      }
+      node.textContent = err.message;
+    }
+  }
+});
+$("#dialogClose").addEventListener("click", closeDialog);
+$("#dialog").addEventListener("close", moveNotice);
+document.addEventListener("submit", async (e) => {
+  if (e.target.id !== "newForm") return;
+  e.preventDefault();
+  const form = e.target,
+    submit = form.querySelector('[type="submit"]');
+  if (submit.disabled) return;
+  const destination = view === "friends" ? "friends" : "addons";
+  submit.disabled = true;
+  try {
+    const result = await act("create", {
+      name: $("#buildName").value,
+      version: $("#version").value,
+      loader: $("#loader").value,
+    });
+    if (result.job) {
+      pendingBuild = { id: result.job, form, destination };
+      lastJob = result.job;
+      notice("Создаём сборку…", false, true);
+      await tick();
+    } else {
+      await refresh();
+      finishBuild(form, destination);
+      notice("Сборка создана.");
+    }
+  } catch (err) {
+    submit.disabled = false;
+    notice(err.message, true);
+  }
+});
+$("#filePick").addEventListener("change", async (e) => {
+  const files = [...e.target.files],
+    t = uploadTarget;
+  e.target.value = "";
+  if (!files.length || !t) return;
+  let count = 0,
+    skipped = 0;
+  const errors = [];
+  for (const f of files) {
+    try {
+      if (t.kind === "mods") {
+        notice("Проверяем " + f.name + "…", false, true);
+        if (!(await confirmManualMod(f, t.id))) {
+          skipped++;
+          continue;
+        }
+      }
+      notice("Импорт: " + f.name, false, true);
+      await putFile(f, t.kind, t.id);
+      count++;
+    } catch (err) {
+      errors.push(f.name + " — " + err.message);
+    }
+  }
+  await refresh();
+  notice(
+    [
+      "Добавлено файлов: " + count + ".",
+      skipped ? "Пропущено: " + skipped + "." : "",
+      ...errors,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    !!errors.length,
+  );
+});
+$("#buildZipPick").addEventListener("change", async (event) => {
+  const picker = event.target;
+  const file = picker.files[0];
+  picker.value = "";
+  if (!file || picker.disabled) return;
+  if (!file.size || file.size > 8 * 1024 ** 3)
+    return notice("Выбери ZIP сборки размером до 8 ГБ.", true);
+  picker.disabled = true;
+  try {
+    notice("Загружаем и распаковываем сборку…", false, true);
+    const build = await api("/api/build-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/zip" },
+      body: file,
+    });
+    await refresh();
+    notice("Сборка «" + build.name + "» загружена.");
+    document
+      .querySelector('[data-pick="' + CSS.escape(build.id) + '"]')
+      ?.focus();
+  } catch (error) {
+    notice(error.message, true);
+  } finally {
+    picker.disabled = false;
+  }
+});
+$("#skinPick").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (file.size > 1024 * 1024)
+    return notice("Файл скина превышает 1 МБ.", true);
+  const draft = characterDraft();
+  draft.nickname = $("#nick")?.value || draft.nickname;
+  draft.realName = $("#realName")?.value || "";
+  draft.model = $("#skinModel").value;
+  draft.file = file;
+  render();
+});
+refresh()
+  .then(() => {
+    if (state.job.busy) lastJob = state.job.id;
+    else showGameExit(state.job);
+    schedulePoll();
+  })
+  .catch((error) => {
+    $("#view").innerHTML = head(
+      "Не удалось открыть лаунчер",
+      "",
+      esc(error.message),
+    );
+    const retry = document.createElement("button");
+    retry.className = "btn";
+    retry.textContent = "Повторить";
+    retry.onclick = () => location.reload();
+    $("#view").append(retry);
+    notice(error.message, true);
+  });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) schedulePoll();
+  else if (state) tick(true);
+});
+window.addEventListener("focus", () => {
+  if (state && !document.hidden) tick(true);
+});
+
+$("#cardPick").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const j = await putFile(file, "card", state.active);
+    lastJob = j.job;
+    notice("Импортируем карточку друга…", false, true);
+    await tick();
+  } catch (err) {
+    notice(err.message, true);
+  }
+});

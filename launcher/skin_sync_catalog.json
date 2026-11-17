@@ -1,0 +1,74 @@
+{
+  "fabric/1.18.2": {
+    "file": "Fabric Skinss-1.18.2.jar",
+    "sha512": "f1772fe4666a0c3ac6a012a5a484da7ffc7c2a0c8b1ec361ca1ff6986e9d0acf0f53faa138ca9758c93946c9a3e2e90707f5843bb451e85745f1925188c91f9a",
+    "size": 25422,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/qXg08DmD/Fabric%20Skinss-1.18.2.jar"
+  },
+  "fabric/1.19.2": {
+    "file": "Fabric Skinss-1.19.2.jar",
+    "sha512": "0c2c9430741a984a066c6622af4c3502acc78a334c59fc7d79be867993efb880e3609c7d5a0e277f774a6709bcd771e61e85a9e441063d690f8ffe820f140516",
+    "size": 25238,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/pWNBq01L/Fabric%20Skinss-1.19.2.jar"
+  },
+  "fabric/1.19.4": {
+    "file": "Fabric Skinss-1.19.4.jar",
+    "sha512": "6da9c7da566b5eb2b2dde4f1c597a080507721303df03cd9fbfad03ad4a371b6c33c06548c16b46dd8bc59b0cbc08ebdef8bca182356e95e03cb4d94eb29493a",
+    "size": 25552,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/15ln1Tbs/Fabric%20Skinss-1.19.4.jar"
+  },
+  "fabric/1.20.1": {
+    "file": "Fabric Skinss-1.20.1.jar",
+    "sha512": "5c42ae851b0d8dd01562bac91b0666f101d579aa61739bd0659820475a048c2c9258e221db09ffd63b02739c613501be7d1f4a3418c3497a374e7808e5b3c3c5",
+    "size": 36553,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/aToA897Q/Fabric%20Skinss-1.20.1.jar"
+  },
+  "fabric/1.20.2": {
+    "file": "Fabric Skinss-1.20.2.jar",
+    "sha512": "5db4a231cb4f437d9620a95a281557de5fd4358bac66fb194d09bd5e37e470480581630513f6c8c37f854d2a48f734984bcb29ac229b2bc2f0b33d7860bc2b22",
+    "size": 37549,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/9g8NvMXE/Fabric%20Skinss-1.20.2.jar"
+  },
+  "fabric/1.21.8": {
+    "file": "Fabric Skinss-1.21.8.jar",
+    "sha512": "eca818539a220511de7a80f98fb248bce49f265e851b7a6c7878d27e472bf32676c27a06cc79cdf7903125abb5ca8539dd891c37bb47d9419e83d9f853d55add",
+    "size": 32234,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/Ft6u8xTJ/Fabric%20Skinss-1.21.8.jar"
+  },
+  "forge/1.18.2": {
+    "file": "Forge Skinss-1.18.2.jar",
+    "sha512": "8369c554a8c39528177eb4dd6d8a6d6389b141553223c7accf3e528d452a88f60f94683a84955e3cbb083a0b30e3362225acf48644460746fdea3d88212e5402",
+    "size": 31114,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/DzOeK4LT/Forge%20Skinss-1.18.2.jar"
+  },
+  "forge/1.19.2": {
+    "file": "Forge Skinss-1.19.2.jar",
+    "sha512": "4f769e33c1e45639b12c464a5f1b506fe809c49d9b400638238a84d392a01fb50ee0b2818b28c0b287693ae260715733e2f0645cea8b5093e2a83eb103bafcba",
+    "size": 31140,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/scU3CaMp/Forge%20Skinss-1.19.2.jar"
+  },
+  "forge/1.19.4": {
+    "file": "Forge Skinss-1.19.4.jar",
+    "sha512": "d57505278433d52aa45d8b22e0dd1ed72df8913901c21e1420066911658aac2e3412de144cf9a535d3cda57fcb0ee69e96b7b1f5f467e979364ee007ef2b105e",
+    "size": 31133,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/KeGBkJ02/Forge%20Skinss-1.19.4.jar"
+  },
+  "forge/1.20.1": {
+    "file": "Forge Skinss-1.20.1.jar",
+    "sha512": "2d74a640f165bd1e07d700d3b1e92f88336298f9aefa1cc504f0b8ae02ee372e53dd1c155fac61a8b09ea9f0048ba1ed74c503f82205aeac678a37afa991da80",
+    "size": 31504,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/zR69fogA/Forge%20Skinss-1.20.1.jar"
+  },
+  "forge/1.20.2": {
+    "file": "Forge Skinss-1.20.2.jar",
+    "sha512": "afbc7bbc07f869689ca58567ec815cec296b8b17e5133bb298755a25592189cb985d30195d81b33c9cbbc4081e65fae3206986bc8a0298076b77a68b1bed7a1b",
+    "size": 30501,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/cDyJQcNZ/Forge%20Skinss-1.20.2.jar"
+  },
+  "forge/1.21.8": {
+    "file": "Forge Skinss-1.21.8.jar",
+    "sha512": "372792df5b346e94db185f822ab1673d06dfbd19e6551eec44338025b04507df1da6a117baf916f69dc3db4d98ae395d51045e9db386d11985922ced6472bcaf",
+    "size": 32853,
+    "url": "https://cdn.modrinth.com/data/A7lHABAH/versions/JWkz1BrR/Forge%20Skinss-1.21.8.jar"
+  }
+}

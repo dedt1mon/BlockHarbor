@@ -1,0 +1,450 @@
+{
+  "core": "0.3.6",
+  "addon": "0.1.0",
+  "branches": [
+    {
+      "role": "core",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "1.17",
+      "maximum": "1.18.2",
+      "asset": "core/fabric-quilt/1.17-1.18.2"
+    },
+    {
+      "role": "core",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "1.19",
+      "maximum": "1.21.11",
+      "asset": "core/fabric-quilt/1.19-1.21.11"
+    },
+    {
+      "role": "core",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "26.1",
+      "maximum": "26.3",
+      "asset": "core/fabric-quilt/26.1-26.3"
+    },
+    {
+      "role": "core",
+      "loaders": [
+        "forge"
+      ],
+      "minimum": "1.17.1",
+      "maximum": "1.18.1",
+      "asset": "core/forge/1.17.1-1.18.1"
+    },
+    {
+      "role": "core",
+      "loaders": [
+        "forge"
+      ],
+      "minimum": "1.18.2",
+      "maximum": "1.20.2",
+      "asset": "core/forge/1.18.2-1.20.2"
+    },
+    {
+      "role": "core",
+      "loaders": [
+        "neoforge"
+      ],
+      "minimum": "1.20.2",
+      "maximum": "26.3",
+      "asset": "core/neoforge/1.20.2-26.3"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "1.17",
+      "maximum": "1.18.2",
+      "asset": "addon/fabric-quilt/1.17-1.18.2"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "1.19",
+      "maximum": "1.21.11",
+      "asset": "addon/fabric-quilt/1.19-1.21.11"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "minimum": "26.1",
+      "maximum": "26.3",
+      "asset": "addon/fabric-quilt/26.1-26.3"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "forge"
+      ],
+      "minimum": "1.17.1",
+      "maximum": "1.18.1",
+      "asset": "addon/forge/1.17.1-1.18.1"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "forge"
+      ],
+      "minimum": "1.18.2",
+      "maximum": "1.20.2",
+      "asset": "addon/forge/1.18.2-1.20.2"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "neoforge"
+      ],
+      "minimum": "1.20.2",
+      "maximum": "1.21.11",
+      "asset": "addon/neoforge/1.20.2-1.21.11"
+    },
+    {
+      "role": "addon",
+      "loaders": [
+        "neoforge"
+      ],
+      "minimum": "26.1",
+      "maximum": "26.3",
+      "asset": "addon/neoforge/26.1-26.3"
+    }
+  ],
+  "fabric_api": {
+    "1.17": "fabric-api/nSk00F5M",
+    "1.17.1": "fabric-api/31ES0yWr",
+    "1.18": "fabric-api/RSZHmY2f",
+    "1.18.1": "fabric-api/kbtdliUm",
+    "1.18.2": "fabric-api/qk28POfr",
+    "1.19": "fabric-api/3KmOcp6b",
+    "1.19.1": "fabric-api/3fY6NddT",
+    "1.19.2": "fabric-api/6g95K303",
+    "1.19.3": "fabric-api/jyKnHEDY",
+    "1.19.4": "fabric-api/nyAmoHlr",
+    "1.20": "fabric-api/n2c5lxAo",
+    "1.20.1": "fabric-api/rvI2dfzR",
+    "1.20.2": "fabric-api/8GVp7wDk",
+    "1.20.3": "fabric-api/Yolngp3s",
+    "1.20.4": "fabric-api/BPX6fK06",
+    "1.20.5": "fabric-api/GCdY4I8I",
+    "1.20.6": "fabric-api/ocg4hG3t",
+    "1.21": "fabric-api/oGwyXeEI",
+    "1.21.1": "fabric-api/5SwzqWUu",
+    "1.21.2": "fabric-api/UEjZZNue",
+    "1.21.3": "fabric-api/wLq4rGsB",
+    "1.21.4": "fabric-api/p96k10UR",
+    "1.21.5": "fabric-api/kKEGlsne",
+    "1.21.6": "fabric-api/F5TVHWcE",
+    "1.21.7": "fabric-api/JntuF9Ul",
+    "1.21.8": "fabric-api/g58ofrov",
+    "1.21.9": "fabric-api/vczmWJBj",
+    "1.21.10": "fabric-api/tV4Gc0Zo",
+    "1.21.11": "fabric-api/6qAuTtLR",
+    "26.1": "fabric-api/3dM0X6ou",
+    "26.1.1": "fabric-api/3dM0X6ou",
+    "26.1.2": "fabric-api/3dM0X6ou",
+    "26.2": "fabric-api/ewUK83HI",
+    "26.3": "fabric-api/Zns5SSRA"
+  },
+  "files": {
+    "core/fabric-quilt/1.17-1.18.2": {
+      "filename": "e4steam-fabric-quilt-mc1.17-1.18.2-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-fabric-quilt-mc1.17-1.18.2-v0.3.6.jar",
+      "github_asset_id": 717111409,
+      "size": 3875512,
+      "sha256": "124a3a56adb4c329d69d701e1aa61525167978cf7f3cd335e83f4c034941feb1"
+    },
+    "core/fabric-quilt/1.19-1.21.11": {
+      "filename": "e4steam-fabric-quilt-mc1.19-1.21.11-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-fabric-quilt-mc1.19-1.21.11-v0.3.6.jar",
+      "github_asset_id": 717111413,
+      "size": 3872821,
+      "sha256": "f265828446c295edcf6daa56133038233483a8e1817d1d18e4fa6acfdd049884"
+    },
+    "core/fabric-quilt/26.1-26.3": {
+      "filename": "e4steam-fabric-quilt-mc26.1-26.3-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-fabric-quilt-mc26.1-26.3-v0.3.6.jar",
+      "github_asset_id": 717111412,
+      "size": 3873619,
+      "sha256": "96e882d3fcac7c084125af5990b106ea12397cef460344cccdab7655a08c93a5"
+    },
+    "core/forge/1.17.1-1.18.1": {
+      "filename": "e4steam-forge-mc1.17.1-1.18.1-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-forge-mc1.17.1-1.18.1-v0.3.6.jar",
+      "github_asset_id": 717111417,
+      "size": 3880217,
+      "sha256": "694b52d4459c4c02cd3f0ea321f7128225458929e4a81756c8bc90c948ea2dab"
+    },
+    "core/forge/1.18.2-1.20.2": {
+      "filename": "e4steam-forge-mc1.18.2-1.20.2-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-forge-mc1.18.2-1.20.2-v0.3.6.jar",
+      "github_asset_id": 717111415,
+      "size": 3877356,
+      "sha256": "afab51e869a097af43964e73d5c47c2e95f035a3c402be3683a13fd9d49cdfc5"
+    },
+    "core/neoforge/1.20.2-26.3": {
+      "filename": "e4steam-neoforge-mc1.20.2-26.3-v0.3.6.jar",
+      "url": "https://github.com/Kamilhik/e4steam/releases/download/v0.3.6/e4steam-neoforge-mc1.20.2-26.3-v0.3.6.jar",
+      "github_asset_id": 717111626,
+      "size": 3876032,
+      "sha256": "5371022b1a1eb8a68b13b72c1b773b4f5140399b4e19cfa8dd82f7b7c738bd2f"
+    },
+    "addon/fabric-quilt/1.17-1.18.2": {
+      "filename": "e4steam-public-servers-fabric-quilt-mc1.17-1.18.2-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-fabric-quilt-mc1.17-1.18.2-0.1.0.jar",
+      "github_asset_id": 673459802,
+      "size": 652051,
+      "sha256": "9287ac2568931ef3e52fc869b90ef78c8635bc076f159f117fe837b80f290342"
+    },
+    "addon/fabric-quilt/1.19-1.21.11": {
+      "filename": "e4steam-public-servers-fabric-quilt-mc1.19-1.21.11-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-fabric-quilt-mc1.19-1.21.11-0.1.0.jar",
+      "github_asset_id": 673459830,
+      "size": 652051,
+      "sha256": "a7ea09f3670a931962ff2c22926d479c51056a87618f17adba39f5aaedf07ee3"
+    },
+    "addon/fabric-quilt/26.1-26.3": {
+      "filename": "e4steam-public-servers-fabric-quilt-mc26.1-26.3-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-fabric-quilt-mc26.1-26.3-0.1.0.jar",
+      "github_asset_id": 673459851,
+      "size": 648485,
+      "sha256": "8d7150bc73401bf401a974f4a384aa1180478815a6498080ede5f77566073992"
+    },
+    "addon/forge/1.17.1-1.18.1": {
+      "filename": "e4steam-public-servers-forge-mc1.17.1-1.18.1-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-forge-mc1.17.1-1.18.1-0.1.0.jar",
+      "github_asset_id": 673459871,
+      "size": 652482,
+      "sha256": "94d67e825aa55f8774603164745dd2fb6352e03158706ce77b322eba5fa170bb"
+    },
+    "addon/forge/1.18.2-1.20.2": {
+      "filename": "e4steam-public-servers-forge-mc1.18.2-1.20.2-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-forge-mc1.18.2-1.20.2-0.1.0.jar",
+      "github_asset_id": 673459933,
+      "size": 652482,
+      "sha256": "9da39c89f081b3635c272bb2661fa8d97bdb3b4d9bf745d9c667f49e01f91f2e"
+    },
+    "addon/neoforge/1.20.2-1.21.11": {
+      "filename": "e4steam-public-servers-neoforge-mc1.20.2-1.21.11-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-neoforge-mc1.20.2-1.21.11-0.1.0.jar",
+      "github_asset_id": 673459975,
+      "size": 652956,
+      "sha256": "aa5e36a0c2a4ba735522c31cd4a7c6c50f14bc0e90c1f3d5b6ba1ebc7c268825"
+    },
+    "addon/neoforge/26.1-26.3": {
+      "filename": "e4steam-public-servers-neoforge-mc26.1-26.3-0.1.0.jar",
+      "url": "https://github.com/K2-Studio-Development/e4steam-Public-Servers/releases/download/v0.1.0/e4steam-public-servers-neoforge-mc26.1-26.3-0.1.0.jar",
+      "github_asset_id": 673460026,
+      "size": 646684,
+      "sha256": "61078a8ce7b05d4763311048fbb2d47809d44092aaf9e0ec9da3176fe83b4339"
+    },
+    "fabric-api/nSk00F5M": {
+      "filename": "fabric-api-0.36.0+1.17.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.36.0%2B1.17/fabric-api-0.36.0%2B1.17.jar",
+      "size": 944449,
+      "sha512": "d48148da4dfd05178cc0a3e7ef88f9cfa14f119eb402df20d40c6f2e8215996b0852f0b6229bbd18b6b07282fb65b7e4961b0f09840f8a60a4cd8c7af1be140e"
+    },
+    "fabric-api/31ES0yWr": {
+      "filename": "fabric-api-0.46.1+1.17.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.46.1%2B1.17/fabric-api-0.46.1%2B1.17.jar",
+      "size": 1207739,
+      "sha512": "3348593a87d0f9dd7b10e2583c2d02c8120a0eb78c4c220fe6833d3cb36bc1820fa719d546e8cf9e6acd2035918a95589484a4eccc52d58e8d319a8979b8473b"
+    },
+    "fabric-api/RSZHmY2f": {
+      "filename": "fabric-api-0.44.0+1.18.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.44.0%2B1.18/fabric-api-0.44.0%2B1.18.jar",
+      "size": 1143259,
+      "sha512": "b793fc222d5bd595106decb5e5091c83bf3212d86847b2e32fb36d5905e38da80c0098b074a4066cfe05039cdb811897d406a82bb2764e6a69e99bed1d446217"
+    },
+    "fabric-api/kbtdliUm": {
+      "filename": "fabric-api-0.46.6+1.18.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.46.6%2B1.18/fabric-api-0.46.6%2B1.18.jar",
+      "size": 1178637,
+      "sha512": "3124e71b7791e69bb17a8c1c09b6838c28398fe082b074717b333e783daa49795fc8a8afea8e1758c2749a1e27f01975c4000ebf29dbdd3cfcf64817f12256e2"
+    },
+    "fabric-api/qk28POfr": {
+      "filename": "fabric-api-0.77.0+1.18.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/qk28POfr/fabric-api-0.77.0%2B1.18.2.jar",
+      "size": 1472259,
+      "sha512": "adb62b0d73e83cf9302a59a55ffe7ca2cf6f4ebb34312ec09e0f56b99ebc173e02dd4f0b8ec059d7262a14857dc1911645b090e460f20fd8e2d48aa5f2fdbefa"
+    },
+    "fabric-api/3KmOcp6b": {
+      "filename": "fabric-api-0.58.0+1.19.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.58.0%2B1.19/fabric-api-0.58.0%2B1.19.jar",
+      "size": 1496048,
+      "sha512": "9c948488852e3bcf7a84fef26465bf0bcfbba17fb03e6b56ae11cf82d1ae6abbfb4c569bf3f1d088c6c3c5219d37c2699afc9013926f588263210a19f8d6e235"
+    },
+    "fabric-api/3fY6NddT": {
+      "filename": "fabric-api-0.58.5+1.19.1.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/0.58.5%2B1.19.1/fabric-api-0.58.5%2B1.19.1.jar",
+      "size": 1498297,
+      "sha512": "6916bc50c9bcd225142e4cf8a2d251f57dd89123baff4a8941c46365ba408b5a00484731ec3981935536817e63d2fcf1f916a2ac5975beffc831139cc3b62bd0"
+    },
+    "fabric-api/6g95K303": {
+      "filename": "fabric-api-0.77.0+1.19.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/6g95K303/fabric-api-0.77.0%2B1.19.2.jar",
+      "size": 1892953,
+      "sha512": "1b8f180fe24a971b1a28758f1fa2cb4afa7f52d8bac6c9e68e6dcf0c4fc6cf2024becb1dabfa17e5a24b7c47aecd945af3531d1b3c72319d986011f1d0067338"
+    },
+    "fabric-api/jyKnHEDY": {
+      "filename": "fabric-api-0.76.1+1.19.3.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/jyKnHEDY/fabric-api-0.76.1%2B1.19.3.jar",
+      "size": 1940232,
+      "sha512": "8fd425c293736a44ff2aaa6895575e0eca2a1835aba2c699c8e6d608926f77f475afde8a8eee46458883cb2c00a523bc331a4c5d881180c02ff6948afcd555a8"
+    },
+    "fabric-api/nyAmoHlr": {
+      "filename": "fabric-api-0.87.2+1.19.4.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/nyAmoHlr/fabric-api-0.87.2%2B1.19.4.jar",
+      "size": 2055860,
+      "sha512": "d839c678699130db605ac580484b5193c302dfa1ed91014c138cb1354874cef0d16580c7c11bedece3cf8a027ddbb4755d4924f6045970a6af608ff0fed898eb"
+    },
+    "fabric-api/n2c5lxAo": {
+      "filename": "fabric-api-0.83.0+1.20.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/n2c5lxAo/fabric-api-0.83.0%2B1.20.jar",
+      "size": 1974627,
+      "sha512": "b121ee00b13804d6850cdf506f9b216348a76ee8c1998492062d1b3d09f7ee921c89153449fd9d8ad907d1b8efb660a9cf4c540c20dc0ae892e0f567ac6541fe"
+    },
+    "fabric-api/rvI2dfzR": {
+      "filename": "fabric-api-0.92.12+1.20.1.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/rvI2dfzR/fabric-api-0.92.12%2B1.20.1.jar",
+      "size": 2137232,
+      "sha512": "de9da2344043b3e9ef9fb7dbfff5f2577b06000c4f73f2a37959a80123141169084cece19133bd299b45feaaa4648bdaca2ea085684888cc8c55cc9134a477ca"
+    },
+    "fabric-api/8GVp7wDk": {
+      "filename": "fabric-api-0.91.6+1.20.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/8GVp7wDk/fabric-api-0.91.6%2B1.20.2.jar",
+      "size": 2085618,
+      "sha512": "bfa5c6f949cb782ce84de24ad3ef324690fa4f84dea57e4d2f311e1b30b9ed1dac2c17aee25f7a26d0312d808f2ed6a8ab81c79d38dda9774c87c324305cec67"
+    },
+    "fabric-api/Yolngp3s": {
+      "filename": "fabric-api-0.91.1+1.20.3.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/Yolngp3s/fabric-api-0.91.1%2B1.20.3.jar",
+      "size": 2080725,
+      "sha512": "03acb0086fcd89ba1b4f5f069a38318536e0e5aefff9722b0068b0fd09563123bf6493a16f4e6cac2816fccbdfe1c4bdacfe29de5f15603c3b5a15bcc8ef5b6a"
+    },
+    "fabric-api/BPX6fK06": {
+      "filename": "fabric-api-0.97.3+1.20.4.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/BPX6fK06/fabric-api-0.97.3%2B1.20.4.jar",
+      "size": 2187523,
+      "sha512": "ea1e47672a1e0fef7fa3fd7f7b396b5a8fb2c46e6ce33dbc4cc2b8d320bc7b775a0de42a478302419c8063c47fbc18bb2ad7551772f54af8059132ac2cb4f108"
+    },
+    "fabric-api/GCdY4I8I": {
+      "filename": "fabric-api-0.97.8+1.20.5.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/GCdY4I8I/fabric-api-0.97.8%2B1.20.5.jar",
+      "size": 2201975,
+      "sha512": "4b52fe9bd5bfd50df610f236b6d2fa08985ab5dee51261397c83413cf42cf4bde05190ba851f5100bae3c43a7e2da9e8d0e708477ad8e30d2f00eb1e2af59cb3"
+    },
+    "fabric-api/ocg4hG3t": {
+      "filename": "fabric-api-0.100.8+1.20.6.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/ocg4hG3t/fabric-api-0.100.8%2B1.20.6.jar",
+      "size": 2249380,
+      "sha512": "414f19f903a093c39006e1919a81bea43c3b6728b88e358dc2611ab44b8087e25abc504c66926f245342fa2a245c07462ed62897f15d6c84006b7acf6214ca46"
+    },
+    "fabric-api/oGwyXeEI": {
+      "filename": "fabric-api-0.102.0+1.21.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/oGwyXeEI/fabric-api-0.102.0%2B1.21.jar",
+      "size": 2285859,
+      "sha512": "11732c4e36c3909360a24aa42a44da89048706cf10aaafa0404d7153cbc7395ff68a130f7b497828d6932740e004416b692650c3fbcc1f32babd7cb6eb9791d8"
+    },
+    "fabric-api/5SwzqWUu": {
+      "filename": "fabric-api-0.116.18+1.21.1.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/5SwzqWUu/fabric-api-0.116.18%2B1.21.1.jar",
+      "size": 2453884,
+      "sha512": "9f721c253ae2e9823cb548e8ec132c9928f80a65184e9b8dcfc489a8d632df20cbfea1e65ff8a4333bdb295c41fbe2228b43e4d41c7355d42ed4637a785840a1"
+    },
+    "fabric-api/UEjZZNue": {
+      "filename": "fabric-api-0.106.1+1.21.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/UEjZZNue/fabric-api-0.106.1%2B1.21.2.jar",
+      "size": 2301393,
+      "sha512": "3c9f04933a71aac76bee6a71d3b48325b65896cb2935ed2c6476d0290d4810648b00e0cea856de0b08ab0086f442eb252c7e816381a0198f7a4b54a5472270bf"
+    },
+    "fabric-api/wLq4rGsB": {
+      "filename": "fabric-api-0.114.1+1.21.3.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/wLq4rGsB/fabric-api-0.114.1%2B1.21.3.jar",
+      "size": 2380714,
+      "sha512": "962e64e8418b074ce68809cd38835e99fea3da8dc1b2979a69f10fee047cd3404b2157a8106fa650795d17e0eebfa41a0d21af7ea5a4b9ee3992c57bc3c5d113"
+    },
+    "fabric-api/p96k10UR": {
+      "filename": "fabric-api-0.119.4+1.21.4.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/p96k10UR/fabric-api-0.119.4%2B1.21.4.jar",
+      "size": 2149128,
+      "sha512": "16b679f6a42549ca3b6bc147de710b2c8ba2d5e4661ed88df22782c05a4a5f6c1163d7b13867687ed91acde0fdfe5a5037d05662431c946865b58396284e7ee7"
+    },
+    "fabric-api/kKEGlsne": {
+      "filename": "fabric-api-0.128.2+1.21.5.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/kKEGlsne/fabric-api-0.128.2%2B1.21.5.jar",
+      "size": 2248994,
+      "sha512": "0e42b72d1a63a45c1b64cdabafd15f4d236bbda5521964d687afa1f833d4022f96c7ffab5dd4471aba0190be588f092d156bf14a50b794895fb3286ec899bcf7"
+    },
+    "fabric-api/F5TVHWcE": {
+      "filename": "fabric-api-0.128.2+1.21.6.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/F5TVHWcE/fabric-api-0.128.2%2B1.21.6.jar",
+      "size": 2209737,
+      "sha512": "b6d0ec0aec40069cb1fa2159c126d027d7f95e3f6260a3e88ebe9c47f3cb716d1170af8e2e4ff3d4108ce5eeaea70002a889547578374d4d6dfa45755e99431e"
+    },
+    "fabric-api/JntuF9Ul": {
+      "filename": "fabric-api-0.129.0+1.21.7.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/JntuF9Ul/fabric-api-0.129.0%2B1.21.7.jar",
+      "size": 2212353,
+      "sha512": "43bf6af145a6b450503a6d7e7ec9a34912bd1494969b5d8861067f0f846cf710805415fb0fbc93c9ae9f5164d45c7649342f84b4f34552b2abdd892fd3b9838e"
+    },
+    "fabric-api/g58ofrov": {
+      "filename": "fabric-api-0.136.1+1.21.8.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/g58ofrov/fabric-api-0.136.1%2B1.21.8.jar",
+      "size": 2269700,
+      "sha512": "eb1a6b5fc9912c68409493f10f43c3b61adda1d789ede9c83b16d0a95a2eb96bd630472866e163960479eb1b4d1196d09ade5aadc9da62624e800640c706c4a9"
+    },
+    "fabric-api/vczmWJBj": {
+      "filename": "fabric-api-0.134.1+1.21.9.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/vczmWJBj/fabric-api-0.134.1%2B1.21.9.jar",
+      "size": 2290371,
+      "sha512": "e9e23dfc1bbe27891be06bfb07f1ff0121a0e5e46bbf73910999b119d7eb15ee15be7f5feb926873c38e7a505a7a2cd6f343db672ec5d0e371b26ffe3591dd84"
+    },
+    "fabric-api/tV4Gc0Zo": {
+      "filename": "fabric-api-0.138.4+1.21.10.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/tV4Gc0Zo/fabric-api-0.138.4%2B1.21.10.jar",
+      "size": 2375888,
+      "sha512": "5e64c53391dfd1c059777d671c52be17a4e27a29d9bd7340ea9e3f55ce7a770b38db0a15e0966e981ee8c1b9372fb89543a278521624689268acebb85bd5c6e9"
+    },
+    "fabric-api/6qAuTtLR": {
+      "filename": "fabric-api-0.141.6+1.21.11.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/6qAuTtLR/fabric-api-0.141.6%2B1.21.11.jar",
+      "size": 2426039,
+      "sha512": "852d3682c4f353fd0ca86546af8578513e8bcf628377fa9d49c556bc59c5024c69ab56c92fc6dfba11fed19e4316a3f5636e7e07fd3d96f7043b531aef59b637"
+    },
+    "fabric-api/3dM0X6ou": {
+      "filename": "fabric-api-0.155.3+26.1.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/3dM0X6ou/fabric-api-0.155.3%2B26.1.2.jar",
+      "size": 2521340,
+      "sha512": "fa0308b42e9cd0dc3ff946f246d199d74547e0c946d7e3c9780a2537155307baf25129f69bd1349273babf879ffb4608b7e4af0740938f9c0f7b371b1c67d6ca"
+    },
+    "fabric-api/ewUK83HI": {
+      "filename": "fabric-api-0.161.0+26.2.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/ewUK83HI/fabric-api-0.161.0%2B26.2.jar",
+      "size": 2566123,
+      "sha512": "2502fa5ade78e9a120b3747bc1a9a2167d6671743bea45bf115d3174c94121aeda87c549446d1a604a9c11fb828de17a551e3514ce42f3e93069dd14bdaee55b"
+    },
+    "fabric-api/Zns5SSRA": {
+      "filename": "fabric-api-0.166.2+26.3.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/Zns5SSRA/fabric-api-0.166.2%2B26.3.jar",
+      "size": 1797523,
+      "sha512": "fb686a9fa923248328107a12498229d6951e316257f18b7d0e4cbd6885ba447ed50a44076a8a5ba47cfe2043b329db3587ab000aeab1face26b2587a5d4ba6b5"
+    }
+  }
+}

@@ -49,6 +49,96 @@ class ExperienceDiagnosticsTests(unittest.TestCase):
         self.assertEqual(self.store.profile(self.pid)["name"], "С друзьями")
         self.assertEqual(self.experience.metadata()[self.pid]["favorite"], 1)
 
+    def test_favorite_persists_without_changing_other_build_metadata(self):
+        self.experience.handle("experienceSaveBuild", {"id":self.pid,"name":"Любимая сборка","description":"Описание","group":"Друзья","favorite":False,"color":"purple"})
+        cover = self.experience.set_cover(self.pid, self.png((500, 300)))["cover"]
+        cover_bytes = self.experience.media(cover).read_bytes()
+        other = self.store.create("Другая сборка", "1.21.1", "vanilla")
+        self.experience.handle("experienceSaveBuild", {"id":other,"favorite":True})
+        before, profiles, settings = self.experience.metadata(), self.store.all(), self.store.settings()
+
+        for _ in range(2):  # Repeating a delivered request must not toggle it back.
+            result = self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":True})
+            self.assertEqual(result, {"ok":True,"id":self.pid,"favorite":True,"message":"Сборка добавлена в избранное."})
+        expected = {**before, self.pid: {**before[self.pid], "favorite":1}}
+        self.assertEqual(self.experience.metadata(), expected)
+        self.assertEqual(self.store.all(), profiles)
+        self.assertEqual(self.store.settings(), settings)
+        self.assertEqual(self.experience.media(cover).read_bytes(), cover_bytes)
+
+        reopened = Experience(Store(self.root))
+        self.assertEqual(reopened.state()["details"], expected)
+        result = reopened.handle("experienceFavorite", {"id":self.pid,"favorite":False})
+        self.assertEqual(result, {"ok":True,"id":self.pid,"favorite":False,"message":"Сборка убрана из избранного."})
+        self.assertEqual(Experience(Store(self.root)).metadata(), before)
+
+    def test_unfavorite_new_build_is_idempotent_and_keeps_defaults(self):
+        self.assertNotIn(self.pid, self.experience.metadata())
+        for _ in range(2):
+            self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":False})
+        self.assertEqual(self.experience.metadata()[self.pid], {
+            "profile":self.pid,"description":"","group_name":"","favorite":0,"color":"green","cover":"",
+        })
+        self.assertEqual(self.store.profile(self.pid)["name"], "Мир")
+
+    def test_favorite_rejects_non_boolean_values_without_writing_metadata(self):
+        for value in (None, 0, 1, "true", "false", "", [], {}):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":value})
+                self.assertEqual(self.experience.metadata(), {})
+        with self.assertRaises(ValueError):
+            self.experience.handle("experienceFavorite", {"id":self.pid})
+        self.assertEqual(self.experience.metadata(), {})
+
+    def test_favorite_rejects_missing_invalid_and_unknown_build_ids(self):
+        self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":True})
+        before = self.experience.metadata()
+        for value in (None, 1, False, [], {}, "", "../" + self.pid, "x" * 32, "0" * 32):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.experience.handle("experienceFavorite", {"id":value,"favorite":False})
+                self.assertEqual(self.experience.metadata(), before)
+        with self.assertRaises(ValueError):
+            self.experience.handle("experienceFavorite", {"favorite":False})
+        self.assertEqual(self.experience.metadata(), before)
+
+    def test_favorite_rejects_deleted_build_and_preserves_its_metadata(self):
+        self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":True})
+        before = self.experience.metadata()
+        self.store.move_profile(self.pid)
+        with self.assertRaisesRegex(ValueError, "Сборка не найдена"):
+            self.experience.handle("experienceFavorite", {"id":self.pid,"favorite":False})
+        self.assertEqual(self.experience.metadata(), before)
+        self.assertEqual(self.store.all(), [])
+        self.assertEqual(self.store.deleted()[0]["id"], self.pid)
+
+    def test_favorite_action_during_game_or_download_never_touches_game_files(self):
+        from main import App
+
+        app = App(self.root)
+        self.addCleanup(app.close)
+        app.job["busy"] = True
+        with (
+            patch.object(app, "profile_running", return_value=True),
+            patch.object(app, "require_profile_idle", side_effect=AssertionError("favorite does not need an idle game")),
+            patch.object(app.coordinator, "operation", side_effect=AssertionError("favorite does not need a game-files lock")),
+            patch.object(app.store, "folder", side_effect=AssertionError("favorite must not access game files")),
+            patch.object(app, "start_job", side_effect=AssertionError("favorite must not install anything")),
+        ):
+            result = app.action("experienceFavorite", {"id":self.pid,"favorite":True})
+            self.assertIs(result["favorite"], True)
+            with self.assertRaisesRegex(ValueError, "требует запроса на изменение"):
+                app.feature_action("experienceFavorite", {"id":self.pid,"favorite":False}, read=True)
+        self.assertEqual(app.experience.metadata()[self.pid]["favorite"], 1)
+        app.job["busy"] = False
+        profile = next(p for p in app.state()["profiles"] if p["id"] == self.pid)
+        self.assertEqual(profile["favorite"], 1)
+        with patch.object(app.updates, "pending", {"stage":"preparing"}):
+            with self.assertRaisesRegex(ValueError, "Подготавливается обновление"):
+                app.action("experienceFavorite", {"id":self.pid,"favorite":False})
+        self.assertEqual(app.experience.metadata()[self.pid]["favorite"], 1)
+
     def test_cover_is_normalized_and_addressed_by_content_hash(self):
         result = self.experience.set_cover(self.pid, self.png((500,300)))
         path = self.experience.media(result["cover"])

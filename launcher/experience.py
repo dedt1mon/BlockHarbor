@@ -28,7 +28,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
     JOBS = set()
 
     def __init__(self, store):
@@ -412,6 +412,23 @@ class Experience:
                 pass
         return {"ok": True, "restored": len(restored), "message": "Восстановлено скриншотов: " + str(len(restored)) + "."}
 
+    def _favorite(self, p):
+        pid, favorite = p.get("id"), p.get("favorite")
+        if not isinstance(pid, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", pid):
+            raise ValueError("Неверный идентификатор сборки.")
+        if type(favorite) is not bool:
+            raise ValueError("Укажи, должна ли сборка быть в избранном.")
+        with self.store.connection() as db:
+            # Keep existence validation and the metadata write in one transaction:
+            # another window must not remove this build between them.
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM profiles WHERE id=?", (pid,)).fetchone():
+                raise ValueError("Сборка не найдена.")
+            db.execute("INSERT OR IGNORE INTO build_details(profile) VALUES(?)", (pid,))
+            db.execute("UPDATE build_details SET favorite=? WHERE profile=?", (int(favorite), pid))
+        return {"ok": True, "id": pid, "favorite": favorite,
+                "message": "Сборка добавлена в избранное." if favorite else "Сборка убрана из избранного."}
+
     def _save_build(self, p):
         pid = p["id"]
         profile = self.store.profile(pid)
@@ -486,6 +503,8 @@ class Experience:
             return {"ok": True}
         if action == "experienceSaveBuild":
             return self._save_build(p)
+        if action == "experienceFavorite":
+            return self._favorite(p)
         if action == "experiencePreferences":
             if str(p.get("scale")) not in ("85", "90", "100", "110", "120") or type(p.get("reducedMotion")) is not bool:
                 raise ValueError("Неизвестные настройки интерфейса.")

@@ -19,6 +19,7 @@ const paths = {
   plus: "M12 4v16M4 12h16",
   arrow: "M4 12h15m-6-6 6 6-6 6",
   gear: "m9.5 3-.6 2.2-1.4.8-2.2-.6-2.4 4.2 1.6 1.6v1.6l-1.6 1.6 2.4 4.2 2.2-.6 1.4.8.6 2.2h5l.6-2.2 1.4-.8 2.2.6 2.4-4.2-1.6-1.6v-1.6l1.6-1.6-2.4-4.2-2.2.6-1.4-.8-.6-2.2z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
+  star: "M12 3 14.8 8.7 21.1 9.6 16.5 14.1 17.6 20.4 12 17.4 6.4 20.4 7.5 14.1 2.9 9.6 9.2 8.7Z",
   download: "M12 3v12m-5-5 5 5 5-5 M4 16v4h16v-4",
   search: "M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0 M15 15l6 6",
   upload: "M12 15V3m-5 5 5-5 5 5 M4 15v5h16v-5",
@@ -102,6 +103,7 @@ let state,
   navigationRequest = 0,
   loadedSkin = 0;
 const active = () => state.profiles.find((p) => p.id === state.active);
+const favoriteRequests = new Set();
 let noticeTimer = 0;
 let noticeOwner = "";
 const backgroundNotices = new Map();
@@ -403,12 +405,12 @@ function home() {
   );
 }
 function buildIdentity(p) {
-  if (p.cover && window.ExperienceUI?.media(p.cover)) return `<img class="build-cover" src="${ExperienceUI.media(p.cover)}" alt=""><span class="build-name"><strong>${esc(p.name)}${p.favorite?'<span class="build-favorite">★</span>':""}</strong><small>${esc(loaders[p.loader])} · ${esc(p.version)}${p.group_name?" · "+esc(p.group_name):""}</small>${p.description?`<small class="build-description">${esc(p.description)}</small>`:""}</span>`;
+  if (p.cover && window.ExperienceUI?.media(p.cover)) return `<img class="build-cover" src="${ExperienceUI.media(p.cover)}" alt=""><span class="build-name"><strong>${esc(p.name)}</strong><small>${esc(loaders[p.loader])} · ${esc(p.version)}${p.group_name?" · "+esc(p.group_name):""}</small>${p.description?`<small class="build-description">${esc(p.description)}</small>`:""}</span>`;
   return (
     '<span class="mini-icon">' +
     ic("cube") +
     '</span><span class="build-name"><strong>' +
-    esc(p.name) + (p.favorite ? '<span class="build-favorite">★</span>' : "") +
+    esc(p.name) +
     "</strong><small>" +
     esc(loaders[p.loader]) +
     " · " +
@@ -420,6 +422,8 @@ function buildRows(profiles) {
   return profiles
     .map((p) => {
       const selected = p.id === state.active;
+      const favorite = Boolean(p.favorite);
+      const favoriteLabel = favorite ? "Убрать из избранного" : "Добавить в избранное";
       return (
         '<div data-profile="' + esc(p.id) + '" class="build-row build-color-' + esc(p.color || 'green') + ' ' +
         (selected ? " active" : "") +
@@ -440,6 +444,11 @@ function buildRows(profiles) {
         '»" title="Настройки сборки">' +
         ic("gear") +
         "<span>Настройки</span></button>" +
+        '<button type="button" class="btn build-favorite-toggle" data-favorite-build="' +
+        esc(p.id) + '" aria-pressed="' + favorite + '" aria-label="' +
+        favoriteLabel + ' · ' + esc(p.name) + '" title="' + favoriteLabel + '"' +
+        (favoriteRequests.has(p.id) ? ' disabled aria-busy="true"' : "") + '>' +
+        ic("star") + "</button>" +
         '<button type="button" class="btn build-settings" data-export-build="' +
         esc(p.id) +
         '" title="Выгрузить сборку в ZIP" aria-label="Выгрузить сборку «' +
@@ -1367,6 +1376,33 @@ document.addEventListener("click", async (e) => {
     if (el.dataset.kind) {
       kind = el.dataset.kind;
       return await navigateFresh("addons");
+    }
+    if (el.dataset.favoriteBuild) {
+      const id = el.dataset.favoriteBuild;
+      const build = state.profiles.find((p) => p.id === id);
+      if (!build || favoriteRequests.has(id)) return;
+      favoriteRequests.add(id);
+      el.disabled = true;
+      el.setAttribute("aria-busy", "true");
+      try {
+        const result = await act("experienceFavorite", { id, favorite: !Boolean(build.favorite) });
+        const current = state.profiles.find((p) => p.id === id);
+        if (current) current.favorite = result.favorite ? 1 : 0;
+        if (view === "builds") render();
+        notice(result.message || (result.favorite ? "Сборка добавлена в избранное." : "Сборка убрана из избранного."));
+      } finally {
+        favoriteRequests.delete(id);
+        const button = document.querySelector('[data-favorite-build="' + CSS.escape(id) + '"]');
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+        }
+        if (view === "builds" && (document.activeElement === document.body || document.activeElement === el)) {
+          if (button && !button.closest("[hidden]")) button.focus();
+          else $("#buildSearch")?.focus();
+        }
+      }
+      return;
     }
     if (el.dataset.pick || el.dataset.buildSettings) {
       if (selectingBuild) return;

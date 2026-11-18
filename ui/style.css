@@ -1234,6 +1234,26 @@ select option {
   padding: 7px 11px;
   font-size: 13px;
 }
+.build-favorite-toggle {
+  flex: 0 0 34px;
+  width: 34px;
+  min-height: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+}
+.build-favorite-toggle:hover,
+.build-favorite-toggle[aria-pressed="true"] {
+  color: var(--lime);
+  border-color: var(--lime);
+}
+.build-favorite-toggle[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+.build-favorite-toggle:disabled {
+  cursor: wait;
+}
 .splitbar .actions {
   flex-shrink: 0;
 }

@@ -404,9 +404,10 @@ class App:
         self.scope.check()
         service = next((item for item in self.features if action in item.ACTIONS), None)
         reads = getattr(service, "READ_ACTIONS", {"updateState"} if service is self.updates else set())
-        # Read-only queries and cancel controls stay responsive during downloads.
+        # Read-only queries, cancel controls and the atomic favorite flag stay
+        # responsive during downloads without acquiring the game-files lock.
         concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
-                      "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState"}
+                      "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState", "experienceFavorite"}
         if read or action in reads | concurrent:
             return self._feature_action(action, params, read=read)
         with self.coordinator.operation():
@@ -425,7 +426,7 @@ class App:
         if read and action not in reads:
             raise ValueError("Это действие требует запроса на изменение.")
         # Downloads are independent of Minecraft and must remain cancellable.
-        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications"}
+        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceFavorite"}
         if action in reads or action in {"packPreview", "shareCreate", "shareInvite", "shareInspect", "shareCompare"}:
             return service.handle(action, params)
         with self.lock:

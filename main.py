@@ -455,6 +455,9 @@ class App:
         details = self.experience.metadata()
         for profile in profiles:
             profile.update({key: value for key, value in details.get(profile["id"], {}).items() if key != "profile"})
+            profile["steamNoticeAcknowledged"] = e4steam.notice_acknowledged(
+                settings, profile["id"], profile["version"], profile["loader"]
+            )
         active = next(
             (profile for profile in profiles if profile["id"] == pid),
             profiles[0] if profiles else None,
@@ -485,6 +488,11 @@ class App:
             "contents": content,
             "steam": {
                 "supported": supported,
+                "version": version,
+                "loader": loader,
+                "canContinue": True,
+                "acknowledged": bool(active and active["steamNoticeAcknowledged"]),
+                "message": e4steam.compatibility(version, loader)["message"] if active else "Сначала создай или выбери сборку.",
                 "installed": ready,
                 "canEnable": loader == "vanilla" and e4steam.support(version, "fabric"),
                 "reason": ""
@@ -959,6 +967,7 @@ class App:
             name, version, loader = input_profile(
                 p.get("name"), p.get("version"), p.get("loader")
             )
+            allow_without_steam = e4steam.notice_permission(p)
             if self.job_snapshot()["busy"]:
                 raise ValueError("Дождись завершения текущей операции.")
             if e4steam.support(version, loader):
@@ -966,7 +975,7 @@ class App:
                 def create_with_steam(status):
                     def prepare(folder):
                         status("Готовим компоненты для игры с друзьями…")
-                        e4steam.ensure(
+                        e4steam.ensure_if_supported(
                             folder,
                             version,
                             loader,
@@ -980,7 +989,9 @@ class App:
                     return "Сборка создана. Игра с друзьями готова."
 
                 return self.start_job(create_with_steam)
-            s.create(name, version, loader)
+            pid = s.create(name, version, loader)
+            if allow_without_steam:
+                e4steam.acknowledge_notice(s, pid, version, loader)
         elif action == "purgeBuild":
             pid = p["id"]
 
@@ -990,6 +1001,7 @@ class App:
                 self.care.purge(pid)
                 with s.connection() as db:
                     db.execute("DELETE FROM build_details WHERE profile=?", (pid,))
+                    db.execute("DELETE FROM settings WHERE key=?", ("steamNotice:" + pid,))
                 return "Файлы сборки удалены с диска."
 
             return self.start_job(purge)
@@ -1225,6 +1237,7 @@ class App:
                 raise ValueError("Запланировано обновление лаунчера. Отмени его в «Настройки → Загрузки и обновления» перед новым запуском игры.")
 
             pro = s.profile(p["id"])
+            allow_without_steam = e4steam.notice_permission(p)
             if pro["id"] in self.care.recovery_errors:
                 raise ValueError(self.care.recovery_errors[pro["id"]])
             folder = s.folder(p["id"])
@@ -1255,6 +1268,8 @@ class App:
                         self.coordinator.release(pro["id"])
 
             def launch_claimed(status):
+                if allow_without_steam:
+                    e4steam.acknowledge_notice(s, pro["id"], pro["version"], pro["loader"])
                 if mode == "local":
                     s.set("nickname", nick)
                 self.metrics.prepare(pro["id"])
@@ -1270,14 +1285,13 @@ class App:
                     skins.install_local_skin(
                         image, folder, target, s.get("model", "classic")
                     )
-                if e4steam.support(pro["version"], pro["loader"]):
-                    e4steam.ensure(
-                        folder,
-                        pro["version"],
-                        pro["loader"],
-                        status,
-                        cache_dir=s.root / "steam-mod-cache",
-                    )
+                if e4steam.ensure_if_supported(
+                    folder,
+                    pro["version"],
+                    pro["loader"],
+                    status,
+                    cache_dir=s.root / "steam-mod-cache",
+                ):
                     room_bridge.prepare(folder, pro["version"], pro["loader"])
                 skin_sync.prepare(
                     folder,
@@ -1485,6 +1499,21 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/steam/check":
                 q = parse_qs(u.query)
                 self.reply(200, steam_network.check(self.app.store, q["id"][0]))
+            elif u.path == "/api/steam/compatibility":
+                q = {k: v[0] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
+                pid, acknowledged = q.get("id"), False
+                if pid is not None:
+                    profile = self.app.store.profile(pid)
+                    version, loader = profile["version"], profile["loader"]
+                    acknowledged = e4steam.notice_acknowledged(
+                        self.app.store.settings(), pid, version, loader
+                    )
+                else:
+                    _, version, loader = input_profile("Сборка", q.get("version"), q.get("loader"))
+                result = e4steam.compatibility(version, loader, acknowledged=acknowledged)
+                if pid is not None:
+                    result["id"] = pid
+                self.reply(200, result)
             elif u.path == "/api/modrinth/check":
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 result = modrinth.check(

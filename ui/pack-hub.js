@@ -5,7 +5,9 @@
 (() => {
   const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const choices = new Map();
+  const releaseRows = new Map();
   let searchGeneration = 0, selectedProject = null, prepared = null;
+  let previewSteamAccepted = new Set();
   let searchController = null, releaseController = null, catalogScroll = 0, returnFocus = null, catalogOpen = false;
   const feature = (action, params = {}, options = {}) => api("/api/feature?" + new URLSearchParams({action, ...params}), options);
   const button = (attr, label, icon = "", cls = "") => `<button type="button" class="btn ${cls}" ${attr}>${icon ? ic(icon) : ""}${label}</button>`;
@@ -14,6 +16,7 @@
   const number = new Intl.NumberFormat("ru-RU");
 
   function discardPrepared() {
+    previewSteamAccepted = new Set();
     if (!prepared) return;
     const token = prepared.token;
     prepared = null;
@@ -154,6 +157,7 @@
     try {
       const data = await feature("packVersions", {project}, {signal: controller.signal});
       if (!host.isConnected || controller.signal.aborted || selectedProject !== project) return;
+      releaseRows.set(project, data.versions);
       const selected = data.versions.find(v => v.id === choices.get(project))?.id || data.versions.find(v => v.type === "release")?.id || data.versions[0]?.id;
       if (!selected) {host.innerHTML = empty("У этого модпака нет доступных выпусков .mrpack."); return;}
       choices.set(project, selected);
@@ -166,9 +170,10 @@
     }
   }
 
-  function previewPack(data, {project = null} = {}) {
+  function previewPack(data, {project = null, acceptedPairs = new Set()} = {}) {
     if (prepared && prepared.token !== data.token) discardPrepared();
     prepared = data;
+    previewSteamAccepted = acceptedPairs;
     selectedProject = project;
     packModal("Установить модпак", `${button(`data-pack-back="${project ? "releases" : "catalog"}"`, project ? "К выпускам" : "К каталогу", "back", "pack-back")}<section class="pack-preview"><h3>${esc(data.title)}</h3><p>${esc(data.summary)}</p><div class="tags"><span class="pill">Minecraft ${esc(data.minecraft)}</span><span class="pill">${esc(loaders[data.loader] || data.loader)} ${esc(data.loaderVersion || "")}</span><span class="pill">${data.files} файлов</span><span class="pill">${fmt(data.downloadBytes)} загрузка</span></div>
       <label>Название новой сборки<input class="field" data-pack-name maxlength="48" value="${esc(data.name)}"></label>
@@ -242,22 +247,35 @@
       if ("packPrepare" in d) {
         const host = target.closest(".pack-release");
         const project = selectedProject;
+        const version = choices.get(project);
+        const release = releaseRows.get(project)?.find(row => row.id === version);
+        if (!release) throw new Error("Выбери выпуск модпака ещё раз.");
+        const isCurrent = () => host?.isConnected && document.querySelector("#dialog").open && selectedProject === project && choices.get(project) === version;
         target.disabled = true;
+        const confirmation = await confirmSteamCompatibility({}, {report: release.steam || {supported: false, unknown: true, variants: []}, isCurrent});
+        if (!confirmation) return;
         notice("Загружаем описание модпака…", false, true);
-        const data = await act("packPreview", {project, version: choices.get(project)});
+        const data = await act("packPreview", {project, version});
         notice("");
-        if (!host?.isConnected || !document.querySelector("#dialog").open) {
+        if (!isCurrent()) {
           await act("packDiscard", {token: data.token});
           return;
         }
-        previewPack(data, {project});
+        previewPack(data, {project, acceptedPairs: confirmation.acceptedPairs});
         return;
       }
       if ("packInstall" in d) {
-        const data = {token: prepared.token, name: document.querySelector("[data-pack-name]").value, optional: [...document.querySelectorAll("[data-pack-optional]:checked")].map(input => input.value)};
+        const current = prepared;
+        if (!current) return;
+        const host = target.closest(".pack-preview");
+        const isCurrent = () => prepared === current && host?.isConnected && document.querySelector("#dialog").open;
         target.disabled = true;
+        const confirmation = await confirmSteamCompatibility({version: current.minecraft, loader: current.loader}, {report: current.steam, acceptedPairs: previewSteamAccepted, isCurrent});
+        if (!confirmation) return;
+        const data = {token: current.token, name: host.querySelector("[data-pack-name]").value, optional: [...host.querySelectorAll("[data-pack-optional]:checked")].map(input => input.value), allowWithoutSteam: confirmation.allowWithoutSteam};
         await runJob("packInstall", data);
         prepared = null;
+        previewSteamAccepted = new Set();
         closeDialog();
         return;
       }

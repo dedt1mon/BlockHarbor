@@ -1,4 +1,4 @@
 """The application version, shared by the UI, release checker and reports."""
 
-VERSION = "2.4.6"
+VERSION = "2.4.7"
 DATA_SCHEMA = 1

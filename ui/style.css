@@ -806,6 +806,16 @@ dialog p {
   gap: 8px;
   margin-top: 20px;
 }
+#steamCompatibilityDialog {
+  width: min(580px, 92vw);
+}
+#steamCompatibilityDialog .dialog-actions {
+  flex-wrap: wrap;
+}
+.steam-compatibility-versions {
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
 #notice {
   position: fixed;
   inset: auto 18px max(20px, env(safe-area-inset-bottom)) auto;

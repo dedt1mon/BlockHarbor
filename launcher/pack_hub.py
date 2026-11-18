@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import build_archive, lifecycle, modrinth
+from . import build_archive, e4steam, lifecycle, modrinth
 from .modfiles import file_hash, file_stamp
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
 
@@ -40,6 +40,31 @@ DOWNLOAD_HOSTS = {
 }
 LOADERS = {"fabric-loader": "fabric", "quilt-loader": "quilt", "forge": "forge", "neoforge": "neoforge"}
 SORTS = {"relevance", "downloads", "follows", "newest", "updated"}
+
+
+def steam_variants(versions, loaders):
+    """Conservative preflight from release metadata, before downloading its archive."""
+    unknown = not isinstance(versions, list) or not isinstance(loaders, list)
+    versions = versions if isinstance(versions, list) else []
+    loaders = loaders if isinstance(loaders, list) else []
+    valid_versions, valid_loaders = [], []
+    for version in versions:
+        try:
+            input_profile("Модпак", version, "vanilla")
+        except ValueError:
+            unknown = True
+        else:
+            if version not in valid_versions:
+                valid_versions.append(version)
+    for loader in loaders:
+        if not isinstance(loader, str) or loader not in {*LOADERS.values(), "vanilla"}:
+            unknown = True
+        elif loader not in valid_loaders:
+            valid_loaders.append(loader)
+    unknown = unknown or not valid_versions or not valid_loaders
+    variants = [e4steam.compatibility(version, loader) for version in valid_versions for loader in valid_loaders]
+    return {"supported": bool(variants) and not unknown and all(row["supported"] for row in variants),
+            "unknown": bool(unknown), "variants": variants}
 
 
 def _path(value):
@@ -290,9 +315,12 @@ class PackHub:
                 continue
             file = self._release_file(row)
             if file:
+                versions, loaders = row.get("game_versions"), row.get("loaders")
                 result.append({"id": modrinth._id(row["id"]), "name": row.get("name", ""), "number": row.get("version_number", ""),
                                "type": row.get("version_type", "release"), "published": row.get("date_published", ""),
-                               "minecraft": row.get("game_versions", []), "loaders": row.get("loaders", []), "size": file["size"]})
+                               "minecraft": [v for v in versions if isinstance(v, str)] if isinstance(versions, list) else [],
+                               "loaders": [v for v in loaders if isinstance(v, str)] if isinstance(loaders, list) else [],
+                               "size": file["size"], "steam": steam_variants(versions, loaders)})
         return {"project": project, "title": meta.get("title", project), "description": meta.get("description", ""),
                 "versions": sorted(result, key=lambda row: row["published"], reverse=True)}
 
@@ -379,6 +407,7 @@ class PackHub:
             meta = value["manifest"]
             active = [row for row in meta["files"] if row["env"]["client"] != "unsupported"]
             return {"token": token, **{key: meta[key] for key in ("name", "title", "minecraft", "loader", "loaderVersion", "versionId", "summary")},
+                    "steam": e4steam.compatibility(meta["minecraft"], meta["loader"]),
                     "files": len(active), "downloadBytes": sum(row["fileSize"] for row in active if row["env"]["client"] == "required"),
                     "optional": [{"path": row["path"], "size": row["fileSize"]} for row in active if row["env"]["client"] == "optional"],
                     "unsupported": len(meta["files"]) - len(active), "overrideBytes": meta["overrideBytes"]}
@@ -393,7 +422,8 @@ class PackHub:
         if value:
             shutil.rmtree(value["path"].parent, ignore_errors=True)
 
-    def install_token(self, token, *, name="", optional=(), status=lambda message: None):
+    def install_token(self, token, *, name="", optional=(), status=lambda message: None, allow_without_steam=False):
+        allowed = e4steam.notice_permission({"allowWithoutSteam": allow_without_steam})
         with self.lock:
             self.preview(token)
             value = self.previews[token]
@@ -403,6 +433,9 @@ class PackHub:
         success = False
         try:
             result = self._install_value(value, name, optional, status)
+            if allowed:
+                profile = self.store.profile(result["id"])
+                e4steam.acknowledge_notice(self.store, profile["id"], profile["version"], profile["loader"])
             success = True
             return result
         finally:
@@ -554,6 +587,7 @@ class PackHub:
             self.discard(p.get("token"))
             return {"ok": True}
         if action == "packInstall":
-            result = self.install_token(p["token"], name=p.get("name", ""), optional=p.get("optional", []), status=status)
+            result = self.install_token(p["token"], name=p.get("name", ""), optional=p.get("optional", []), status=status,
+                                        allow_without_steam=e4steam.notice_permission(p))
             return f"Модпак «{result['name']}» установлен в отдельную сборку."
         raise ValueError("Неизвестное действие модпака.")

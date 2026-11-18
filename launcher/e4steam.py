@@ -81,16 +81,53 @@ def _plan(version, loader):
         if loader in branch["loaders"] and _numbers(
             branch["minimum"]
         ) <= mc <= _numbers(branch["maximum"]):
+            if branch["asset"] not in _CATALOG["files"]:
+                return ()
             assets.append(_asset(branch["role"], branch["asset"]))
-    if {a.role for a in assets} != {"core", "addon"}:
+    if len(assets) != 2 or {a.role for a in assets} != {"core", "addon"}:
         return ()
     if loader in ("fabric", "quilt"):
-        assets.append(_asset("fabric-api", _CATALOG["fabric_api"][version]))
+        api = _CATALOG["fabric_api"][version]
+        if api not in _CATALOG["files"]:
+            return ()
+        assets.append(_asset("fabric-api", api))
     return tuple(assets)
 
 
 def support(version: str, loader: str) -> bool:
     return bool(_plan(version, loader))
+
+
+def compatibility(version: str, loader: str, *, acknowledged=False):
+    """Describe bundled Steam support without downloading or inspecting an instance."""
+    supported = support(version, loader)
+    reason = "supported" if supported else "vanilla" if loader == "vanilla" else "unsupported"
+    message = (
+        "Для этой версии доступна встроенная игра с друзьями через Steam."
+        if supported else
+        "В Vanilla нет встроенной игры через Steam. Можно продолжить без Steam, сохранив выбранную версию и загрузчик."
+        if loader == "vanilla" else
+        "Для этой версии и загрузчика нет проверенного совместимого комплекта Steam/e4steam. Можно продолжить без Steam."
+    )
+    return {"version": version, "loader": loader, "supported": supported,
+            "canContinue": True, "reason": reason, "message": message,
+            "acknowledged": acknowledged is True}
+
+
+def notice_acknowledged(settings, pid, version, loader):
+    return settings.get("steamNotice:" + pid) == version + "|" + loader
+
+
+def notice_permission(params):
+    allowed = params.get("allowWithoutSteam", False)
+    if type(allowed) is not bool:
+        raise ValueError("Подтверждение продолжения без Steam должно быть true или false.")
+    return allowed
+
+
+def acknowledge_notice(store, pid, version, loader):
+    if not support(version, loader):
+        store.set("steamNotice:" + pid, version + "|" + loader)
 
 
 def protected_names(version: str, loader: str) -> frozenset[str]:
@@ -181,7 +218,7 @@ def _obtain(asset, cache, status):
     if _verified(target, asset):
         return target
     title = _TITLES[asset.role]
-    headers = {"User-Agent": "BlockHarbor/2.4.6", "Accept": "application/octet-stream"}
+    headers = {"User-Agent": "BlockHarbor/2.4.7", "Accept": "application/octet-stream"}
     attempts = list(asset.urls)
     reason = "Проверь соединение с сервером загрузки."
     for number, url in enumerate(attempts):
@@ -248,6 +285,16 @@ def _obtain(asset, cache, status):
         if retry and number < len(asset.urls):
             attempts.append(url)
     raise ValueError(f"Не удалось получить проверенный {title}. {reason}")
+
+
+def ensure_if_supported(
+    instance_dir, version: str, loader: str, status=lambda _: None, *, cache_dir=None
+) -> list[Path]:
+    """Steam is optional for Minecraft; actual preparation errors still propagate."""
+    if not support(version, loader):
+        status("Для выбранной версии встроенный Steam недоступен. Продолжаем без Steam.")
+        return []
+    return ensure(instance_dir, version, loader, status, cache_dir=cache_dir)
 
 
 def ensure(

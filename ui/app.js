@@ -110,7 +110,7 @@ const backgroundNotices = new Map();
 const deliveredBackgroundNotices = new Set();
 function moveNotice() {
   const box = $("#notice");
-  const parent = $("#dialog").open ? $("#dialog") : document.body;
+  const parent = $("#steamCompatibilityDialog[open]") || ($("#dialog").open ? $("#dialog") : document.body);
   if (box.parentElement !== parent) parent.append(box);
 }
 function clearNotice() {
@@ -685,8 +685,8 @@ function friendsView() {
         : "Для этой сборки BlockHarbor подготовит сетевые компоненты при следующем запуске с главной страницы."
       : steam.canEnable
         ? "BlockHarbor установит Fabric и e4steam для существующих миров этой сборки. Миры останутся в той же папке, на той же версии Minecraft."
-        : steam.reason ||
-          "Для этой версии и загрузчика нет встроенной поддержки Steam.";
+        : (steam.message || steam.reason || "Для этой версии и загрузчика нет встроенной поддержки Steam.") +
+          " Доступны одиночная игра, обычные серверы и другие способы подключения.";
   const controls = steam.supported
     ? ""
     : steam.canEnable
@@ -1179,8 +1179,12 @@ async function dispatch(action) {
       return createBox();
     case "addons":
       return navigateFresh("addons");
-    case "play":
-      return runJob("play", { id: state.active });
+    case "play": {
+      const id = state.active;
+      const confirmation = await confirmSteamCompatibility({id}, {isCurrent: () => view === "home" && state.active === id});
+      if (!confirmation) return;
+      return runJob("play", {id, allowWithoutSteam: confirmation.allowWithoutSteam});
+    }
     case "versions":
       return loadReleases(true);
     case "folder":
@@ -1568,13 +1572,20 @@ document.addEventListener("submit", async (e) => {
     submit = form.querySelector('[type="submit"]');
   if (submit.disabled) return;
   const destination = view === "friends" ? "friends" : "addons";
+  const draft = {
+    name: form.querySelector("#buildName").value,
+    version: form.querySelector("#version").value,
+    loader: form.querySelector("#loader").value,
+  };
+  const isCurrent = () => form.isConnected && $("#dialog").open &&
+    form.querySelector("#buildName").value === draft.name &&
+    form.querySelector("#version").value === draft.version &&
+    form.querySelector("#loader").value === draft.loader;
   submit.disabled = true;
   try {
-    const result = await act("create", {
-      name: $("#buildName").value,
-      version: $("#version").value,
-      loader: $("#loader").value,
-    });
+    const confirmation = await confirmSteamCompatibility(draft, {isCurrent});
+    if (!confirmation) return;
+    const result = await act("create", {...draft, allowWithoutSteam: confirmation.allowWithoutSteam});
     if (result.job) {
       pendingBuild = { id: result.job, form, destination };
       lastJob = result.job;
@@ -1583,11 +1594,12 @@ document.addEventListener("submit", async (e) => {
     } else {
       await refresh();
       finishBuild(form, destination);
-      notice("Сборка создана.");
+      notice(confirmation.allowWithoutSteam ? "Сборка создана. Встроенное подключение через Steam недоступно." : "Сборка создана.");
     }
   } catch (err) {
-    submit.disabled = false;
     notice(err.message, true);
+  } finally {
+    if (pendingBuild?.form !== form) submit.disabled = false;
   }
 });
 $("#filePick").addEventListener("change", async (e) => {

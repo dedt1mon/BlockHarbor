@@ -56,11 +56,8 @@
     }
   }
 
-  window.addEventListener("resize", () => {
-    if (!attached || leaving) return;
-    clearTimeout(timer);
-    timer = setTimeout(adjust, 100);
-  });
+  // Register and fit only when opening the page. Window resizing, maximizing,
+  // and snapping are owned by the user and the operating system.
   function opened() {
     leaving = false;
     pageEvent("opened");

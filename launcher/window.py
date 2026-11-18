@@ -1,4 +1,4 @@
-"""Launch the desktop UI and bound only the Windows app window registered by this session."""
+"""Launch the desktop UI and fit the registered Windows app window on first opening."""
 
 from __future__ import annotations
 
@@ -33,26 +33,17 @@ class MonitorInfo(ctypes.Structure):
 
 
 def window_bounds(rect, work, dpi, *, opening=False, maximized=False):
-    """Return a work-area constrained *outer* rectangle in physical pixels."""
+    """Choose the initial normal frame; leave later and maximized sizing to Windows."""
+    if not opening or maximized:
+        return None
     left, top, right, bottom = work
     if dpi <= 0 or right <= left or bottom <= top:
         return None
     width = min(right - left, round(WIDTH * dpi / 96))
     height = min(bottom - top, round(HEIGHT * dpi / 96))
-    x, y, r, b = rect
-    if opening or maximized:
-        return (
-            left + (right - left - width) // 2,
-            top + (bottom - top - height) // 2,
-            width,
-            height,
-        )
-    if r - x <= width and b - y <= height:
-        return None
-    width, height = min(r - x, width), min(b - y, height)
     return (
-        max(left, min(x, right - width)),
-        max(top, min(y, bottom - height)),
+        left + (right - left - width) // 2,
+        top + (bottom - top - height) // 2,
         width,
         height,
     )
@@ -317,7 +308,14 @@ class NativeFrame:
         return True
 
     def constrain(self, *, opening=False):
-        if not self.current() or self.user.IsIconic(self.hwnd):
+        # The default size is only an opening preference. Resizing, snapping and
+        # maximizing afterwards must preserve the geometry selected by the user.
+        if (
+            not opening
+            or not self.current()
+            or self.user.IsIconic(self.hwnd)
+            or self.user.IsZoomed(self.hwnd)
+        ):
             return
         # Get physical rectangles regardless of the embedded Python executable's manifest.
         previous = self.user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -345,8 +343,6 @@ class NativeFrame:
                 maximized=zoomed,
             )
             if bounds:
-                if zoomed:
-                    self.user.ShowWindow(self.hwnd, SW_RESTORE)
                 self.user.SetWindowPos(
                     self.hwnd, None, *bounds, 0x0014
                 )  # NOZORDER | NOACTIVATE

@@ -20,15 +20,16 @@ class DesktopWindowTests(unittest.TestCase):
             (3, 0, 1360, 728),
         )
 
-    def test_resize_allows_smaller_and_limits_maximize_and_one_axis(self):
+    def test_user_resize_snap_and_maximize_are_not_limited_to_initial_size(self):
         work = (0, 0, 1920, 1040)
-        self.assertIsNone(window.window_bounds((50, 40, 1000, 600), work, 96))
-        self.assertEqual(
-            window.window_bounds((50, 40, 1500, 600), work, 96), (50, 40, 1360, 560)
-        )
-        self.assertEqual(
-            window.window_bounds(work, work, 96, maximized=True), (280, 100, 1360, 840)
-        )
+        for rect in ((50, 40, 1000, 600), (50, 40, 1500, 600), (0, 0, 960, 1040), work):
+            with self.subTest(rect=rect):
+                self.assertIsNone(window.window_bounds(rect, work, 96))
+        for opening in (False, True):
+            with self.subTest(opening=opening):
+                self.assertIsNone(
+                    window.window_bounds(work, work, 96, opening=opening, maximized=True)
+                )
 
     def test_standalone_scopes_profile_and_registers_only_its_issued_marker(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -116,7 +117,7 @@ class DesktopWindowTests(unittest.TestCase):
                 self.assertFalse(host.adjust(host.marker))
 
 
-class WindowIconTests(unittest.TestCase):
+class NativeFrameTests(unittest.TestCase):
     def create_frame(self, api):
         with (
             patch.object(window.ctypes, "WinDLL", return_value=api, create=True),
@@ -129,6 +130,49 @@ class WindowIconTests(unittest.TestCase):
         frame._identity = Mock(return_value=("Chrome_WidgetWin_1", "BlockHarbor", 320))
         api.GetPropW.return_value = 1
         return frame
+
+    def test_initial_frame_is_fitted_once_and_later_geometry_is_preserved(self):
+        api = Mock()
+        frame = self.create_frame(api)
+        api.IsIconic.return_value = api.IsZoomed.return_value = False
+        api.GetDpiForWindow.return_value = 96
+
+        def monitor_info(handle, info):
+            info._obj.rcWork = window.wintypes.RECT(0, 0, 1920, 1040)
+            return True
+
+        def window_rect(handle, rect):
+            rect._obj.left, rect._obj.top = 0, 0
+            rect._obj.right, rect._obj.bottom = 1360, 840
+            return True
+
+        api.GetMonitorInfoW.side_effect = monitor_info
+        api.GetWindowRect.side_effect = window_rect
+        frame.constrain(opening=True)
+        api.SetWindowPos.assert_called_once_with(17, None, 280, 100, 1360, 840, 0x0014)
+        api.ShowWindow.assert_not_called()
+        api.reset_mock()
+
+        # Resize notifications or a reloaded page must never impose that size
+        # again, whether the user resized, snapped or maximized the window.
+        for maximized in (False, True):
+            api.IsZoomed.return_value = maximized
+            frame.constrain(opening=False)
+        api.GetWindowRect.assert_not_called()
+        api.SetWindowPos.assert_not_called()
+        api.ShowWindow.assert_not_called()
+
+    def test_first_registration_preserves_maximized_and_minimized_states(self):
+        for minimized, maximized in ((False, True), (True, False)):
+            with self.subTest(minimized=minimized, maximized=maximized):
+                api = Mock()
+                frame = self.create_frame(api)
+                api.IsIconic.return_value = minimized
+                api.IsZoomed.return_value = maximized
+                frame.constrain(opening=True)
+                api.SetWindowPos.assert_not_called()
+                api.ShowWindow.assert_not_called()
+                api.SetThreadDpiAwarenessContext.assert_not_called()
 
     def test_native_icon_keeps_64_bit_handles_and_scopes_the_registered_window(self):
         api = Mock()

@@ -212,16 +212,6 @@
     picker.click();
   }
 
-  async function exportPack(id) {
-    notice("Готовим .mrpack…", false, true);
-    const data = await api("/api/mrpack-export", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id})});
-    const link = document.createElement("a");
-    link.href = data.download;
-    link.download = data.name;
-    link.click();
-    notice("Модпак готов к скачиванию.");
-  }
-
   document.addEventListener("submit", event => {
     if (!event.target.matches("[data-pack-search]")) return;
     event.preventDefault();
@@ -247,7 +237,6 @@
       if (d.packBack === "catalog") return openCatalog({focusProject: selectedProject});
       if (d.packBack === "releases") return await showReleases(selectedProject);
       if ("packImport" in d) return await importPack();
-      if ("packExport" in d) return await exportPack(d.packExport || active().id);
       if (d.packPage) return await search(Math.max(0, catalog.offset + (d.packPage === "next" ? 12 : -12)));
       if (d.packProject) return await showReleases(d.packProject);
       if ("packPrepare" in d) {
@@ -296,12 +285,10 @@
     render: renderPacks,
     openCatalog,
     mount() {loadArt(); if (document.querySelector(".pack-hub") && !catalog.page && !catalog.busy && !catalog.error) search();},
-    exportButton(profile) {return profile ? button(`data-pack-export="${esc(profile.id)}"`, "Выгрузить .mrpack", "upload") : "";},
     preview: previewPack,
     async dispatch(action) {
       if (action === "packCatalog") {openCatalog(); return true;}
       if (action === "packImport") {await importPack(); return true;}
-      if (action === "packExport") {await exportPack(active().id); return true;}
       return false;
     },
   };

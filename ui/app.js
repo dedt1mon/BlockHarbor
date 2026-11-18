@@ -106,7 +106,6 @@ let noticeTimer = 0;
 let noticeOwner = "";
 const backgroundNotices = new Map();
 const deliveredBackgroundNotices = new Set();
-let distancePreview = null;
 function moveNotice() {
   const box = $("#notice");
   const parent = $("#dialog").open ? $("#dialog") : document.body;
@@ -289,14 +288,9 @@ function selectInfo(p) {
 function localMode() {
   return state.mode === "local";
 }
-function nicknameControls() {
-  return '<label class="play-identity"><span>Ник в игре</span><input id="playNick" autocomplete="off" spellcheck="false" maxlength="16" required pattern="[A-Za-z0-9_]{3,16}" title="От 3 до 16 латинских букв, цифр или символов подчёркивания" value="' +
-    esc(characterDraft().nickname) + '"></label>' +
-    btn("saveNickname", "Сохранить ник", "check");
-}
 function playControls() {
   const identity = localMode()
-    ? nicknameControls()
+    ? ""
     : '<span class="tag">' +
       ic("user") +
       esc(
@@ -336,8 +330,8 @@ function updatePlayButtons() {
       button.dataset.label = label;
     }
   });
-  document.querySelectorAll('[data-act="saveNickname"], [data-act="saveProfile"], [data-act="saveJavaSkin"], [data-act="saveWithFabric"]').forEach((button) => {
-    button.disabled = Boolean(nicknameSaving || profileJob || profileSubmission);
+  document.querySelectorAll('[data-act="saveProfile"], [data-act="saveProfileOnly"], [data-act="saveWithFabric"]').forEach((button) => {
+    button.disabled = Boolean(profileJob || profileSubmission);
   });
 }
 function homeBuildPicker() {
@@ -368,9 +362,7 @@ function home() {
     return emptyBuildView(
       "Игровая панель",
       "Чтобы запустить Minecraft, создай сборку или загрузи готовый ZIP из BlockHarbor.",
-    ) + (localMode()
-      ? '<section class="panel"><h3>Мой персонаж</h3><p>Ник общий для всех сборок. Его можно сохранить до установки Minecraft.</p><div class="play-controls">' + nicknameControls() + '</div></section>'
-      : '<section class="panel"><h3>Мой персонаж</h3><p>Настрой параметры персонажа в профиле лаунчера.</p><button type="button" class="btn" data-view="profile">' + ic("user") + 'Открыть профиль</button></section>');
+    ) + '<section class="panel"><h3>Мой персонаж</h3><p>Настрой ник и скин в профиле лаунчера.</p><button type="button" class="btn" data-view="profile">' + ic("user") + 'Открыть профиль</button></section>';
   return (
     head(
       "Игровая панель",
@@ -589,11 +581,10 @@ function addons() {
     shaderpacks: "Выбери шейдерпак в настройках Minecraft. Для шейдеров нужен совместимый графический мод.",
     resourcepacks: "Добавленные наборы включаются в Minecraft: «Настройки → Наборы ресурсов».",
   };
-  return head(p.name, playControls(), esc(p.description || "")) +
+  return head(p.name, "", esc(p.description || "")) +
     '<div class="build-settings-bar"><div class="tags build-settings-info">' + selectInfo(p) +
     '</div><div class="build-settings-actions" role="group" aria-label="Действия сборки">' +
-    btn("folder", "Папка сборки", "folder") + (window.PackHubUI?.exportButton(p) || "") +
-    (window.ExperienceUI?.buildActions() || "") + "</div></div>" +
+    btn("folder", "Папка сборки", "folder") + "</div></div>" +
     '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button></div>' +
     (kind === "worlds"
       ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')
@@ -726,7 +717,6 @@ function friendsView() {
 let profileDraft = null;
 let profileJob = "";
 let profileSubmission = null;
-let nicknameSaving = false;
 function characterDraft() {
   const saved = {
     nickname: state.nickname || "Player",
@@ -805,14 +795,6 @@ function profile() {
       : "") +
     '<div class="actions">' +
     btn("saveProfile", "Сохранить все параметры", "check", "main") +
-    ((draft.file || state.skin)
-      ? btn(
-          "saveJavaSkin",
-          "Сохранить только для Java-профиля",
-          "check",
-          "",
-        )
-      : "") +
     "</div>" +
     (state.skinNetwork
       ? '<small class="note">В общем мире с поддержкой BlockHarbor другие участники увидят сохранённый скин при входе.</small>'
@@ -955,17 +937,6 @@ function modal(title, body) {
 function closeDialog() {
   $("#dialog").close();
   moveNotice();
-}
-function confirmBox(title, text, ok, actName) {
-  modal(
-    title,
-    "<p>" +
-      text +
-      '</p><div class="dialog-actions">' +
-      btn("close", "Отмена", "") +
-      btn(actName, ok, "check", "main") +
-      "</div>",
-  );
 }
 function releaseOptions(versions, current) {
   return versions
@@ -1119,14 +1090,12 @@ async function tick(wake = false) {
       lastJob = "";
       if (j.id === profileJob) {
         if (j.ok && profileSubmission) {
-          if (profileSubmission.destination !== "java") {
-            state.nickname = profileSubmission.nickname;
-            state.realName = profileSubmission.realName;
-          }
+          state.nickname = profileSubmission.nickname;
+          state.realName = profileSubmission.realName;
           state.model = profileSubmission.model;
           if (profileSubmission.file) state.skin = true;
           if (profileDraft?.file === profileSubmission.file) profileDraft.file = null;
-          for (const name of profileSubmission.destination === "java" ? ["model"] : ["nickname", "model", "realName"]) {
+          for (const name of ["nickname", "model", "realName"]) {
             if (profileDraft?.revisions[name] === profileSubmission.revisions[name]) profileDraft.dirty[name] = false;
           }
           characterDraft();
@@ -1174,8 +1143,7 @@ async function putFile(file, type, id, check = false) {
     body: file,
   });
 }
-let pendingDelete = "",
-  uploadTarget = null;
+let uploadTarget = null;
 async function downloadPlayerFile(path, filename) {
   const file = await api(path);
   const url = URL.createObjectURL(file);
@@ -1202,89 +1170,10 @@ async function dispatch(action) {
       return createBox();
     case "addons":
       return navigateFresh("addons");
-    case "saveNickname": {
-      if (nicknameSaving || profileJob || profileSubmission) return;
-      const draft = characterDraft();
-      const name = validatePlayerName($("#playNick")?.value ?? draft.nickname);
-      editCharacter("nickname", name);
-      const revision = draft.revisions.nickname;
-      nicknameSaving = true;
-      updatePlayButtons();
-      try {
-        const saved = await act("saveNickname", { nickname: name });
-        state.nickname = saved.nickname;
-        if (draft.revisions.nickname === revision) draft.dirty.nickname = false;
-        const current = characterDraft();
-        if ($("#playNick")) $("#playNick").value = current.nickname;
-        if (localMode()) $("#topUser").textContent = saved.nickname;
-        notice("Успешно сохранено");
-      } finally {
-        nicknameSaving = false;
-        updatePlayButtons();
-      }
-      return;
-    }
-    case "play": {
-      const args = { id: state.active };
-      if (localMode()) {
-        const nameField = $("#playNick");
-        args.nickname = validatePlayerName(nameField?.value ?? characterDraft().nickname);
-        editCharacter("nickname", args.nickname);
-      }
-      return runJob("play", args);
-    }
+    case "play":
+      return runJob("play", { id: state.active });
     case "versions":
       return loadReleases(true);
-    case "gameDistances": {
-      const id = state.active;
-      const plan = await act("gameDistances", { id });
-      distancePreview = { id, expected: plan };
-      const labels = {
-        renderDistance: "Прорисовка",
-        simulationDistance: "Симуляция",
-      };
-      const rows = Object.entries(plan.changes)
-        .map(
-          ([k, value]) =>
-            "<p>" +
-            labels[k] +
-            " — " +
-            plan.current[k] +
-            " → " +
-            value +
-            " чанков</p>",
-        )
-        .join("");
-      const text =
-        plan.mode === "unavailable"
-          ? "<p>Сначала запусти эту сборку и закрой игру, чтобы Minecraft сохранил настройки.</p>"
-          : rows || "<p>Дальность уже соответствует выбранным значениям.</p>";
-      return modal(
-        "Дальность в игре",
-        text +
-          (plan.mode === "reduce" && rows
-            ? "<p>Меньше чанков снижает нагрузку при перемещении по миру.</p>"
-            : "") +
-          '<div class="dialog-actions">' +
-          btn("close", "Закрыть", "") +
-          (rows || plan.mode === "restore"
-            ? btn(
-                "applyDistances",
-                plan.mode === "restore"
-                  ? "Вернуть прежние значения"
-                  : "Снизить дальность",
-                "check",
-                "main",
-              )
-            : "") +
-          "</div>",
-      );
-    }
-    case "applyDistances":
-      await act("gameDistances", distancePreview);
-      closeDialog();
-      distancePreview = null;
-      return notice("Параметры дальности сохранены");
     case "folder":
       await act("folder", { id: state.active });
       return;
@@ -1295,11 +1184,6 @@ async function dispatch(action) {
       $("#filePick").accept = kind === "mods" ? ".jar" : ".zip";
       $("#filePick").click();
       return;
-    case "delYes":
-      await act("remove", { id: state.active, kind, name: pendingDelete });
-      closeDialog();
-      await refresh();
-      return notice("Файл удалён из сборки.");
     case "enableSteam":
       return runJob("enableSteam", { id: state.active });
     case "checkSteam":
@@ -1391,9 +1275,6 @@ async function dispatch(action) {
     case "saveWithFabric":
       closeDialog();
       return saveAppearance("fabric");
-    case "saveJavaSkin":
-      if ($("#dialog").open) closeDialog();
-      return saveAppearance("java");
     case "saveSettings":
       try {
         await saveSettings();
@@ -1412,9 +1293,9 @@ async function dispatch(action) {
   }
 }
 async function saveAppearance(destination = "profile") {
-  if (nicknameSaving || profileJob || profileSubmission) return;
+  if (profileJob || profileSubmission) return;
   const draft = captureCharacterFields();
-  if (destination !== "java") draft.nickname = validatePlayerName(draft.nickname);
+  draft.nickname = validatePlayerName(draft.nickname);
   const query = new URLSearchParams({
     nickname: draft.nickname,
     realName: draft.realName,
@@ -1423,7 +1304,7 @@ async function saveAppearance(destination = "profile") {
     skinDestination: destination,
   });
   if (destination === "fabric") query.set("id", state.active);
-  profileSubmission = { ...draft, destination, revisions: { ...draft.revisions } };
+  profileSubmission = { ...draft, revisions: { ...draft.revisions } };
   updatePlayButtons();
   try {
     const j = await api("/api/profile?" + query, {
@@ -1442,7 +1323,7 @@ async function saveAppearance(destination = "profile") {
   }
 }
 document.addEventListener("input", (e) => {
-  if (e.target.id === "nick" || e.target.id === "playNick") editCharacter("nickname", e.target.value);
+  if (e.target.id === "nick") editCharacter("nickname", e.target.value);
   if (e.target.id === "realName") editCharacter("realName", e.target.value);
 });
 document.addEventListener("change", (e) => {
@@ -1475,12 +1356,6 @@ document.addEventListener("change", async (e) => {
     selectingBuild = false;
     selection.disabled = false;
     updatePlayButtons();
-  }
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.id === "playNick") {
-    e.preventDefault();
-    document.querySelector(active() ? '[data-act="play"]' : '[data-act="saveNickname"]')?.click();
   }
 });
 document.addEventListener("click", async (e) => {
@@ -1624,19 +1499,6 @@ document.addEventListener("click", async (e) => {
         el.disabled = false;
       }
       return;
-    }
-    if (el.dataset.delete) {
-      pendingDelete = el.dataset.delete;
-      return confirmBox(
-        "Удалить файл?",
-        "Из сборки «" +
-          esc(active().name) +
-          "» будет удалён " +
-          esc(pendingDelete) +
-          ".",
-        "Удалить",
-        "delYes",
-      );
     }
     if (el.dataset.act) {
       el.disabled = true;

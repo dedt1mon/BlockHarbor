@@ -112,16 +112,6 @@ window.BuildCareUI = (() => {
       <details class="care-retention"><summary>Хранение копий · занято ${fmt(data.recoveryBytes)}</summary><p>Сохранять последние копии отдельно для сборки и каждого мира. Общий лимит применяется ко всем сборкам; старые точки удаляются автоматически.</p><div class="care-retention-fields"><label>Копий в истории<input type="number" min="1" max="100" data-care-retention-count value="${data.retention.count}"/></label><label>Общий лимит, МБ<input type="number" min="128" max="102400" data-care-retention-budget value="${data.retention.budgetMiB}"/></label>${actionButton("retention", "Сохранить лимиты", "check")}</div><p class="care-footnote">Только что созданная копия сохраняется, даже если сама превышает лимит.</p></details>
     </div>`);
   }
-  async function showPlan(pid) {
-    const data = await load(pid, true), plan = data.updatePlan;
-    if (!plan) return;
-    modal("План обновления дополнений", `<div class="care-plan" data-care-pid="${text(pid)}"><p>Стабильные выпуски под Minecraft ${text(active()?.version)} и выбранный загрузчик. Перед применением будет создана точка восстановления.</p>
-      ${plan.entries.map(e => `<article class="care-update"><strong>${text(e.title)}</strong><span>${e.from ? text(e.from) + " → " : "Новая зависимость · "}${text(e.to)} · ${fmt(e.size)}</span>${e.changelog ? `<details><summary>Что изменилось</summary><pre>${text(e.changelog)}</pre></details>` : ""}</article>`).join("") || '<div class="empty">Совместимых стабильных обновлений не найдено.</div>'}
-      ${plan.conflicts.length ? `<h3>Нужно исправить</h3><ul class="care-warnings">${plan.conflicts.map(v => `<li>${text(v)}</li>`).join("")}</ul>` : ""}
-      ${plan.warnings.length ? `<h3>Предупреждения</h3><ul class="care-warnings">${plan.warnings.map(v => `<li>${text(v)}</li>`).join("")}</ul>` : ""}
-      <p class="care-footnote">Пропущено закреплённых и встроенных: ${plan.skipped}. Не опознано на Modrinth: ${plan.unrecognized}. Проверка не выполняет код модов.</p>
-      <div class="actions">${actionButton("cancel", "Закрыть")}${plan.entries.length ? `<button type="button" class="btn main" data-care-apply="${text(plan.token)}" ${plan.blocked ? "disabled" : ""}>Применить · ${plan.entries.length} файлов</button>` : ""}</div></div>`);
-  }
   function worlds(profile = active()) {
     if (!profile) return '<div class="empty">Создай сборку, чтобы управлять её мирами.</div>';
     return `<section class="care-worlds" data-care-pid="${text(profile.id)}" data-care-worlds><div class="care-worlds-head"><div><h2>Миры · ${text(profile.name)}</h2><p>Создавай копии после выхода из Minecraft. Дата показывает изменение level.dat.</p></div>${actionButton("history", "Все копии", "refresh")}</div><div data-care-world-list><div class="empty">Читаем список миров…</div></div></section>`;
@@ -155,30 +145,15 @@ window.BuildCareUI = (() => {
     if (action === "cancel") return closeDialog();
     if (!pid) throw new Error("Сначала выбери сборку.");
     if (action === "history") return history(pid);
-    if (action === "worlds") { modal("Миры и резервные копии", worlds(active())); mount(); return; }
-    if (action === "reload") return repaint(pid);
     if (action === "snapshot") { closeDialog(); return waitJob("careSnapshot", {id: pid}, () => history(pid)); }
     if (action === "backup-all") { closeDialog(); return waitJob("careBackupWorlds", {id: pid}); }
-    if (action === "clone") {
-      modal("Копия сборки", `<form data-care-clone-form data-care-pid="${text(pid)}"><label class="field">Название<input required maxlength="48" name="name" value="${text((active()?.name || "Сборка").slice(0, 40) + " — копия")}"/></label><label class="care-checkbox"><input type="checkbox" name="worlds"/> Скопировать миры</label><p>Дополнения, настройки и закреплённые версии будут независимы от оригинала.</p><button type="submit" class="btn main">Создать копию</button></form>`);
-      return;
-    }
     if (action === "retention") {
       const result = await act("careRetention", {id: pid, count: Number(document.querySelector("[data-care-retention-count]").value), budgetMiB: Number(document.querySelector("[data-care-retention-budget]").value)});
       notice(result.message); return history(pid);
     }
-    if (action === "updates") {
-      const names = [...chosen(pid, category)];
-      closeDialog();
-      return waitJob("careCheckUpdates", {id: pid, kind: category, ...(names.length ? {names} : {})}, () => showPlan(pid));
-    }
-    if (["enable", "disable", "remove", "pin", "unpin"].includes(action)) {
+    if (["enable", "disable", "remove"].includes(action)) {
       const names = [...chosen(pid, category)];
       if (!names.length) throw new Error("Сначала выбери дополнения.");
-      if (action === "pin" || action === "unpin") {
-        const result = await act("carePin", {id: pid, kind: category, names, pinned: action === "pin"});
-        notice(result.message); return repaint(pid);
-      }
       if (action === "remove") {
         modal("Удалить выбранные дополнения?", `<p>Будет удалено файлов: ${names.length}. Перед изменением сохранится точка восстановления.</p><div class="actions">${actionButton("cancel", "Отмена")}<button type="button" class="btn danger" id="careConfirmDelete">Удалить</button></div>`);
         document.querySelector("#careConfirmDelete").onclick = async () => { try { closeDialog(); await change(pid, category, names, "remove"); } catch(error) { notice(error.message, true); } };
@@ -222,14 +197,13 @@ window.BuildCareUI = (() => {
     if (count) count.textContent = selection.size + " выбрано";
   });
   document.addEventListener("click", async event => {
-    const element = event.target.closest("[data-care], [data-care-detail], [data-care-restore], [data-care-apply], [data-care-backup-world], [data-care-world-history]");
+    const element = event.target.closest("[data-care], [data-care-detail], [data-care-restore], [data-care-backup-world], [data-care-world-history]");
     if (!element || element.dataset.care === "confirm-change") return;
     event.preventDefault();
     const {pid, category} = context(element);
     try {
       if (element.dataset.care) await handle(element.dataset.care, element);
       else if (element.hasAttribute("data-care-detail")) await details(pid, category, element.dataset.careDetail);
-      else if (element.hasAttribute("data-care-apply")) { closeDialog(); await waitJob("careApplyUpdates", {id: pid, token: element.dataset.careApply}); }
       else if (element.hasAttribute("data-care-backup-world")) { closeDialog(); await waitJob("careWorldBackup", {id: pid, world: element.dataset.careBackupWorld}); }
       else if (element.hasAttribute("data-care-world-history")) await history(pid, element.dataset.careWorldHistory);
       else if (element.hasAttribute("data-care-restore")) {
@@ -238,13 +212,6 @@ window.BuildCareUI = (() => {
         document.querySelector("#careConfirmRestore").onclick = async () => { try { closeDialog(); await waitJob("careRestore", {id: pid, snapshot: sid}); } catch(error) { notice(error.message, true); } };
       }
     } catch (error) { notice(error.message, true); }
-  });
-  document.addEventListener("submit", async event => {
-    if (!event.target.matches("[data-care-clone-form]")) return;
-    event.preventDefault();
-    const form = event.target, pid = form.dataset.carePid;
-    const data = {id: pid, name: form.elements.name.value.trim(), worlds: form.elements.worlds.checked};
-    try { closeDialog(); await waitJob("careClone", data); } catch(error) { notice(error.message, true); }
   });
   return {content, mount, worlds, invalidate(pid) { cache.delete(pid); }, dispatch: async () => false};
 })();

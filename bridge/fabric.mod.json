@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "blockharbor_room_status",
+  "version": "1.0.0",
+  "name": "BlockHarbor Room Status",
+  "description": "Передаёт лаунчеру локальный статус e4steam и имена участников текущего сеанса. Не открывает порты и не управляет игрой.",
+  "environment": "client",
+  "entrypoints": {"e4steam": ["blockharbor.bridge.RoomStatusAddon"]},
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "minecraft": ">=1.17 <26.4",
+    "java": ">=16",
+    "e4steam": ">=0.3.2 <0.4.0"
+  }
+}

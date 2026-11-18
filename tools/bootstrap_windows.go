@@ -93,7 +93,10 @@ func run() error {
 		fmt.Fprintln(log, err)
 		return fmt.Errorf("Не удалось подготовить BlockHarbor — %w\nЖурнал %s", err, logPath)
 	}
-	cmd := exec.Command(filepath.Join(root, "runtime", "pythonw.exe"), "-B", "-X", "utf8", filepath.Join(root, "main.py"))
+	arguments := []string{"-B", "-X", "utf8", filepath.Join(root, "main.py")}
+	arguments = append(arguments, os.Args[1:]...)
+	cmd := exec.Command(filepath.Join(root, "runtime", "pythonw.exe"), arguments...)
+	cmd.Env = append(os.Environ(), "BLOCKHARBOR_LAUNCHER_EXE="+executable, fmt.Sprintf("BLOCKHARBOR_BOOTSTRAP_PID=%d", os.Getpid()))
 	cmd.Dir, cmd.Stdout, cmd.Stderr = root, log, log
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Ошибка запуска BlockHarbor (%v). Журнал %s", err, logPath)

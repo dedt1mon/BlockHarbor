@@ -8,7 +8,7 @@ import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from .modfiles import DESCRIPTORS, file_stamp, read_descriptor
+from .modfiles import DESCRIPTORS, file_stamp, metadata_zip, read_archive_entry, read_descriptor
 
 _LABELS = {
     "fabric": DESCRIPTORS[:1],
@@ -167,7 +167,7 @@ def _read(jar, loader):
 def _metadata(path, stamp, loader):
     result = Metadata()
     try:
-        with zipfile.ZipFile(path) as jar:
+        with metadata_zip(path) as jar:
             result = _read(jar, loader)
             result.direct.update(result.provided)
             left = 16 * 1024 * 1024
@@ -179,7 +179,10 @@ def _metadata(path, stamp, loader):
                     continue
                 left -= entry.file_size
                 try:
-                    with zipfile.ZipFile(io.BytesIO(jar.read(entry))) as inner:
+                    raw = read_archive_entry(jar, name, min(left + entry.file_size, 4 * 1024 * 1024))
+                    if raw is None:
+                        continue
+                    with metadata_zip(io.BytesIO(raw)) as inner:
                         result.provided.update(
                             {
                                 k: v

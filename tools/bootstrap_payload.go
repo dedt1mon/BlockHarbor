@@ -140,7 +140,7 @@ func unpackMember(f *zip.File, dir string) (entry, error) {
 // The Windows caller holds a per-release mutex across this operation. New code
 // lives in a new directory, so a repair never replaces a DLL of a running game.
 func provision(base string, p payload, progress func(string)) (string, error) {
-	root := filepath.Join(base, "1.10-"+p.digest[:16])
+	root := filepath.Join(base, "2.0-"+p.digest[:16])
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", err
 	}

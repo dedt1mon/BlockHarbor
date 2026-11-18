@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -13,13 +15,14 @@ from pathlib import Path
 class SingleInstance:
     """Keep a lifetime OS file lock. An additional launch asks the owner to show its UI."""
 
-    def __init__(self, data_dir, timeout=15.0):
+    def __init__(self, data_dir, timeout=15.0, profile=None):
         self.directory = Path(data_dir) / ".session"
         self.timeout = timeout
         self.primary = False
         self._handle = None
         self._stop = threading.Event()
         self._thread = None
+        self.profile = profile if isinstance(profile, str) and re.fullmatch(r"[a-f0-9]{32}", profile) else None
 
     def _acquire(self):
         try:
@@ -66,10 +69,14 @@ class SingleInstance:
 
     def _request_window(self):
         fd, filename = tempfile.mkstemp(
-            dir=self.directory, prefix="show-", suffix=".request"
+            dir=self.directory, prefix="show-", suffix=".pending"
         )
         os.close(fd)
-        request = Path(filename)
+        temporary = Path(filename)
+        request = temporary.with_suffix(".request")
+        if self.profile:
+            temporary.write_text(json.dumps({"profile": self.profile}), encoding="ascii")
+        temporary.replace(request)
         failed = request.with_suffix(".failed")
         deadline = time.monotonic() + self.timeout
         try:
@@ -103,7 +110,20 @@ class SingleInstance:
                 requests = list(self.directory.glob("show-*.request"))
                 if requests:
                     try:
-                        reopen()
+                        profile = None
+                        for request in requests:
+                            try:
+                                if request.stat().st_size <= 1024:
+                                    value = json.loads(request.read_text(encoding="ascii") or "{}")
+                                    candidate = value.get("profile") if isinstance(value, dict) else None
+                                    if isinstance(candidate, str) and re.fullmatch(r"[a-f0-9]{32}", candidate):
+                                        profile = candidate
+                            except (OSError, ValueError, UnicodeError):
+                                pass
+                        if profile:
+                            reopen(profile)
+                        else:
+                            reopen()
                     except Exception:
                         for request in requests:
                             try:

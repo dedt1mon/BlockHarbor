@@ -31,7 +31,7 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/1.10", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.0.0", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 

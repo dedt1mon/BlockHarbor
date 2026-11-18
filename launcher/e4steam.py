@@ -178,7 +178,7 @@ def _obtain(asset, cache, status):
     if _verified(target, asset):
         return target
     title = _TITLES[asset.role]
-    headers = {"User-Agent": "BlockHarbor/1.10", "Accept": "application/octet-stream"}
+    headers = {"User-Agent": "BlockHarbor/2.0.0", "Accept": "application/octet-stream"}
     attempts = list(asset.urls)
     reason = "Проверь соединение с сервером загрузки."
     for number, url in enumerate(attempts):

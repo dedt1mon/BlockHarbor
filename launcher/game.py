@@ -864,7 +864,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "1.10",
+        "launcherVersion": "2.0.0",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]
@@ -883,18 +883,22 @@ def _start_java(
             cwd=instance,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             creationflags=flags,
         )
     except FileNotFoundError:
         raise RuntimeError(
             "Исполняемый файл Java не найден. Проверь подключение и снова нажми «Играть» для восстановления файлов."
         ) from None
+    from .diagnostics import capture_stderr
+    stderr_reader = capture_stderr(process.stderr, instance)
     try:
         exit_code = process.wait(timeout=1.25)
     except subprocess.TimeoutExpired:
         return process
     if isinstance(exit_code, int) and exit_code != 0:
+        if stderr_reader:
+            stderr_reader.join(timeout=0.5)
         log = instance / "logs" / "latest.log"
         detail = (
             f"Журнал игры: {log}"

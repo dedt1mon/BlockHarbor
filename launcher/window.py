@@ -192,7 +192,36 @@ class NativeFrame:
         self.user.EnumWindows(match, 0)
         if self.hwnd:
             self.set_icons()
+            self.set_identity()
         return bool(self.hwnd)
+
+    def set_identity(self):
+        if not self.current():
+            return False
+        from .windows_identity import mark_default_shortcuts, set_window_identity
+
+        target = os.environ.get("BLOCKHARBOR_LAUNCHER_EXE", "")
+        if not target:
+            return False
+        result = set_window_identity(self.hwnd, target)
+        if result:
+            threading.Thread(target=mark_default_shortcuts, args=(target,), daemon=True).start()
+        return result
+
+    def clear_identity(self):
+        if not self.current():
+            return False
+        from .windows_identity import set_window_identity
+
+        return set_window_identity(self.hwnd, clear=True)
+
+    def close(self):
+        if not self.current():
+            return False
+        self.clear_identity()
+        result = ctypes.c_size_t()
+        # WM_CLOSE only to the registered launcher window, with a bounded wait.
+        return bool(self.user.SendMessageTimeoutW(self.hwnd, 0x10, 0, 0, 3, 1500, ctypes.byref(result)))
 
     def set_icons(self):
         if not self.current():
@@ -304,6 +333,10 @@ class DesktopWindow:
                 self.restore_after_game = True
                 self.parked = True
                 self.native.hide()
+
+    def close(self):
+        with self.lock:
+            return bool(self.native and self.native.close())
 
     def game_ended(self):
         with self.lock:

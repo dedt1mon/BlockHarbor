@@ -1,6 +1,6 @@
 """Build a self-extracting BlockHarbor.exe on Linux, macOS, or Windows.
 
-Requires Python 3.10+ and Go (the published binary uses Go 1.27.3).
+Requires Python 3.10+ and Go (the published binary uses Go 1.27.4).
 Example: python tools/build_windows.py --output ../BlockHarbor-Windows-x64
 """
 

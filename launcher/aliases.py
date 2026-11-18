@@ -90,7 +90,7 @@ _INSTALL_LOCK = threading.RLock()
 def _download(release: ModRelease) -> bytes:
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/1.10 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": "BlockHarbor/2.0.0 (Minecraft Java desktop launcher)"},
     )
     try:
         with urlopen(request, timeout=30) as response:

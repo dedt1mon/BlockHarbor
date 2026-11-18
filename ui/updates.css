@@ -1,0 +1,49 @@
+.updater-channel { display: flex; gap: 24px; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.updater-channel h2, .updater-release h2, .transfer-panel h2 { margin: 0 0 8px; }
+.updater-channel p, .transfer-heading p { margin: 0; }
+.updater-channel label { display: flex; flex-direction: column; gap: 8px; min-width: 205px; color: var(--muted); font-size: 13px; }
+.updater-channel select { width: 100%; }
+.updater-release { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 18px; }
+.update-release-icon { display: grid; place-items: center; flex: 0 0 56px; height: 56px; color: var(--lime); background: #c5f47812; border: 1px solid #c5f4782a; border-radius: 15px; }
+.update-release-icon i, .update-release-icon svg { width: 30px; height: 30px; }
+.update-release-info { min-width: 0; flex: 1; }
+.update-release-info .actions { margin-top: 16px; flex-wrap: wrap; }
+.update-ready { color: #d5eac2; line-height: 1.55; }
+.update-problem { color: #ffb5a9; background: #e35c4d12; border: 1px solid #b851422b; border-radius: 10px; padding: 12px 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.update-notes { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.update-notes summary { cursor: pointer; color: var(--text); padding: 2px 0; }
+.update-notes div { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; line-height: 1.6; color: #b9c4bf; padding: 15px 0; }
+.update-notes a { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.update-trust { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 0; max-width: 840px; }
+.update-pending { display: flex; align-items: flex-start; gap: 14px; padding: 14px; margin-top: 16px; border-radius: 12px; background: #c5f4780b; border: 1px solid #c5f4782b; }
+.update-pending > i { color: var(--lime); flex-shrink: 0; margin-top: 2px; }
+.update-pending p { margin: 6px 0 0; color: var(--muted); line-height: 1.5; }
+.transfer-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
+.transfer-heading .btn { flex-shrink: 0; }
+.transfer-row { display: flex; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
+.transfer-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 11px; background: #ffffff06; color: var(--muted); }
+.transfer-completed .transfer-icon { background: #c5f47812; color: var(--lime); }
+.transfer-failed .transfer-icon { background: #e35c4d14; color: #ffb5a9; }
+.transfer-info { flex: 1; min-width: 0; }
+.transfer-title { display: flex; gap: 12px; justify-content: space-between; align-items: center; }
+.transfer-title strong { overflow-wrap: anywhere; line-height: 1.4; }
+.transfer-title .pill { flex-shrink: 0; font-size: 11px; }
+.transfer-info progress { width: 100%; height: 5px; display: block; border: 0; border-radius: 5px; overflow: hidden; appearance: none; background: #ffffff0b; accent-color: var(--lime); margin: 12px 0 9px; }
+.transfer-info progress::-webkit-progress-bar { background: #ffffff0b; }
+.transfer-info progress::-webkit-progress-value { background: var(--lime); border-radius: 5px; }
+.transfer-info progress::-moz-progress-bar { background: var(--lime); }
+.transfer-metrics { display: flex; gap: 10px; justify-content: space-between; font-size: 11px; color: var(--muted); margin: 7px 0; }
+.transfer-message { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 7px 0 0; overflow-wrap: anywhere; }
+.transfer-failed .transfer-message { color: #efb2a7; }
+.transfer-actions { flex-shrink: 0; min-width: 32px; display: flex; align-items: flex-start; justify-content: flex-end; }
+.transfer-actions .btn { font-size: 12px; padding: 9px 10px; }
+.transfer-stage { display: flex; gap: 13px; padding: 16px; border: 1px solid #c5f4782b; background: #c5f47808; border-radius: 12px; margin: 15px 0; }
+.transfer-stage p { margin: 7px 0 0; color: var(--muted); line-height: 1.5; }
+.transfer-spinner { color: var(--lime); }
+@media (max-width: 950px) {
+  .updater-channel, .transfer-heading { align-items: stretch; flex-direction: column; }
+  .updater-channel label { max-width: 320px; }
+  .transfer-metrics { flex-direction: column; gap: 3px; }
+  .transfer-heading .btn { align-self: flex-start; }
+  .update-release-icon { display: none; }
+}

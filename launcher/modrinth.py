@@ -30,7 +30,7 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/1.10 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.0.0 (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):
@@ -211,9 +211,11 @@ class Package:
     url: str
     deps: tuple
     icon: str = ""
+    title: str = ""
+    description: str = ""
 
 
-def _package(v, profile, kind, project, icon=""):
+def _package(v, profile, kind, project, icon="", metadata=None):
     if v["project_id"] != project or profile["version"] not in v["game_versions"]:
         return None
     if kind == "mods" and profile["loader"] not in v["loaders"]:
@@ -250,6 +252,8 @@ def _package(v, profile, kind, project, icon=""):
         f["url"],
         tuple(v.get("dependencies", [])),
         _icon_url(icon, project),
+        str((metadata or {}).get("title", ""))[:180],
+        str((metadata or {}).get("description", ""))[:500],
     )
 
 
@@ -280,7 +284,7 @@ def _releases(profile, kind, project):
     items = [
         p
         for v in raw
-        if (p := _package(v, profile, kind, project, metadata.get("icon_url", "")))
+        if (p := _package(v, profile, kind, project, metadata.get("icon_url", ""), metadata))
     ]
     return sorted(items, key=lambda p: p.published, reverse=True)
 
@@ -636,7 +640,10 @@ def _require_no_conflicts(report):
         raise PlanConflict(" ".join(report["conflicts"][:3]))
 
 
-def _download(release, target):
+def _download(release, target, transfer=None, status=lambda _message: None):
+    if transfer is not None:
+        transfer.download(release.url, target, title=release.filename, hashes={"sha512": release.sha512}, size=release.size, max_size=MAX_ADDON, hosts=_CDN_HOSTS, category="modrinth", status=status)
+        return
     digest = hashlib.sha512()
     with _open(release.url, _CDN_HOSTS) as src, target.open("xb") as out:
         remaining = release.size
@@ -745,7 +752,7 @@ def _save_project_icons(store, pid, releases, status):
 
 
 def install(
-    store, pid, kind, project, version, status, mutation_lock=None, acknowledgement=""
+    store, pid, kind, project, version, status, mutation_lock=None, acknowledgement="", *, before_publish=None, transfer=None, after_publish=None
 ):
     profile = store.profile(pid)
     status("Проверяем совместимость и обязательные зависимости…")
@@ -769,7 +776,10 @@ def install(
                 continue
             status("Скачиваем " + release.filename + "…")
             tmp = Path(work) / release.version
-            _download(release, tmp)
+            if transfer is None:
+                _download(release, tmp)
+            else:
+                _download(release, tmp, transfer, status)
             verify_pack(tmp, release.kind, profile["loader"])
             staged[release.version] = tmp
         with mutation_lock or nullcontext():
@@ -795,8 +805,12 @@ def install(
             token = _review_token(request, releases, inventory, warnings)
             if token and token != acknowledgement:
                 raise NeedsReview(request, token, warnings)
+            if staged and before_publish is not None:
+                before_publish()
             written = _publish_set(store, pid, releases, staged)
     _save_project_icons(store, pid, releases, status)
+    if after_publish is not None:
+        after_publish(releases)
     if not written:
         return "Эта версия уже установлена в сборке."
     return f"Установлено файлов из Modrinth: {written}."

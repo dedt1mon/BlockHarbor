@@ -6,6 +6,10 @@
     <title>BlockHarbor</title>
     <link rel="icon" type="image/svg+xml" sizes="any" href="/icon.svg" />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/experience.css" />
+    <link rel="stylesheet" href="/build-care.css" />
+    <link rel="stylesheet" href="/updates.css" />
+    <link rel="stylesheet" href="/pack-hub.css" />
   </head>
   <body>
     <aside>
@@ -23,12 +27,16 @@
         ><button data-view="profile" class="nav">
           <i data-icon="user"></i><span>Профиль</span>
         </button>
+        <button data-view="packs" class="nav"><i data-icon="search"></i><span>Каталог сборок</span></button>
+        <button data-view="worlds" class="nav"><i data-icon="layers"></i><span>Миры и копии</span></button>
+        <button data-view="gallery" class="nav"><i data-icon="image"></i><span>Скриншоты</span></button>
+        <button data-view="downloads" class="nav"><i data-icon="download"></i><span>Загрузки</span></button>
       </nav>
       <div class="aside-bottom">
         <button class="nav" data-view="settings">
           <i data-icon="settings"></i><span>Настройки</span>
         </button>
-        <div class="appversion"><b></b> BlockHarbor <span>1.10</span></div>
+        <div class="appversion"><b></b> BlockHarbor <span>2.0</span></div>
       </div>
     </aside>
     <main>
@@ -37,12 +45,14 @@
           <span>Лаунчер</span><span class="slash">/</span
           ><strong id="crumb">Главная</strong>
         </div>
+        <div class="header-actions"><button class="icon-button" data-experience="notifications" aria-label="История уведомлений" title="История уведомлений"><i data-icon="folder"></i></button>
         <button id="accountChip" class="account-chip" data-view="profile">
           <i data-icon="user"></i><span id="topUser">Мой профиль</span>
         </button>
+        </div>
       </header>
       <div id="gameExit" hidden>
-        <span id="gameExitMessage" role="status" aria-live="polite"></span>
+        <span id="gameExitMessage" role="status" aria-live="polite"></span><button class="btn" data-act="diagnostics">Диагностика</button>
         <button
           class="icon-button"
           data-act="dismissExit"
@@ -83,5 +93,9 @@
     <script src="/compatibility.js"></script>
     <script src="/catalog.js"></script>
     <script src="/app.js"></script>
+    <script src="/experience.js"></script>
+    <script src="/build-care.js"></script>
+    <script src="/updates.js"></script>
+    <script src="/pack-hub.js"></script>
   </body>
 </html>

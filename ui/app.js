@@ -69,6 +69,10 @@ const names = {
   friends: "Друзья",
   profile: "Профиль",
   settings: "Настройки",
+  packs: "Каталог сборок",
+  worlds: "Миры и копии",
+  gallery: "Скриншоты",
+  downloads: "Загрузки и обновления",
 };
 const loaders = {
   vanilla: "Vanilla",
@@ -91,6 +95,7 @@ let state,
   lastJob = "",
   lastPlayJob = "",
   shownExit = "",
+  shownUpdate = "",
   activePoll = false,
   pollTimer = 0,
   refreshAfterPlay = false,
@@ -304,11 +309,12 @@ function home() {
   );
 }
 function buildIdentity(p) {
+  if (p.cover && window.ExperienceUI?.media(p.cover)) return `<img class="build-cover" src="${ExperienceUI.media(p.cover)}" alt=""><span class="build-name"><strong>${esc(p.name)}${p.favorite?'<span class="build-favorite">★</span>':""}</strong><small>${esc(loaders[p.loader])} · ${esc(p.version)}${p.group_name?" · "+esc(p.group_name):""}</small>${p.description?`<small class="build-description">${esc(p.description)}</small>`:""}</span>`;
   return (
     '<span class="mini-icon">' +
     ic("cube") +
     '</span><span class="build-name"><strong>' +
-    esc(p.name) +
+    esc(p.name) + (p.favorite ? '<span class="build-favorite">★</span>' : "") +
     "</strong><small>" +
     esc(loaders[p.loader]) +
     " · " +
@@ -321,7 +327,7 @@ function buildRows(profiles) {
     .map((p) => {
       const selected = p.id === state.active;
       return (
-        '<div class="build-row' +
+        '<div data-profile="' + esc(p.id) + '" class="build-row build-color-' + esc(p.color || 'green') + ' ' +
         (selected ? " active" : "") +
         '">' +
         '<button type="button" class="build-pick" aria-pressed="' +
@@ -396,12 +402,14 @@ function builds() {
   return (
     head(
       "Мои сборки",
+      '<button class="btn" data-view="packs">' + ic("search") + 'Каталог сборок</button>' +
       btn("importBuild", "Загрузить сборку", "upload") +
         btn("create", "Новая сборка", "plus", "main"),
       "У каждой сборки свои миры, дополнения и настройки.",
     ) +
+    (window.ExperienceUI?.filterBar() || "") +
     (state.profiles.length
-      ? buildRows(state.profiles)
+      ? buildRows(window.ExperienceUI ? ExperienceUI.sortedProfiles(state.profiles) : state.profiles)
       : '<div class="empty">Сборок пока нет.</div>') +
     deletedBuilds()
   );
@@ -475,78 +483,17 @@ function addons() {
   const p = active();
   if (!p) return builds();
   const desc = {
-    mods:
-      "Устанавливай JAR под " +
-      esc(loaders[p.loader]) +
-      " и Minecraft " +
-      esc(p.version) +
-      ".",
-    shaderpacks:
-      "Для отображения шейдеров нужен совместимый мод, например Iris. Выбор шейдерпака доступен в настройках графики игры.",
-    resourcepacks:
-      "После добавления ZIP открой в Minecraft «Настройки → Наборы ресурсов» и включи пакет.",
+    mods: "Дополнения для " + esc(loaders[p.loader]) + " и Minecraft " + esc(p.version) + ". Файлы можно перетащить в окно.",
+    shaderpacks: "Выбери шейдерпак в настройках Minecraft. Для шейдеров нужен совместимый графический мод.",
+    resourcepacks: "Добавленные наборы включаются в Minecraft: «Настройки → Наборы ресурсов».",
   };
-  return (
-    head(p.name, playControls()) +
-    '<div class="tags">' +
-    selectInfo(p) +
-    btn("folder", "Папка сборки", "folder") +
-    (state.distanceSettings
-      ? btn("gameDistances", "Дальность в игре", "settings")
-      : "") +
-    "</div>" +
-    titleRow("Содержимое") +
-    '<div class="tabs">' +
-    Object.entries(kinds)
-      .map(
-        ([k, [v]]) =>
-          '<button class="' +
-          (k === kind ? "on" : "") +
-          '" data-kind="' +
-          k +
-          '">' +
-          v +
-          " · " +
-          state.contents[k].length +
-          "</button>",
-      )
-      .join("") +
-    "</div>" +
-    '<div class="splitbar"><p>' +
-    desc[kind] +
-    '</p><div class="actions">' +
-    btn("add", "Добавить файл", "plus") +
-    btn("openCatalog", "Скачать с Modrinth", "download", "main") +
-    "</div></div>" +
-    (state.contents[kind].length
-      ? state.contents[kind]
-          .map(
-            (x) =>
-              '<div class="file-row">' +
-              installedIcon(x) +
-              "<strong>" +
-              esc(x.name) +
-              '</strong><span class="meta">' +
-              fmt(x.size) +
-              "</span>" +
-              (x.managed
-                ? '<span class="pill" title="Сетевой компонент этой сборки обслуживается BlockHarbor">Встроено</span>'
-                : '<button aria-label="Удалить ' +
-                  esc(x.name) +
-                  '" class="icon-button danger" data-delete="' +
-                  esc(x.name) +
-                  '">' +
-                  ic("trash") +
-                  "</button>") +
-              "</div>",
-          )
-          .join("")
-      : '<div class="empty">Здесь появятся ' +
-        { mods: "моды", shaderpacks: "шейдеры", resourcepacks: "ресурс-паки" }[
-          kind
-        ] +
-        " этой сборки.</div>")
-  );
+  return head(p.name, playControls(), esc(p.description || "")) +
+    '<div class="tags">' + selectInfo(p) + btn("folder", "Папка сборки", "folder") +
+    (window.PackHubUI?.exportButton(p) || "") + "</div>" +
+    (window.BuildCareUI?.toolbar(p) || "") + (window.ExperienceUI?.toolbar(p) || "") +
+    '<div class="tabs">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '</div>' +
+    '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать с Modrinth", "download", "main") + '</div></div>' +
+    (window.BuildCareUI?.content(p, kind, state.contents[kind]) || '<div class="empty">Подготавливаем управление содержимым…</div>');
 }
 async function showSteamCheck() {
   const profile = active();
@@ -832,8 +779,19 @@ function render() {
     addons,
     friends: friendsView,
     profile,
-    settings,
+    settings: () => settings() + (window.ExperienceUI?.settingsPanel() || ""),
+    packs: () => window.PackHubUI?.render() || "",
+    worlds: () => window.BuildCareUI?.worlds(active()) || "",
+    gallery: () => window.ExperienceUI?.gallery() || "",
+    downloads: () => window.UpdatesUI?.render() || "",
   }[view]();
+  if (view === "profile" && window.ExperienceUI) $("#view").insertAdjacentHTML("beforeend", ExperienceUI.wardrobe());
+  if (view === "friends" && window.SharedBuildsUI) $("#view").insertAdjacentHTML("beforeend", SharedBuildsUI.panel(active()));
+  window.ExperienceUI?.mount();
+  window.BuildCareUI?.mount();
+  window.PackHubUI?.mount();
+  window.SharedBuildsUI?.mount();
+  window.UpdatesUI?.mount();
   if (archiveOpen && $(".deleted-builds")) $(".deleted-builds").open = true;
   updatePlayButtons();
   if (view === "settings") updateModeHelp();
@@ -1023,6 +981,12 @@ async function tick(wake = false) {
     pollError = "";
     if (typeof j.gameRunning === "boolean") state.gameRunning = j.gameRunning;
     state.job = j;
+    const updateNav = document.querySelector('aside [data-view="downloads"]');
+    if (updateNav) updateNav.classList.toggle("has-update", Boolean(j.updateAvailable));
+    if (j.updateAvailable && shownUpdate !== j.updateAvailable && !j.busy && $("#notice").hidden) {
+      shownUpdate = j.updateAvailable;
+      notice("Доступен BlockHarbor " + j.updateAvailable + ". Изменения и установка — в «Загрузках».");
+    }
     updatePlayButtons();
     if (j.busy) {
       lastJob = j.id;
@@ -1084,6 +1048,9 @@ async function downloadPlayerFile(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 async function dispatch(action) {
+  for (const extension of [window.ExperienceUI, window.BuildCareUI, window.PackHubUI, window.SharedBuildsUI, window.UpdatesUI]) {
+    if (extension?.dispatch && await extension.dispatch(action)) return;
+  }
   switch (action) {
     case "close":
       return closeDialog();
@@ -1396,7 +1363,7 @@ document.addEventListener("click", async (e) => {
   const el = e.target.closest("button");
   if (!el) return;
   try {
-    if (el.dataset.view) return navigate(el.dataset.view);
+    if (el.dataset.view) { if ($("#dialog").open) closeDialog(); return navigate(el.dataset.view); }
     if (el.dataset.kind) {
       kind = el.dataset.kind;
       return navigate("addons");
@@ -1715,3 +1682,5 @@ $("#cardPick").addEventListener("change", async (e) => {
     notice(err.message, true);
   }
 });
+
+window.addEventListener("load", () => { if (state) render(); });

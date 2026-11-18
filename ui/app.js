@@ -445,7 +445,7 @@ function buildRows(profiles) {
         '" title="Выгрузить сборку в ZIP" aria-label="Выгрузить сборку «' +
         esc(p.name) +
         '»">' +
-        ic("download") +
+        ic("upload") +
         "<span>Выгрузить</span></button>" +
         '<button type="button" class="build-remove" data-remove-build="' +
         esc(p.id) +
@@ -497,7 +497,7 @@ function builds() {
     head(
       "Мои сборки",
       btn("packCatalog", "Каталог сборок", "search") +
-      btn("importBuild", "Загрузить сборку", "upload") +
+      btn("importBuild", "Загрузить сборку", "download") +
         btn("create", "Новая сборка", "plus", "main"),
       "У каждой сборки свои миры, дополнения и настройки.",
     ) +
@@ -518,7 +518,7 @@ function emptyBuildView(title, message) {
     message +
     '</p><div class="actions">' +
     btn("create", "Новая сборка", "plus", "main") +
-    btn("importBuild", "Загрузить сборку", "upload") +
+    btn("importBuild", "Загрузить сборку", "download") +
     restore +
     "</div></section>"
   );
@@ -697,7 +697,7 @@ function friendsView() {
     "</p>" +
     '<div class="actions steam-actions">' +
     controls +
-    (profile ? "" : btn("importBuild", "Загрузить сборку", "upload")) +
+    (profile ? "" : btn("importBuild", "Загрузить сборку", "download")) +
     btn("openSteam", "Открыть Steam", "users") +
     (profile ? btn("checkSteam", "Проверить подключение", "search") : "") +
     '</div><p class="note">Войдите в разные аккаунты настольного Steam и добавьтесь в друзья. Запускайте Minecraft из BlockHarbor. На каждом компьютере Steam и BlockHarbor должны работать от одного пользователя с одинаковыми правами. ' +
@@ -766,7 +766,7 @@ function profile() {
       hasBuild
         ? ""
         : btn("create", "Новая сборка", "plus", "main") +
-            btn("importBuild", "Загрузить сборку", "upload"),
+            btn("importBuild", "Загрузить сборку", "download"),
       "Ник общий для всех сборок и миров. Изменения профиля применяются при следующем запуске игры.",
     ) +
     '<div class="panel side-panel"><div class="skin-stage" id="skinStage">' +

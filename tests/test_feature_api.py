@@ -51,7 +51,7 @@ class FeatureApiTests(unittest.TestCase):
                 result = self.call(f"/api/feature?action={action}&id={self.pid}")
                 self.assertIsInstance(result, dict)
         state = self.call("/api/state")
-        self.assertEqual(state["appVersion"], "2.3.0")
+        self.assertEqual(state["appVersion"], "2.4.0")
         for name in ("experience", "build-care", "pack-hub", "updates"):
             self.assertGreater(len(self.call("/" + name + ".js",auth=False,raw=True)), 100)
 

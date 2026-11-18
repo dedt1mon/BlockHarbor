@@ -103,6 +103,9 @@ class App:
         self.cleanup_started = False
         self.cleanup_thread = None
         self.close_reason = None
+        # A fresh bootstrap passes this only to its own Python child. Consuming
+        # it here prevents a later window from replaying an inherited result.
+        self.bootstrap_prepared = os.environ.pop("BLOCKHARBOR_BOOTSTRAP_PREPARED", "") == "1"
         self.workers = set()
         self.timers = set()
         self.page = ""
@@ -446,7 +449,7 @@ class App:
         s = self.store
         settings = s.settings()
         pid = settings.get("active")
-        job = self.job_snapshot()
+        job = self.ui_job_snapshot()
         profiles = s.all()
         details = self.experience.metadata()
         for profile in profiles:
@@ -676,6 +679,30 @@ class App:
             if self.child is not None and self.playing_id:
                 sessions["runningProfiles"] = sorted(set(sessions["runningProfiles"]) | {self.playing_id})
             return {**self.job, **process, **sessions, "localGameRunning": process["gameRunning"], "updateAvailable": self.update_available()}
+
+    def ui_job_snapshot(self):
+        # UpdateService may call _can_update while holding its own lock. Read its
+        # UI state only after job_snapshot releases jobs_lock, and never from
+        # the internal job_snapshot used by that installation guard.
+        snapshot = self.job_snapshot()
+        updates = self.updates.state()
+        keys = (
+            "current", "channel", "autoEnabled", "autoChecking", "checkedAt",
+            "available", "ready", "pending", "error", "checkStatus", "startupResult",
+        )
+        progress = {key: updates.get(key) for key in keys}
+        release = updates.get("release")
+        progress["release"] = {key: release.get(key) for key in ("version", "compatible")} if release else None
+        tasks = [row for row in updates.get("transfers", {}).get("tasks", [])
+                 if row.get("category") == "launcher-update"]
+        active = {"queued", "downloading", "verifying"}
+        progress["transfers"] = {"tasks": [row for row in tasks if row.get("state") in active]
+                                 + [row for row in tasks if row.get("state") not in active][:6]}
+        snapshot["updater"] = progress
+        snapshot["startupNotice"] = ({"id": self.coordinator.session + ":bootstrap", "ok": True,
+                                      "message": "Компоненты BlockHarbor подготовлены. Лаунчер готов к работе."}
+                                     if self.bootstrap_prepared else None)
+        return snapshot
 
     def start_job(self, fn, *, profile=None):
         self.require_mutations_allowed()
@@ -1462,7 +1489,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = modrinth.versions(store, q["id"], q["kind"], q["project"])
                 self.reply(200, result)
             elif u.path == "/api/job":
-                self.reply(200, self.app.job_snapshot())
+                self.reply(200, self.app.ui_job_snapshot())
             elif u.path == "/api/releases":
                 force = parse_qs(u.query).get("refresh") == ["1"]
                 self.reply(200, {"versions": self.app.refresh_releases(force=force)})

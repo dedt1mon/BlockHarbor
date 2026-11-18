@@ -154,6 +154,49 @@ func TestIncompleteAndInvalidArchive(t *testing.T) {
 		t.Fatal("accepted path outside install")
 	}
 }
+
+func TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork(t *testing.T) {
+	p, err := openBytes(t, example(t, "main.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	log := new(bytes.Buffer)
+	first, prepared, err := provisionLogged(base, p, log)
+	if err != nil || !prepared || !strings.Contains(log.String(), "Компоненты готовы") {
+		t.Fatalf("cold preparation/log: %v %v %q", prepared, err, log.String())
+	}
+	log.Reset()
+	again, prepared, err := provisionLogged(base, p, log)
+	if err != nil || prepared || first != again || log.Len() != 0 {
+		t.Fatalf("warm launch produced a stale preparation notice: %v %v %q", prepared, err, log.String())
+	}
+	corrupted := p
+	corrupted.digest = strings.Repeat("a", 64)
+	if _, prepared, err := provisionLogged(t.TempDir(), corrupted, log); err == nil || prepared {
+		t.Fatalf("failed preparation reported success: %v %v", prepared, err)
+	}
+}
+
+func TestBootstrapNoticeIsIsolatedToTheActualChild(t *testing.T) {
+	input := []string{"PATH=kept", "blockharbor_bootstrap_prepared=1", "BLOCKHARBOR_BOOTSTRAP_PREPARED=1", "BLOCKHARBOR_BOOTSTRAP_PID=111", "BLOCKHARBOR_LAUNCHER_EXE=old.exe"}
+	for _, prepared := range []bool{false, true} {
+		output := bootstrapEnvironment(input, `C:\BlockHarbor.exe`, 222, prepared)
+		if len(output) != 4 || output[0] != "PATH=kept" {
+			t.Fatalf("environment was not deduplicated/preserved: %q", output)
+		}
+		flag := "0"
+		if prepared {
+			flag = "1"
+		}
+		if output[1] != `BLOCKHARBOR_LAUNCHER_EXE=C:\BlockHarbor.exe` || output[2] != "BLOCKHARBOR_BOOTSTRAP_PID=222" || output[3] != "BLOCKHARBOR_BOOTSTRAP_PREPARED="+flag {
+			t.Fatalf("wrong child state: %q", output)
+		}
+	}
+	if input[1] != "blockharbor_bootstrap_prepared=1" {
+		t.Fatal("modified parent environment")
+	}
+}
 func TestShippedExecutable(t *testing.T) {
 	name := os.Getenv("BLOCKHARBOR_RELEASE_EXE")
 	if name == "" {

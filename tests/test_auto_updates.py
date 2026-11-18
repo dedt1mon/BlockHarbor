@@ -20,6 +20,12 @@ from launcher.transfers import TransferManager
 PAYLOAD = b"verified windows installer"
 
 
+def windows_policy():
+    # Select the updater's Windows policy without changing pathlib/FileMutex's
+    # actual host OS. Those still exercise the real cross-process cache lock.
+    return patch.object(updates, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+
+
 def publication(version="2.2.0", schema=1):
     filename = "BlockHarbor-Setup-" + version + ".exe"
     return {
@@ -104,13 +110,13 @@ class AutomaticUpdatesTests(unittest.TestCase):
     def test_startup_ignores_recent_check_and_periodic_checks_are_bounded(self):
         self.service.checked = time.time()
         lookup = self.remote(publication("2.1.0"))
-        with patch.object(updates.time, "monotonic", return_value=1000):
+        with patch.object(updates.time, "monotonic", return_value=1000), patch.object(updates.time, "time", return_value=1700000000):
             self.service.start_auto()
             self.drain()
             self.service.tick_auto()
             self.drain()
             self.assertEqual(lookup.call_count, 1)
-        with patch.object(updates.time, "monotonic", return_value=1000 + updates.AUTO_CHECK_INTERVAL + 1):
+        with patch.object(updates.time, "monotonic", return_value=1000 + updates.AUTO_CHECK_INTERVAL + 1), patch.object(updates.time, "time", return_value=1700000000 + updates.AUTO_CHECK_INTERVAL + 1):
             self.service.tick_auto()
             self.drain()
         self.assertEqual(lookup.call_count, 2)
@@ -127,7 +133,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
     def test_automatic_download_keeps_hash_size_and_source_checks(self):
         info = publication()
         self.remote(info)
-        with patch.object(updates.os, "name", "nt"), patch.object(self.transfers, "submit", return_value="owned-task") as submit:
+        with windows_policy(), patch.object(self.transfers, "submit", return_value="owned-task") as submit:
             self.service.start_auto()
             self.drain()
         self.assertEqual(submit.call_args.args[0], info["download"])
@@ -139,7 +145,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
 
     def test_incompatible_release_is_not_downloaded_or_scheduled(self):
         self.remote(publication(schema=2))
-        with patch.object(updates.os, "name", "nt"), patch.object(self.transfers, "submit") as submit:
+        with windows_policy(), patch.object(self.transfers, "submit") as submit:
             self.service.start_auto()
             self.drain()
         submit.assert_not_called()
@@ -148,7 +154,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
     def test_download_completion_queues_automatic_install_but_waits_for_idle(self):
         info = self.ready()
         self.remote(info)
-        with patch.object(updates.os, "name", "nt"), patch.object(self.service, "_perform_install") as perform:
+        with windows_policy(), patch.object(self.service, "_perform_install") as perform:
             self.service.start_auto()
             self.drain()
             self.assertEqual(self.service.pending["stage"], "queued")
@@ -164,7 +170,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
 
     def test_opt_out_cancels_automatic_pending_but_preserves_manual_pending(self):
         self.ready()
-        with patch.object(updates.os, "name", "nt"):
+        with windows_policy():
             self.service.schedule_install(when="idle", automatic=True)
             self.service.set_automatic(False)
             self.assertIsNone(self.service.pending)
@@ -176,7 +182,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
     def test_cancel_automatic_install_snoozes_this_version(self):
         info = self.ready()
         self.remote(info)
-        with patch.object(updates.os, "name", "nt"):
+        with windows_policy():
             self.service.start_auto()
             self.drain()
             self.service.handle("updateCancelInstall", {})
@@ -210,7 +216,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
 
     def test_channel_change_during_check_cannot_publish_stale_release(self):
         entered, release = threading.Event(), threading.Event()
-        def fetch(_url):
+        def fetch(_url, **_kwargs):
             entered.set()
             release.wait(2)
             return [{"tag_name": "v2.2.0-rc.1", "prerelease": True}]
@@ -226,7 +232,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
 
     def prepare_handoff(self, *, close_during_spawn=False):
         self.ready()
-        with patch.object(updates.os, "name", "nt"):
+        with windows_policy():
             self.service.schedule_install(when="idle", automatic=True)
         self.service.can_install = lambda: True
         helper = FakeHelper()
@@ -280,6 +286,31 @@ class AutomaticUpdatesTests(unittest.TestCase):
         self.addCleanup(reopened.close, timeout=0.2)
         self.assertEqual(reopened.state()["error"], "Network unavailable")
 
+    def test_failed_latest_check_blocks_local_automatic_install_of_stale_candidate(self):
+        info = self.ready()
+        self.service._auto_candidate = dict(info)
+        with patch.object(updates, "_read_json", return_value=[{"tag_name": "v2.3.0", "assets": []}]), self.assertRaises(ValueError):
+            self.service.check()
+        self.assertIsNone(self.service._auto_candidate)
+        with windows_policy(), patch.object(self.service, "schedule_install") as install:
+            self.service._auto_cycle(self.service._auto_generation, updates.CancellationScope(), remote=False)
+        install.assert_not_called()
+        with windows_policy(), self.assertRaises(updates.OperationCancelled):
+            self.service.schedule_install(when="idle", automatic=True)
+        self.assertEqual(self.service.release["version"], info["version"])
+        self.assertTrue(self.service.check_status["stale"])
+
+    def test_failed_latest_check_also_revokes_already_queued_automatic_install(self):
+        self.ready()
+        with windows_policy():
+            self.service.schedule_install(when="idle", automatic=True)
+        self.assertIsNotNone(self.service.pending)
+        with patch.object(updates, "_read_json", return_value=[{"tag_name": "v2.3.0", "assets": []}]), self.assertRaises(ValueError):
+            self.service.check()
+        self.assertIsNone(self.service.pending)
+        self.assertTrue(self.service.cancel_install.is_set())
+        self.cancel_handoff.assert_called()
+
     def test_close_at_helper_spawn_cannot_commit_or_request_restart(self):
         helper = self.prepare_handoff(close_during_spawn=True)
         self.assertGreater(helper.terminated, 0)
@@ -296,7 +327,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
         reopened = updates.UpdateService(self.store, self.transfers, "2.1.0", can_install=lambda: True, request_shutdown=Mock())
         self.addCleanup(reopened.close, timeout=0.2)
         self.assertEqual(reopened.state()["autoFailure"]["version"], info["version"])
-        with patch.object(updates.os, "name", "nt"), patch.object(updates, "_read_json", return_value=[{"tag_name": "v2.2.0"}]), patch.object(updates, "release_info", return_value=info), patch.object(reopened, "schedule_install") as install:
+        with windows_policy(), patch.object(updates, "_read_json", return_value=[{"tag_name": "v2.2.0"}]), patch.object(updates, "release_info", return_value=info), patch.object(reopened, "schedule_install") as install:
             reopened.start_auto()
             reopened._auto_worker.join(2)
         install.assert_not_called()
@@ -305,7 +336,7 @@ class AutomaticUpdatesTests(unittest.TestCase):
     def test_tampered_ready_installer_never_starts_helper(self):
         info = self.ready()
         (self.service.cache / info["filename"]).write_bytes(b"x" * len(PAYLOAD))
-        with patch.object(updates.os, "name", "nt"):
+        with windows_policy():
             self.service.schedule_install(when="idle", automatic=True)
         self.service.can_install = lambda: True
         with patch.object(updates.subprocess, "Popen") as spawn:

@@ -92,7 +92,7 @@ def _download(release: ModRelease) -> bytes:
     lifecycle.check()
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/2.3.0 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": "BlockHarbor/2.4.0 (Minecraft Java desktop launcher)"},
     )
     try:
         with lifecycle.response(urlopen(request, timeout=30)) as response:

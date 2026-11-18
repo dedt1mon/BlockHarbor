@@ -382,6 +382,13 @@ def own_process(process, *, group=False):
 
 def run(command, *, timeout=None, check=False, capture_output=False, input=None, **kwargs):
     """Like subprocess.run for cancelable installer/probe children only."""
+    if os.name == "nt":
+        # CREATE_NO_WINDOW is ignored when NEW_CONSOLE or DETACHED_PROCESS is
+        # present. Installer/probe children always stay in the background while
+        # their stdout/stderr retain the caller's existing log/capture handles.
+        # Games, Prism and Steam use their own Popen paths and are unaffected.
+        flags = kwargs.get("creationflags", 0)
+        kwargs["creationflags"] = (flags & ~0x00000018) | 0x08000000
     scope = current_scope()
     if not scope:
         return subprocess.run(command, timeout=timeout, check=check, capture_output=capture_output, input=input, **kwargs)

@@ -43,6 +43,35 @@ def stop_process(process):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_windows_probe_has_no_console_without_a_cancellation_scope(self):
+        capture = Mock()
+        with patch.object(lifecycle.os, "name", "nt"), patch.object(lifecycle.subprocess, "run") as run:
+            lifecycle.run(["java.exe", "-version"], creationflags=0x200 | 0x10 | 0x08,
+                          stdout=capture, stderr=subprocess.STDOUT, timeout=8)
+        self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000 | 0x200)
+        self.assertIs(run.call_args.kwargs["stdout"], capture)
+        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.STDOUT)
+        self.assertEqual(run.call_args.kwargs["timeout"], 8)
+
+    def test_windows_owned_installer_keeps_cancellation_and_output_without_console(self):
+        scope = lifecycle.CancellationScope()
+        process = Mock(returncode=0)
+        process.communicate.return_value = (b"installed", b"diagnostic output")
+        startup = object()
+        with (lifecycle.bind(scope), patch.object(lifecycle.os, "name", "nt"),
+              patch.object(lifecycle.subprocess, "Popen", return_value=process) as spawn,
+              patch.object(lifecycle, "_ProcessOwner") as owner):
+            result = lifecycle.run(["java.exe", "-jar", "installer.jar"],
+                                   check=True, capture_output=True, startupinfo=startup)
+        self.assertEqual(spawn.call_args.kwargs["creationflags"], 0x08000000)
+        self.assertIs(spawn.call_args.kwargs["startupinfo"], startup)
+        self.assertEqual(spawn.call_args.kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(spawn.call_args.kwargs["stderr"], subprocess.PIPE)
+        owner.assert_called_once_with(process, group=False)
+        owner.return_value.close.assert_called_once()
+        self.assertEqual(result.stdout, b"installed")
+        self.assertEqual(result.stderr, b"diagnostic output")
+
     def test_cancel_is_immediate_while_atomic_commit_finishes_and_callbacks_run_once(self):
         scope = lifecycle.CancellationScope()
         entered, release, called = threading.Event(), threading.Event(), threading.Event()

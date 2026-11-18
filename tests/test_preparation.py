@@ -1,4 +1,5 @@
 import hashlib
+import importlib
 import io
 import lzma
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import Mock, patch
 
-from launcher import preparation
+from launcher import lifecycle, preparation
 
 
 class Source(BaseHTTPRequestHandler):
@@ -241,28 +242,46 @@ class PreparationTests(unittest.TestCase):
             old,
         )
 
-    def test_windows_progress_uses_own_console_even_if_parent_stdout_is_redirected(
-        self,
-    ):
-        child = Mock()
-        child.poll.return_value = None
-        with (
-            patch.object(preparation.sys, "platform", "win32"),
-            patch.object(
-                preparation.sys, "executable", "C:/BlockHarbor/runtime/pythonw.exe"
-            ),
-            patch.object(Path, "is_file", return_value=True),
-            patch.object(preparation.subprocess, "CREATE_NEW_CONSOLE", 16, create=True),
-            patch.object(preparation.subprocess, "Popen", return_value=child) as spawn,
-        ):
+    def test_progress_updates_the_launcher_without_spawning_a_console(self):
+        scope = lifecycle.CancellationScope()
+        with lifecycle.bind(scope), patch.object(
+            preparation.subprocess, "Popen", side_effect=AssertionError("progress spawned a console")
+        ) as spawn:
             self.assertFalse(self.progress.started)
             self.progress.start()
+            self.progress.start()
             self.progress.downloaded("runtime.dll", 1024**2, 2 * 1024**2)
+            callbacks = self.progress.callbacks()
+            callbacks["setStatus"]("Running fabric installer")
+            callbacks["setMax"](3)
+            callbacks["setProgress"](4)
             self.progress.close()
-            self.assertEqual(spawn.call_count, 1)
-            script = spawn.call_args.args[0][-1]
-            self.assertIn("CONOUT$", script)
-            self.assertIn("file=output", script)
-            self.assertEqual(spawn.call_args.kwargs["creationflags"], 16)
-            self.assertIn("1.0 МБ / 2.0 МБ", child.stdin.write.call_args.args[0])
-            child.stdin.close.assert_called_once()
+            spawn.assert_not_called()
+            self.assertEqual(self.messages.count("Подготовка файлов Minecraft и Java…"), 1)
+            self.assertTrue(any("1.0 МБ / 2.0 МБ" in text for text in self.messages))
+            self.assertIn("Настраиваем Fabric · 4 / 4", self.messages)
+            before = list(self.messages)
+            scope.cancel()
+            with self.assertRaises(lifecycle.OperationCancelled):
+                self.progress("must not arrive after close")
+            self.assertEqual(self.messages, before)
+
+    def test_all_installer_adapters_restore_and_keep_callers_error_policy(self):
+        names = ("fabric", "quilt", "forge", "runtime", "java_utils", "mod_loader._fabric", "mod_loader._quilt", "mod_loader._forge", "mod_loader._neoforge")
+        modules = [importlib.import_module("minecraft_launcher_lib." + name) for name in names]
+        originals = [module.subprocess for module in modules]
+        command = ["/runtime/java.exe", "-jar", "installer.jar", "client"]
+        completed = preparation.subprocess.CompletedProcess(command, 3, b"detail", b"failure")
+        with preparation.environment(self.progress), patch.object(lifecycle, "run", return_value=completed) as run:
+            for module in modules:
+                with self.subTest(module=module.__name__):
+                    self.assertIsInstance(module.subprocess, preparation._Processors)
+                    # Legacy Fabric/Quilt inspect returncode themselves; preserve
+                    # explicit check=False and captured logs for every provider.
+                    result = module.subprocess.run(command, check=False, capture_output=True, timeout=12)
+                    self.assertIs(result, completed)
+                    self.assertEqual(run.call_args.args[0][1], "-Djava.net.useSystemProxies=true")
+                    self.assertEqual(run.call_args.kwargs, {"check": False, "capture_output": True, "timeout": 12})
+            modules[0].subprocess.run(command)
+            self.assertFalse(run.call_args.kwargs["check"])
+        self.assertEqual([module.subprocess for module in modules], originals)

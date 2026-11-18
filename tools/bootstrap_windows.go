@@ -19,44 +19,24 @@ func showError(msg string) {
 	syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW").Call(0, uintptr(unsafe.Pointer(wide(msg))), uintptr(unsafe.Pointer(wide("BlockHarbor"))), 0x10)
 }
 
-func prepare(data string, source payload, log io.Writer) (string, error) {
+func prepare(data string, source payload, log io.Writer) (string, bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	name, _ := syscall.UTF16PtrFromString("Local\\BlockHarbor-Setup-" + source.digest[:16])
 	handle, _, err := kernel.NewProc("CreateMutexW").Call(0, 0, uintptr(unsafe.Pointer(name)))
 	if handle == 0 {
-		return "", err
+		return "", false, err
 	}
 	defer syscall.CloseHandle(syscall.Handle(handle))
 	wait, _, err := kernel.NewProc("WaitForSingleObject").Call(handle, 0xffffffff)
 	if wait != 0 && wait != 0x80 {
-		return "", err
+		return "", false, err
 	}
 	defer kernel.NewProc("ReleaseMutex").Call(handle)
-	var terminal *os.File
-	opened := false
-	defer func() {
-		if terminal != nil {
-			terminal.Close()
-		}
-		if opened {
-			kernel.NewProc("FreeConsole").Call()
-		}
-	}()
-	progress := func(line string) {
-		if terminal == nil {
-			r, _, _ := kernel.NewProc("AllocConsole").Call()
-			opened = r != 0
-			kernel.NewProc("SetConsoleOutputCP").Call(65001)
-			kernel.NewProc("SetConsoleTitleW").Call(uintptr(unsafe.Pointer(wide("BlockHarbor — подготовка лаунчера"))))
-			terminal, _ = os.OpenFile("CONOUT$", os.O_WRONLY, 0)
-		}
-		if terminal != nil {
-			fmt.Fprintln(terminal, line)
-		}
-		fmt.Fprintln(log, line)
-	}
-	return provision(filepath.Join(data, "app"), source, progress)
+	// The first UI does not exist until these bundled files are ready. Keep the
+	// stages in startup.log and pass completion only to this child window; no
+	// terminal or persistent cross-window status file is needed.
+	return provisionLogged(filepath.Join(data, "app"), source, log)
 }
 
 func run() error {
@@ -88,7 +68,7 @@ func run() error {
 		return err
 	}
 	defer log.Close()
-	root, err := prepare(data, source, log)
+	root, prepared, err := prepare(data, source, log)
 	if err != nil {
 		fmt.Fprintln(log, err)
 		return fmt.Errorf("Не удалось подготовить BlockHarbor — %w\nЖурнал %s", err, logPath)
@@ -96,7 +76,8 @@ func run() error {
 	arguments := []string{"-B", "-X", "utf8", filepath.Join(root, "main.py")}
 	arguments = append(arguments, os.Args[1:]...)
 	cmd := exec.Command(filepath.Join(root, "runtime", "pythonw.exe"), arguments...)
-	cmd.Env = append(os.Environ(), "BLOCKHARBOR_LAUNCHER_EXE="+executable, fmt.Sprintf("BLOCKHARBOR_BOOTSTRAP_PID=%d", os.Getpid()))
+	cmd.Env = bootstrapEnvironment(os.Environ(), executable, os.Getpid(), prepared)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW; pythonw remains a GUI host.
 	cmd.Dir, cmd.Stdout, cmd.Stderr = root, log, log
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Ошибка запуска BlockHarbor (%v). Журнал %s", err, logPath)

@@ -10,6 +10,9 @@
   let savingChannel = false;
   let pendingChannel = null;
   let channelRevision = 0;
+  let progressData = null;
+  let completedCheck = null;
+  const activeTransfers = new Set(["queued", "downloading", "verifying"]);
   const labels = {
     queued: "В очереди", downloading: "Загрузка", verifying: "Проверка",
     completed: "Готово", cancelled: "Отменено", failed: "Ошибка", interrupted: "Прервано",
@@ -17,6 +20,84 @@
   const button = (action, text, icon, extra = "", disabled = false) =>
     `<button class="btn ${extra}" type="button" data-updates-action="${esc(action)}" ${disabled ? "disabled" : ""}>${ic(icon)}${esc(text)}</button>`;
   const formatDate = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "Ещё не проверяли";
+
+  function updateNotice(snapshot) {
+    const pending = snapshot.pending;
+    const version = pending?.version || snapshot.release?.version || "";
+    const label = "BlockHarbor" + (version ? " " + version : "");
+    if (pending && ["preparing", "launching"].includes(pending.stage)) {
+      return {
+        id: `install:${version}:${pending.stage}`, busy: true,
+        message: pending.stage === "preparing"
+          ? `Готовим обновление ${label}: проверяем установщик и сохраняем предыдущую версию…`
+          : pending.automatic
+            ? `Устанавливаем ${label}. Лаунчер ненадолго закроется и откроется после обновления.`
+            : `Открываем установщик ${label}. Лаунчер закроется для установки.`,
+      };
+    }
+    const tasks = snapshot.transfers?.tasks || [];
+    const matchesVersion = (task) => !version || task.title?.endsWith(version);
+    const transfer = tasks.find((task) => activeTransfers.has(task.state) && matchesVersion(task))
+      || tasks.find((task) => activeTransfers.has(task.state));
+    if (transfer) {
+      const total = Math.max(0, Number(transfer.total) || 0);
+      const bytes = Math.max(0, Number(transfer.bytes) || 0);
+      const amount = total ? ` — ${Math.min(100, Math.floor(bytes / total * 100))}% · ${fmt(bytes)} / ${fmt(total)}` : bytes ? ` — ${fmt(bytes)}` : "";
+      const title = transfer.title || label;
+      return {
+        id: `download:${transfer.id}:${transfer.attempt || 0}:${transfer.state}`, busy: true,
+        message: transfer.state === "verifying" ? `Проверяем загруженный файл ${title}…`
+          : transfer.state === "queued" ? `${title}: загрузка ожидает своей очереди…`
+            : `Скачиваем ${title}${amount}`,
+      };
+    }
+    if (snapshot.autoChecking) return {id: "checking", busy: true, message: "Проверяем обновления BlockHarbor…"};
+    if (snapshot.error) return {
+      id: `error:${snapshot.checkStatus?.retryAt || snapshot.checkedAt || 0}:${snapshot.error}`,
+      message: snapshot.error, bad: true,
+    };
+    if (pending) return {
+      id: `queued:${version}:${Boolean(pending.automatic)}`,
+      message: pending.automatic
+        ? `${label} готов к установке. Обновление начнётся после завершения игр, операций и закрытия остальных окон лаунчера.`
+        : `Установка ${label} запланирована. После завершения игр и операций откроется установщик.`,
+    };
+    if (snapshot.ready && snapshot.available) return {
+      id: `ready:${version}`, message: `${label} скачан и проверен. Обновление готово к установке.`,
+    };
+    const recent = tasks.find(matchesVersion);
+    if (recent && ["failed", "interrupted", "cancelled"].includes(recent.state)) return {
+      id: `download:${recent.id}:${recent.attempt || 0}:${recent.state}`,
+      message: recent.message || (recent.state === "cancelled" ? "Загрузка обновления отменена." : "Не удалось скачать обновление BlockHarbor. Повтори загрузку в настройках."),
+      bad: recent.state !== "cancelled",
+    };
+    if (snapshot.available) return {
+      id: `available:${snapshot.channel}:${version}`,
+      message: snapshot.release?.compatible === false
+        ? `${label} использует другой формат данных. Автоматическая установка недоступна.`
+        : `Доступен ${label}. Подробности — в «Настройки → Загрузки и обновления».`,
+    };
+    return completedCheck;
+  }
+
+  function observe(snapshot) {
+    if (!snapshot) return;
+    if (snapshot.autoChecking) completedCheck = null;
+    else if (progressData?.autoChecking && snapshot.checkedAt > (progressData.checkedAt || 0)
+      && !snapshot.error && !snapshot.available) {
+      completedCheck = {id: `checked:${snapshot.checkedAt}`, message: "У тебя актуальная версия BlockHarbor."};
+    }
+    progressData = snapshot;
+    const result = snapshot.startupResult;
+    backgroundNotice("update-result", result ? {...result, bad: !result.ok, persist: true} : null);
+    backgroundNotice("updater", updateNotice(snapshot));
+  }
+
+  function isActive() {
+    return Boolean(progressData?.autoChecking
+      || ["preparing", "launching"].includes(progressData?.pending?.stage)
+      || progressData?.transfers?.tasks.some((task) => activeTransfers.has(task.state)));
+  }
 
   function render({embedded = false} = {}) {
     const actions = button("updateCheck", "Проверить обновления", "refresh");
@@ -34,6 +115,8 @@
     let actions = "";
     let heading = `Установлен BlockHarbor ${esc(data.current)}`;
     let body = `<p class="muted">Последняя проверка: ${esc(formatDate(data.checkedAt))}.</p>`;
+    if (data.checkStatus?.message) body += `<p class="muted">${esc(data.checkStatus.message)}</p>`;
+    if (data.checkStatus?.retryAt > Date.now() / 1000) body += `<p class="muted">Повторная сетевая проверка доступна с: ${esc(formatDate(data.checkStatus.retryAt))}.</p>`;
     if (data.available && release) {
       heading = `Доступен BlockHarbor ${esc(release.version)}`;
       body += `<div class="tags"><span class="pill">${release.prerelease ? "Тестовая версия" : "Стабильная версия"}</span><span class="pill">${fmt(release.size)}</span><span class="pill">${release.compatible ? "Формат данных совместим" : "Нужна миграция данных"}</span></div>`;
@@ -169,6 +252,7 @@
         }
       }
       await load(true);
+      await tick();
     }
   }
 
@@ -209,6 +293,7 @@
         if (action === "updateCancelInstall") notice(postponed ? "Автоматическое обновление отложено до следующего запуска." : "Отложенная установка отменена.");
       }
       await load(true);
+      await tick();
     } catch (error) {
       notice(error.message, true);
     }
@@ -227,6 +312,7 @@
     try {
       await act(cancel ? "transferCancel" : "transferRetry", { id: cancel ? cancel.dataset.transferCancel : retry.dataset.transferRetry });
       await load(true);
+      await tick();
     } catch (error) {
       notice(error.message, true);
     } finally {
@@ -244,6 +330,7 @@
       await act(automatic ? "updateAutomatic" : "updateChannel", automatic ? {enabled: control.checked} : {channel: control.value});
       if (automatic && data) data.autoEnabled = control.checked;
       await load();
+      await tick();
       notice(automatic ? control.checked ? "Автоматическое обновление включено." : "Автоматическое обновление выключено." : "Канал обновлений сохранён.");
     } catch (error) {
       notice(error.message, true);
@@ -256,5 +343,6 @@
       control.disabled = false;
     }
   });
-  window.UpdatesUI = { render, mount, dispatch };
+  window.UpdatesUI = { render, mount, dispatch, observe, isActive,
+    handoffPending: () => progressData?.pending?.stage === "launching" };
 })();

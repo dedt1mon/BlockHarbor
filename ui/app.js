@@ -94,7 +94,6 @@ let state,
   lastJob = "",
   lastPlayJob = "",
   shownExit = "",
-  shownUpdate = "",
   activePoll = false,
   pollTimer = 0,
   refreshAfterPlay = false,
@@ -104,31 +103,105 @@ let state,
   loadedSkin = 0;
 const active = () => state.profiles.find((p) => p.id === state.active);
 let noticeTimer = 0;
+let noticeOwner = "";
+const backgroundNotices = new Map();
+const deliveredBackgroundNotices = new Set();
 let distancePreview = null;
 function moveNotice() {
   const box = $("#notice");
   const parent = $("#dialog").open ? $("#dialog") : document.body;
   if (box.parentElement !== parent) parent.append(box);
 }
-function notice(msg, bad = false, busy = false) {
+function clearNotice() {
+  clearTimeout(noticeTimer);
+  noticeTimer = 0;
+  noticeOwner = "";
+  const box = $("#notice");
+  box.hidden = true;
+  box.className = "";
+  box.replaceChildren();
+}
+function notice(msg, bad = false, busy = false, owner = "") {
   const box = $("#notice");
   const style = bad ? "bad" : busy ? "busy" : "success";
-  if (busy && !box.hidden && box.className === style && box.textContent === msg)
+  if (busy && noticeOwner === owner && !box.hidden && box.className === style && box.textContent === msg)
     return;
   clearTimeout(noticeTimer);
-  box.hidden = !msg;
   if (!msg) {
-    box.className = "";
-    box.replaceChildren();
+    clearNotice();
+    flushBackgroundNotices();
     return;
   }
+  noticeOwner = owner;
+  box.hidden = false;
   moveNotice();
   box.className = style;
   const text = document.createElement("span");
   text.textContent = msg;
   box.innerHTML = ic(bad ? "close" : busy ? "refresh" : "check");
   box.append(text);
-  if (!busy) noticeTimer = setTimeout(() => notice(""), 5000);
+  if (!busy) noticeTimer = setTimeout(() => {
+    clearNotice();
+    flushBackgroundNotices();
+  }, 5000);
+}
+function rememberBackgroundNotice(item) {
+  deliveredBackgroundNotices.add(item.key);
+  if (deliveredBackgroundNotices.size > 100) {
+    deliveredBackgroundNotices.delete(deliveredBackgroundNotices.values().next().value);
+  }
+  if (item.persist) {
+    try {
+      const previous = JSON.parse(sessionStorage.getItem("blockharbor-seen-notices") || "[]");
+      sessionStorage.setItem("blockharbor-seen-notices", JSON.stringify([...previous.filter((key) => key !== item.key).slice(-29), item.key]));
+    } catch { /* Notification delivery must also work without session storage. */ }
+  }
+}
+function backgroundNotice(source, event) {
+  const box = $("#notice");
+  const key = event ? source + ":" + event.id : "";
+  let delivered = deliveredBackgroundNotices.has(key);
+  if (event?.persist && !delivered) {
+    try { delivered = JSON.parse(sessionStorage.getItem("blockharbor-seen-notices") || "[]").includes(key); }
+    catch { /* An unavailable history does not prevent showing the result. */ }
+  }
+  if (!event?.message || (!event.busy && delivered)) {
+    backgroundNotices.delete(source);
+    if (noticeOwner === source && box.classList.contains("busy")) clearNotice();
+  } else {
+    const item = {...event, source, key};
+    // A manually requested check already reports its result as a normal job.
+    // Do not repeat the same result after that foreground notice disappears.
+    if (!item.busy && !box.hidden && box.textContent === item.message) {
+      rememberBackgroundNotice(item);
+      backgroundNotices.delete(source);
+    } else backgroundNotices.set(source, item);
+  }
+  flushBackgroundNotices();
+}
+function flushBackgroundNotices() {
+  const box = $("#notice");
+  if (state?.job?.busy || lastJob || state?.gameRunning) {
+    if (noticeOwner) clearNotice();
+    return;
+  }
+  // Foreground saves/errors and completed results retain their full five
+  // seconds. Only an ongoing background stage can be replaced by its next one.
+  if (!box.hidden && (!noticeOwner || !box.classList.contains("busy"))) return;
+  const waiting = [...backgroundNotices.values()];
+  const item = waiting.find((candidate) => !candidate.busy) || waiting[0];
+  if (!item) return;
+  if (!item.busy) {
+    backgroundNotices.delete(item.source);
+    rememberBackgroundNotice(item);
+  }
+  notice(item.message, Boolean(item.bad), Boolean(item.busy), item.source);
+}
+function observeProgress(job) {
+  // A completed app update already includes preparing its embedded components.
+  const startup = job.updater?.startupResult ? null : job.startupNotice;
+  backgroundNotice("bootstrap", startup ? {...startup, persist: true} : null);
+  window.UpdatesUI?.observe(job.updater);
 }
 function head(title, actions = "", sub = "") {
   return (
@@ -974,7 +1047,7 @@ function showGameExit(job) {
     !failure.id ||
     failure.id === shownExit ||
     job.busy ||
-    $("#notice").classList.contains("busy")
+    (!noticeOwner && $("#notice").classList.contains("busy"))
   )
     return;
   if (
@@ -999,9 +1072,9 @@ function schedulePoll() {
   // Hidden pages still need an occasional heartbeat for the local server's idle timeout.
   const delay = document.hidden
     ? 60000
-    : state.job?.busy || lastJob
+    : state.job?.busy || lastJob || window.UpdatesUI?.isActive()
       ? 900
-      : 15000;
+      : state.job?.updater?.autoEnabled ? 3000 : 15000;
   pollTimer = setTimeout(tick, delay);
 }
 async function tick(wake = false) {
@@ -1018,10 +1091,6 @@ async function tick(wake = false) {
     state.job = j;
     const updateNav = document.querySelector('aside [data-view="settings"]');
     if (updateNav) updateNav.classList.toggle("has-update", Boolean(j.updateAvailable));
-    if (j.updateAvailable && shownUpdate !== j.updateAvailable && !j.busy && $("#notice").hidden) {
-      shownUpdate = j.updateAvailable;
-      notice("Доступен BlockHarbor " + j.updateAvailable + ". Открой «Настройки → Загрузки и обновления».");
-    }
     updatePlayButtons();
     if (j.busy) {
       lastJob = j.id;
@@ -1054,8 +1123,9 @@ async function tick(wake = false) {
     }
     showGameExit(j);
     showStagedReview(j);
+    observeProgress(j);
   } catch (e) {
-    if (pollError !== e.message) notice(e.message, true);
+    if (!window.UpdatesUI?.handoffPending() && pollError !== e.message) notice(e.message, true);
     pollError = e.message;
   } finally {
     activePoll = false;
@@ -1680,8 +1750,12 @@ $("#skinPick").addEventListener("change", async (e) => {
 });
 refresh()
   .then(() => {
-    if (state.job.busy) lastJob = state.job.id;
+    if (state.job.busy) {
+      lastJob = state.job.id;
+      notice(state.job.message, false, true);
+    }
     else showGameExit(state.job);
+    observeProgress(state.job);
     schedulePoll();
   })
   .catch((error) => {

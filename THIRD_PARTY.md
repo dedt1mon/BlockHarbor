@@ -1,10 +1,10 @@
 # Компоненты BlockHarbor
 
-BlockHarbor 2.3 для Windows x64. Имена файлов, адреса загрузки и контрольные суммы SHA-256 зафиксированы в `tools/windows-lock.json`. Исходники оболочки `BlockHarbor.exe` находятся в `tools/bootstrap_windows.go` и `tools/bootstrap_payload.go`, компонента удаления данных — в `tools/data_cleanup`. Сборка приложения и установщика из исходников выполняется командами ниже.
+BlockHarbor 2.4 для Windows x64. Имена файлов, адреса загрузки и контрольные суммы SHA-256 зафиксированы в `tools/windows-lock.json`. Исходники оболочки `BlockHarbor.exe` находятся в `tools/bootstrap_windows.go` и `tools/bootstrap_payload.go`, компонента удаления данных — в `tools/data_cleanup`. Сборка приложения и установщика из исходников выполняется командами ниже.
 
 ```powershell
 python tools/build_windows.py --output ..\BlockHarbor-Windows-x64
-python tools/build_installer.py --launcher ..\BlockHarbor-Windows-x64\BlockHarbor.exe --output ..\BlockHarbor-Setup-2.3.0.exe --version 2.3.0
+python tools/build_installer.py --launcher ..\BlockHarbor-Windows-x64\BlockHarbor.exe --output ..\BlockHarbor-Setup-2.4.0.exe --version 2.4.0
 ```
 
 Для сборки приложения и компонента удаления нужны Python 3.10 или новее, компилятор Go 1.25 или новее и интернет для первой загрузки. Для установщика нужен NSIS 3.13 или новее. Поставляемая оболочка и компонент удаления собраны с Go 1.27.4. Каталог назначения должен быть новым или пустым. Команда сохраняет проверенные архивы во временном каталоге пользователя и использует их при повторной сборке. Результат сборки — один `BlockHarbor.exe` со встроенным ZIP, Python и приложением. При первом запуске пакет проверяется по SHA-256 и распаковывается в пользовательский каталог. Файлы лицензий и исходники доступны внутри распакованной версии в `%LOCALAPPDATA%\BlockHarbor\app`.

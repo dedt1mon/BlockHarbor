@@ -1,4 +1,4 @@
-"""Verified, retryable Minecraft downloads and a Windows installation progress console."""
+"""Verified, retryable downloads with progress inside the launcher's own UI."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import re
 import shutil
 import ssl
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -33,7 +32,7 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.3.0", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.4.0", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -160,26 +159,16 @@ def _valid(path, digest=None):
 class Progress:
     def __init__(self, status):
         self.status = status
-        self.console = None
         self.started = False
         self.lock = threading.RLock()
         self.last = 0.0
         self.phase = "Подготовка"
         self.maximum = 0
-        self.release_console = None
 
     def __call__(self, text):
         lifecycle.check()
         with self.lock:
             self.status(text)
-            if self.console and self.console.poll() is None:
-                try:
-                    self.console.stdin.write(
-                        text.replace("\r", "").replace("\n", " ") + "\n"
-                    )
-                    self.console.stdin.flush()
-                except (OSError, ValueError):
-                    pass
 
     def start(self):
         lifecycle.check()
@@ -187,28 +176,6 @@ class Progress:
             if self.started:
                 return
             self.started = True
-            if sys.platform == "win32":
-                exe = Path(sys.executable).with_name("python.exe")
-                if exe.is_file():
-                    script = (
-                        "import ctypes,sys\n"
-                        "ctypes.windll.kernel32.SetConsoleTitleW('BlockHarbor — подготовка Minecraft и Java')\n"
-                        "ctypes.windll.kernel32.SetConsoleOutputCP(65001)\n"
-                        "output=open('CONOUT$','w',encoding='utf-8',buffering=1)\n"
-                        "for line in sys.stdin: print(line,end='',flush=True,file=output)\n"
-                    )
-                    try:
-                        with lifecycle.guard():
-                            self.console = subprocess.Popen(
-                                [str(exe), "-u", "-c", script],
-                                stdin=subprocess.PIPE,
-                                encoding="utf-8",
-                                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                            )
-                            self.release_console = lifecycle.own_process(self.console)
-                    except OSError:
-                        pass
             self("Подготовка файлов Minecraft и Java…")
 
     def downloaded(self, name, count, maximum):
@@ -231,6 +198,9 @@ class Progress:
             "Download Assets": "Ресурсы игры",
             "Install java runtime": "Установка Java",
             "Installation complete": "Файлы установлены",
+            "Running installer": "Настраиваем загрузчик",
+            "Running fabric installer": "Настраиваем Fabric",
+            "Running quilt installer": "Настраиваем Quilt",
         }
 
         def status(message):
@@ -262,20 +232,9 @@ class Progress:
         return {"setStatus": status, "setMax": maximum, "setProgress": done}
 
     def close(self):
-        if self.console:
-            try:
-                self.console.stdin.close()
-                self.console.wait(timeout=0.5)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                try:
-                    self.console.kill()
-                    self.console.wait(timeout=0.5)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-            finally:
-                if self.release_console:
-                    self.release_console()
-                    self.release_console = None
+        # Keep the lifecycle contract used by game preparation. Progress no
+        # longer owns a separate interpreter/window that needs to be stopped.
+        pass
 
 
 class Download:
@@ -389,16 +348,19 @@ def _replace(module, name, value):
 
 
 class _Processors:
+    def __init__(self, *, check_default=False):
+        self.check_default = check_default
+
     def __getattr__(self, name):
         return getattr(subprocess, name)
 
     def run(self, command, **kwargs):
-        if isinstance(command, (tuple, list)) and Path(
+        if isinstance(command, (tuple, list)) and command and Path(
             str(command[0])
         ).name.lower() in ("java", "java.exe"):
             command = [command[0], "-Djava.net.useSystemProxies=true", *command[1:]]
         kwargs.setdefault("timeout", 900)
-        check = kwargs.pop("check", True)
+        check = kwargs.pop("check", self.check_default)
         try:
             return lifecycle.run(command, check=check, **kwargs)
         except subprocess.TimeoutExpired:
@@ -420,6 +382,7 @@ def environment(progress):
         "_helper",
         "install",
         "runtime",
+        "java_utils",
         "fabric",
         "forge",
         "quilt",
@@ -470,8 +433,12 @@ def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, 
             stack.enter_context(_replace(module, "ThreadPoolExecutor", executor))
         if hasattr(module, "extract_natives_file"):
             stack.enter_context(_replace(module, "extract_natives_file", extraction(module.extract_natives_file)))
-        if module.__name__.endswith(("._forge", "._neoforge", ".forge")):
-            stack.enter_context(_replace(module, "subprocess", _Processors()))
+        if getattr(module, "subprocess", None) is subprocess:
+            # Fabric/Quilt and Java probes also spawn installers. Scope this
+            # adapter to the pinned preparation modules; do not patch the global
+            # subprocess module or game/Prism/Steam launch functions.
+            strict = module.__name__.endswith(("._forge", "._neoforge", ".forge"))
+            stack.enter_context(_replace(module, "subprocess", _Processors(check_default=strict)))
     yield
     lifecycle.check()
 

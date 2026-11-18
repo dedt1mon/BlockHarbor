@@ -17,10 +17,15 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
+from http.client import HTTPException
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 from .lifecycle import CancellationScope, OperationCancelled, bind, check as check_cancelled, current_scope, response as cancellable_response
 from .transfers import _atomic_json, open_https
+from .update_cache import CHECK_TTL, MAX_SERVER_RETRY, SharedUpdateCache, header_values, number, retry_at
 
 REPOSITORY = "dedt1mon/BlockHarbor"
 API = "https://api.github.com/repos/" + REPOSITORY
@@ -40,9 +45,14 @@ def version_key(value):
     return (int(major), int(minor), int(patch), {"alpha": 0, "beta": 1, "rc": 2, None: 3}[channel], int(serial or 0))
 
 
-def _read_json(url, *, hosts={"api.github.com"}, limit=2 * 1024 * 1024):
+def _read_json(url, *, hosts={"api.github.com"}, limit=2 * 1024 * 1024, response_headers=None):
     check_cancelled()
-    with cancellable_response(open_https(url, hosts, headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})) as response:
+    headers = {"Accept": "application/json"}
+    if hosts == {"api.github.com"}:
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    with cancellable_response(open_https(url, hosts, headers=headers)) as response:
+        if response_headers:
+            response_headers(getattr(response, "headers", {}))
         data = response.read(limit + 1)
     check_cancelled()
     if len(data) > limit:
@@ -51,6 +61,45 @@ def _read_json(url, *, hosts={"api.github.com"}, limit=2 * 1024 * 1024):
         return json.loads(data)
     except (ValueError, UnicodeError) as exc:
         raise ValueError("Сервис обновлений вернул нечитаемый ответ.") from exc
+
+
+def _compatibility(value, version):
+    if (
+        not isinstance(value, dict)
+        or type(value.get("format")) is not int or value["format"] != 1
+        or value.get("version") != version
+        or any(type(value.get(field)) is not int for field in ("dataSchema", "minDataSchema", "maxDataSchema"))
+        or not 1 <= value["minDataSchema"] <= value["maxDataSchema"] <= 10000
+        or not 1 <= value["dataSchema"] <= 10000
+        or type(value.get("rollbackSafe")) is not bool
+    ):
+        raise ValueError("Манифест обновления не описывает совместимость данных.")
+    if "installer" in value:
+        installer = value["installer"]
+        if (not isinstance(installer, dict)
+            or installer.get("name") != "BlockHarbor-Setup-" + version + ".exe"
+            or type(installer.get("size")) is not int or not 0 < installer["size"] <= MAX_INSTALLER
+            or not isinstance(installer.get("sha256"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", installer["sha256"])):
+            raise ValueError("Манифест содержит неверное имя, размер или SHA-256 установщика.")
+    return value
+
+
+def _checksum(url, filename):
+    check_cancelled()
+    with cancellable_response(open_https(url, ASSET_HOSTS)) as response:
+        raw = response.read(128 * 1024 + 1)
+    check_cancelled()
+    if len(raw) > 128 * 1024:
+        raise ValueError("Список контрольных сумм слишком большой.")
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise ValueError("Список контрольных сумм имеет неверный формат.") from exc
+    matches = re.findall(r"^([a-fA-F0-9]{64})[ \t]+\*?" + re.escape(filename) + r"\r?$", content, re.M)
+    if len(matches) != 1:
+        raise ValueError("Для установщика не опубликована единственная контрольная сумма SHA-256.")
+    return matches[0].lower()
 
 
 def _asset(release, name, maximum):
@@ -84,15 +133,7 @@ def release_info(release):
     digest = executable.get("digest", "")
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
         sums = _asset(release, "SHA256SUMS.txt", 128 * 1024)
-        check_cancelled()
-        with cancellable_response(open_https(sums["browser_download_url"], ASSET_HOSTS)) as response:
-            raw = response.read(128 * 1024 + 1)
-        if len(raw) > 128 * 1024:
-            raise ValueError("Список контрольных сумм слишком большой.")
-        matches = re.findall(r"^([a-fA-F0-9]{64})[ \t]+\*?" + re.escape(filename) + r"\r?$", raw.decode("utf-8"), re.M)
-        if len(matches) != 1:
-            raise ValueError("Для установщика не опубликована контрольная сумма SHA-256.")
-        digest = "sha256:" + matches[0]
+        digest = "sha256:" + _checksum(sums["browser_download_url"], filename)
     # The only legacy format supported here is the published baseline. New
     # versions must state their data compatibility explicitly in the release.
     if key <= version_key("1.10.0") and key[0] == 1:
@@ -100,16 +141,10 @@ def release_info(release):
     else:
         manifest = _asset(release, "BlockHarbor-update.json", 64 * 1024)
         compatibility = _read_json(manifest["browser_download_url"], hosts=ASSET_HOSTS, limit=64 * 1024)
-    if (
-        not isinstance(compatibility, dict)
-        or compatibility.get("format") != 1
-        or compatibility.get("version") != version
-        or any(type(compatibility.get(field)) is not int for field in ("dataSchema", "minDataSchema", "maxDataSchema"))
-        or not 1 <= compatibility["minDataSchema"] <= compatibility["maxDataSchema"] <= 10000
-        or not 1 <= compatibility["dataSchema"] <= 10000
-        or type(compatibility.get("rollbackSafe")) is not bool
-    ):
-        raise ValueError("Манифест обновления не описывает совместимость данных.")
+    _compatibility(compatibility, version)
+    installer = compatibility.get("installer")
+    if installer and (installer["size"] != executable["size"] or installer["sha256"] != digest.split(":", 1)[1].lower()):
+        raise ValueError("Манифест и файл релиза не совпадают по размеру или SHA-256.")
     compatible = compatibility["minDataSchema"] <= DATA_SCHEMA <= compatibility["maxDataSchema"]
     return {
         "version": version, "tag": tag, "name": str(release.get("name") or tag)[:180],
@@ -121,6 +156,136 @@ def release_info(release):
         "size": executable["size"], "sha256": digest.split(":", 1)[1].lower(),
         "compatibility": compatibility, "compatible": compatible,
     }
+
+
+def _installer_size(url):
+    """Older manifests omit the size. Request at most one installer byte.
+
+    Some intermediaries ignore Range. A 200 response is acceptable only with a
+    bounded exact Content-Length; its body is closed without downloading it.
+    """
+    check_cancelled()
+    with cancellable_response(open_https(url, ASSET_HOSTS, headers={"Range": "bytes=0-0"})) as response:
+        headers = header_values(getattr(response, "headers", {}))
+        status = getattr(response, "status", 200)
+        if headers.get("content-encoding", "identity").lower() != "identity":
+            raise ValueError("GitHub изменил кодировку установщика; размер нельзя проверить.")
+        if status == 206:
+            match = re.fullmatch(r"bytes 0-0/([1-9][0-9]{0,9})", headers.get("content-range", ""))
+            if not match or headers.get("content-length", "1") != "1" or len(response.read(2)) != 1:
+                raise ValueError("GitHub вернул неверный диапазон размера установщика.")
+            size = int(match[1])
+        elif status == 200 and re.fullmatch(r"[1-9][0-9]{0,9}", headers.get("content-length", "")):
+            size = int(headers["content-length"])
+        else:
+            raise ValueError("GitHub не сообщил проверяемый размер установщика.")
+    check_cancelled()
+    if not 0 < size <= MAX_INSTALLER:
+        raise ValueError("Недопустимый размер установщика.")
+    return size
+
+
+class _NotesText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag in {"p", "li", "h1", "h2", "h3", "br", "pre"}:
+            self.parts.append("\n")
+
+
+def _feed_release():
+    check_cancelled()
+    with cancellable_response(open_https(WEB + "/releases.atom", {"github.com"}, headers={"Accept": "application/atom+xml"})) as response:
+        raw = response.read(512 * 1024 + 1)
+    check_cancelled()
+    if len(raw) > 512 * 1024 or b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+        raise ValueError("Публичный список релизов имеет недопустимый формат.")
+    try:
+        feed = ET.fromstring(raw)
+    except (ET.ParseError, ValueError) as exc:
+        raise ValueError("GitHub вернул нечитаемый публичный список релизов.") from exc
+    ns = "{http://www.w3.org/2005/Atom}"
+    entries = feed.findall(ns + "entry")
+    if feed.tag != ns + "feed" or len(entries) > 100:
+        raise ValueError("Публичный список релизов имеет недопустимый формат.")
+    candidates = []
+    prefix = WEB + "/releases/tag/"
+    for entry in entries:
+        links = [item.get("href", "") for item in entry.findall(ns + "link") if item.get("rel", "alternate") == "alternate"]
+        if len(links) != 1 or not links[0].startswith(prefix):
+            continue
+        tag = links[0][len(prefix):]
+        try:
+            key = version_key(tag)
+        except ValueError:
+            continue
+        candidates.append((key, tag, entry))
+    if not candidates:
+        raise ValueError("В тестовом канале пока нет проверяемых публичных релизов.")
+    # As with the API, a broken newest release must not select an older version.
+    _, tag, entry = max(candidates, key=lambda row: row[0])
+    text = _NotesText()
+    text.feed(entry.findtext(ns + "content", ""))
+    return tag, {"name": entry.findtext(ns + "title", tag)[:180],
+                 "published": entry.findtext(ns + "updated", "")[:40],
+                 "notes": "".join(text.parts).strip()[:24000]}
+
+
+def public_release(channel="stable", *, tag=None):
+    """Use only public assets of the configured repository, without REST quota."""
+    details = {}
+    if tag is None and channel == "stable":
+        comp = _read_json(WEB + "/releases/latest/download/BlockHarbor-update.json", hosts=ASSET_HOSTS, limit=64 * 1024)
+        version = comp.get("version") if isinstance(comp, dict) else None
+        if version_key(version)[3] != 3 or version.startswith("v"):
+            raise ValueError("Стабильный канал не может устанавливать тестовую версию.")
+        # Published BlockHarbor releases use v<version>; the following assets
+        # must exist under that exact tag, not an arbitrary URL from the JSON.
+        tag = "v" + version
+    else:
+        if tag is None:
+            tag, details = _feed_release()
+        version_key(tag)
+        version = tag.removeprefix("v")
+        comp = _read_json(WEB + "/releases/download/" + tag + "/BlockHarbor-update.json", hosts=ASSET_HOSTS, limit=64 * 1024)
+    _compatibility(comp, version)
+    filename = "BlockHarbor-Setup-" + version + ".exe"
+    download = WEB + "/releases/download/" + tag + "/" + filename
+    if "installer" in comp:
+        size, digest = comp["installer"]["size"], comp["installer"]["sha256"]
+    else:
+        digest = _checksum(WEB + "/releases/download/" + tag + "/SHA256SUMS.txt", filename)
+        size = _installer_size(download)
+    return {"version": version, "tag": tag, "name": details.get("name") or "BlockHarbor " + version,
+            "notes": details.get("notes") or "Описание изменений опубликовано на странице релиза GitHub.",
+            "published": details.get("published", ""), "prerelease": version_key(version)[3] < 3,
+            "url": WEB + "/releases/tag/" + tag, "download": download, "filename": filename,
+            "size": size, "sha256": digest, "compatibility": comp,
+            "compatible": comp["minDataSchema"] <= DATA_SCHEMA <= comp["maxDataSchema"]}
+
+
+def _friendly_error(error):
+    if isinstance(error, HTTPError):
+        if error.code in {403, 429}:
+            return "GitHub временно ограничил запросы к обновлениям. BlockHarbor повторит проверку после паузы."
+        if error.code == 404:
+            return "Официальные файлы обновления пока недоступны. Проверь обновления немного позже."
+        return "GitHub временно не может выдать файлы обновления. Повторим проверку после паузы."
+    if isinstance(error, (URLError, TimeoutError, ConnectionError, HTTPException)):
+        return "Не удалось соединиться с GitHub. Проверь подключение; повторная проверка будет выполнена позже."
+    text = str(error)[:500]
+    if "rate limit" in text.lower() or "http error 403" in text.lower() or "http error 429" in text.lower():
+        return "GitHub временно ограничил запросы к обновлениям. Проверка продолжится через официальный публичный источник."
+    return text or "Не удалось проверить обновления. Повторим проверку после паузы."
+
+
+class _UsePublicRelease(Exception):
+    """The shared API deadline is active; use the repository's public assets."""
 
 
 def _sha256(path):
@@ -139,7 +304,7 @@ class UpdateService:
     }
     JOBS = {"updateCheck"}
 
-    def __init__(self, store, transfers, current_version="2.3.0", *, can_install=lambda: False, request_shutdown=None,
+    def __init__(self, store, transfers, current_version="2.4.0", *, can_install=lambda: False, request_shutdown=None,
                  namespace="", install_guard=None, handoff_metadata=None, cancel_handoff=None):
         version_key(current_version)
         self.store, self.transfers = store, transfers
@@ -149,6 +314,7 @@ class UpdateService:
         self.handoff_metadata = handoff_metadata
         self.cancel_handoff = cancel_handoff
         self.root = store.root / "updates"
+        self.source_cache = SharedUpdateCache(self.root, REPOSITORY)
         if namespace:
             if not re.fullmatch(r"window-[1-9][0-9]{0,2}", namespace):
                 raise ValueError("Некорректный идентификатор окна обновления.")
@@ -192,6 +358,9 @@ class UpdateService:
         self.release_channel = self._observed_channel
         self.checked = 0
         self.error = ""
+        self.check_status = {"source": "", "message": "", "retryAt": 0, "apiRetryAt": 0, "cached": False, "stale": False}
+        self._check_failed = False
+        self.startup_result = None
         self.receipts = []
         self.pending_downloads = []
         self.pending = None
@@ -421,7 +590,8 @@ class UpdateService:
             if path.is_symlink() or path.stat().st_size > 512 * 1024:
                 return
             data = json.loads(path.read_text(encoding="utf-8"))
-            self.error = str(data.get("error", ""))[:600]
+            previous_error = str(data.get("error", ""))[:600]
+            self.error = _friendly_error(previous_error) if previous_error else ""
             failure = data.get("automaticFailure")
             if isinstance(failure, dict) and isinstance(failure.get("version"), str):
                 version_key(failure["version"])
@@ -462,8 +632,11 @@ class UpdateService:
             # Never loop through failed silent installs every time the app reopens.
             pending = data.get("pending")
             if isinstance(pending, dict):
+                handoff = pending.get("handoff", "")
+                result_id = handoff if isinstance(handoff, str) and re.fullmatch(r"[a-f0-9]{24}", handoff) else "update-" + str(pending.get("version", ""))[:40] + "-" + str(pending.get("stage", ""))[:30]
                 if pending.get("version") == self.current_version:
                     self.error = ""
+                    self.startup_result = {"id": result_id, "ok": True, "message": "BlockHarbor обновлён до версии " + self.current_version + "."}
                     if (self._auto_failure or {}).get("version") == self.current_version:
                         self._auto_failure = None
                 else:
@@ -475,7 +648,8 @@ class UpdateService:
                             result = json.loads(result_path.read_text(encoding="utf-8"))
                             if isinstance(result, dict) and result.get("ok") is False:
                                 message = str(result.get("error") or "Установщик завершился с кодом " + str(result.get("exitCode", "ошибки")))[:600]
-                    self.error = message
+                    self.error = _friendly_error(message)
+                    self.startup_result = {"id": result_id, "ok": False, "message": self.error}
                     if pending.get("automatic") and pending.get("stage") in {"preparing", "launching"}:
                         self._auto_failure = {"version": pending["version"], "message": message}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -514,6 +688,9 @@ class UpdateService:
             raise ValueError("Неизвестная совместимость данных установщика.")
         if not 1 <= comp["minDataSchema"] <= comp["maxDataSchema"] <= 10000 or not 1 <= comp["dataSchema"] <= 10000 or type(comp.get("rollbackSafe")) is not bool:
             raise ValueError("Неизвестная совместимость данных установщика.")
+        _compatibility(comp, version)
+        if "installer" in comp and (comp["installer"]["size"] != receipt["size"] or comp["installer"]["sha256"] != receipt["sha256"]):
+            raise ValueError("Манифест и запись установщика не совпадают.")
         receipt["compatible"] = comp["minDataSchema"] <= DATA_SCHEMA <= comp["maxDataSchema"]
         if require_file:
             path = self.cache / name
@@ -555,6 +732,8 @@ class UpdateService:
                 "autoFailure": dict(self._auto_failure) if self._auto_failure else None,
                 "autoIntervalMinutes": AUTO_CHECK_INTERVAL // 60,
                 "checkedAt": self.checked,
+                "checkStatus": dict(self.check_status),
+                "startupResult": dict(self.startup_result) if self.startup_result else None,
                 "release": release,
                 "available": bool(release and version_key(release["version"]) > version_key(self.current_version)),
                 "ready": bool(ready),
@@ -571,6 +750,125 @@ class UpdateService:
         with bind(current_scope() or self.scope):
             return self._check(status)
 
+    def _api_json(self, cache, url):
+        now = time.time()
+        api = cache["api"]
+        if now < number(api.get("retryAt")) <= now + MAX_SERVER_RETRY:
+            raise _UsePublicRelease()
+
+        def observed(headers):
+            values = header_values(headers)
+            if values.get("x-ratelimit-remaining") == "0":
+                api["retryAt"] = retry_at(values)
+                api["limited"] = True
+            else:
+                api["retryAt"] = 0
+                api["limited"] = False
+            api["failures"] = 0
+            self.source_cache.save(cache)
+
+        try:
+            return _read_json(url, response_headers=observed)
+        except (HTTPError, URLError, TimeoutError, ConnectionError, HTTPException) as exc:
+            self._require_open()
+            if isinstance(exc, HTTPError) and exc.code not in {403, 429} and exc.code < 500:
+                raise
+            failures = min(16, max(0, int(number(api.get("failures")))) + 1)
+            api["failures"] = failures
+            api["retryAt"] = retry_at(getattr(exc, "headers", {}), failures=failures)
+            api["limited"] = isinstance(exc, HTTPError) and exc.code in {403, 429}
+            # Persist the deadline before trying another source, so another
+            # window/restart cannot immediately hit the exhausted API again.
+            self.source_cache.save(cache)
+            if isinstance(exc, HTTPError):
+                exc.close()
+            raise _UsePublicRelease() from exc
+
+    def _cached_info(self, entry, *, channel=None, version=None):
+        info = entry.get("info") if isinstance(entry, dict) else None
+        try:
+            if not isinstance(info, dict):
+                return None
+            info = self._validate_receipt(dict(info), require_file=False)
+            if version is not None and info["version"] != version:
+                return None
+            if channel == "stable" and (info.get("prerelease") or version_key(info["version"])[3] < 3):
+                return None
+            return info
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def _lookup_release(self, cache, channel, status):
+        api = cache["api"]
+        now = time.time()
+        rows = api.get("rows")
+        try:
+            if not isinstance(rows, list) or not 0 <= now - number(api.get("checkedAt")) < CHECK_TTL:
+                rows = self._api_json(cache, API + "/releases?per_page=30")
+                if not isinstance(rows, list):
+                    raise ValueError("GitHub вернул неверный список релизов.")
+                api["rows"], api["checkedAt"] = rows[:30], time.time()
+                self.source_cache.save(cache)
+        except _UsePublicRelease:
+            status("Проверяем обновления через официальные файлы релиза GitHub…")
+            return public_release(channel), "public"
+        candidates = []
+        for release in rows[:30]:
+            if not isinstance(release, dict) or release.get("draft"):
+                continue
+            try:
+                key = version_key(release.get("tag_name"))
+            except ValueError:
+                continue
+            if channel == "stable" and (release.get("prerelease") or key[3] < 3):
+                continue
+            candidates.append((key, release))
+        if not candidates:
+            raise ValueError("В выбранном канале пока нет опубликованных установщиков.")
+        # Invalid data in a successful API response is not a reason to fall back
+        # or choose an older release: integrity errors stay visible.
+        selected = max(candidates, key=lambda row: row[0])[1]
+        return release_info(selected), "api"
+
+    def _apply_check(self, entry, cache, channel, *, cached):
+        info = self._cached_info(entry, channel=channel)
+        error = str(entry.get("error", ""))[:500]
+        source = entry.get("source", "")
+        source = source if source in {"api", "public"} else ""
+        message = error
+        if not message:
+            if source == "public":
+                message = "Проверка выполнена через официальные файлы релиза GitHub."
+            if cached:
+                message = "Используем результат последней проверки. " + message
+        with self.lock:
+            self._require_open()
+            if channel != self.store.get("updateChannel", "stable"):
+                raise OperationCancelled("Канал обновлений изменился. Проверяем выбранный канал заново.")
+            if info:
+                self.release, self.checked, self.release_channel = info, number(entry.get("checkedAt")), channel
+            self.error = _friendly_error(error) if error else ""
+            self._check_failed = bool(error)
+            if error:
+                self._auto_candidate = None
+            self.check_status = {"source": source, "message": message.strip(), "retryAt": number(entry.get("nextAt")),
+                                 "apiRetryAt": number(cache["api"].get("retryAt")), "cached": cached,
+                                 "stale": bool(error and info)}
+            self._save()
+        if error:
+            self._cancel_pending(automatic_only=True)
+            raise ValueError(self.error)
+        if not info:
+            raise ValueError("В кэше обновлений нет проверенных данных релиза.")
+        return info
+
+    def _result_message(self, info):
+        if not info["compatible"]:
+            return "Новая версия требует другой формат данных. Автоматическая установка недоступна."
+        if version_key(info["version"]) > version_key(self.current_version):
+            return "Доступен BlockHarbor " + info["version"] + "."
+        return "У тебя актуальная версия BlockHarbor."
+
     def _check(self, status):
         self._require_open()
         if not self.check_lock.acquire(blocking=False):
@@ -578,47 +876,46 @@ class UpdateService:
         try:
             status("Проверяем опубликованные версии BlockHarbor…")
             channel = self.store.get("updateChannel", "stable")
-            rows = _read_json(API + "/releases?per_page=30")
-            self._require_open()
-            if not isinstance(rows, list):
-                raise ValueError("GitHub вернул неверный список релизов.")
-            stable = channel == "stable"
-            candidates = []
-            for release in rows[:30]:
-                if not isinstance(release, dict) or release.get("draft"):
-                    continue
+            with self.source_cache.lease() as cache:
+                now = time.time()
+                entry = cache["checks"].get(channel, {})
+                info = self._cached_info(entry, channel=channel)
+                if (now < number(entry.get("nextAt")) <= now + MAX_SERVER_RETRY
+                    and (info or entry.get("error"))):
+                    return self._result_message(self._apply_check(entry, cache, channel, cached=True))
                 try:
-                    key = version_key(release.get("tag_name"))
-                except ValueError:
-                    continue
-                if stable and (release.get("prerelease") or key[3] < 3):
-                    continue
-                candidates.append((key, release))
-            if not candidates:
-                raise ValueError("В выбранном канале пока нет опубликованных установщиков.")
-            # Do not silently install an older release if the latest is malformed.
-            selected = max(candidates, key=lambda item: item[0])[1]
-            info = release_info(selected)
-            with self.lock:
-                self._require_open()
-                if channel != self.store.get("updateChannel", "stable"):
-                    raise OperationCancelled("Канал обновлений изменился. Проверяем выбранный канал заново.")
-                self.release, self.checked, self.error = info, time.time(), ""
-                self.release_channel = channel
-                self._save()
-            if not info["compatible"]:
-                return "Новая версия требует другой формат данных. Автоматическая установка недоступна."
-            if version_key(info["version"]) > version_key(self.current_version):
-                return "Доступен BlockHarbor " + info["version"] + "."
-            return "У тебя актуальная версия BlockHarbor."
+                    info, source = self._lookup_release(cache, channel, status)
+                    self._require_open()
+                    self._validate_receipt(info, require_file=False)
+                    now = time.time()
+                    entry = {"info": info, "source": source, "checkedAt": now, "nextAt": now + CHECK_TTL, "error": "", "failures": 0}
+                except OperationCancelled:
+                    raise
+                except Exception as exc:
+                    failures = min(16, max(0, int(number(entry.get("failures")))) + 1)
+                    # Keep the last verified result visible, but do not turn a
+                    # failed check into permission for an automatic install.
+                    prior = info or (dict(self.release) if self.release and self.release_channel == channel else None)
+                    entry = {"info": prior, "source": entry.get("source", ""),
+                             "checkedAt": number(entry.get("checkedAt"), self.checked),
+                             "nextAt": retry_at(getattr(exc, "headers", {}), failures=failures),
+                             "error": _friendly_error(exc), "failures": failures}
+                cache["checks"][channel] = entry
+                self.source_cache.save(cache)
+                return self._result_message(self._apply_check(entry, cache, channel, cached=False))
         except OperationCancelled:
             raise
         except Exception as exc:
             with self.lock:
                 if not self.closed.is_set():
-                    self.error = str(exc)[:500]
+                    self.error = _friendly_error(exc)
+                    self._check_failed = True
+                    self._auto_candidate = None
                     self._save()
-            raise
+            self._cancel_pending(automatic_only=True)
+            if isinstance(exc, ValueError) and str(exc) == self.error:
+                raise
+            raise ValueError(self.error) from exc
         finally:
             self.check_lock.release()
 
@@ -664,6 +961,40 @@ class UpdateService:
                 self.transfers.cancel(task_id)
         return task_id
 
+    def _version_release(self, version):
+        """Rollback metadata uses the same API deadline and cross-window cache."""
+        version_key(version)
+        tag = "v" + version
+        with self.source_cache.lease() as cache:
+            now = time.time()
+            entry = cache["versions"].get(tag, {})
+            info = self._cached_info(entry, version=version)
+            if now < number(entry.get("nextAt")) <= now + MAX_SERVER_RETRY:
+                if info:
+                    return info
+                if entry.get("error"):
+                    raise ValueError(str(entry["error"])[:500])
+            try:
+                try:
+                    release = self._api_json(cache, API + "/releases/tags/" + tag)
+                except _UsePublicRelease:
+                    info = public_release(tag=tag)
+                else:
+                    info = release_info(release)
+                self._validate_receipt(info, require_file=False)
+                if info["version"] != version:
+                    raise ValueError("Релиз для отката содержит другую версию.")
+                entry = {"info": info, "nextAt": time.time() + CHECK_TTL, "error": ""}
+            except OperationCancelled:
+                raise
+            except Exception as exc:
+                entry = {"info": None, "nextAt": retry_at(getattr(exc, "headers", {})), "error": _friendly_error(exc)}
+            cache["versions"][tag] = entry
+            self.source_cache.save(cache)
+            if entry["error"]:
+                raise ValueError(entry["error"])
+            return info
+
     def download(self):
         self._require_open()
         with self.lock:
@@ -681,7 +1012,7 @@ class UpdateService:
                 with bind(self.scope):
                     self._require_open()
                     if not self._ready(self.current_version):
-                        prior = release_info(_read_json(API + "/releases/tags/v" + self.current_version))
+                        prior = self._version_release(self.current_version)
                         self._enqueue(prior, previous=True)
             except Exception:
                 # The running executable is preserved independently at handoff.
@@ -720,7 +1051,7 @@ class UpdateService:
             raise ValueError("Закрой все Minecraft и остальные окна BlockHarbor, затем дождись завершения операций перед установкой.")
         with self.lock:
             self._require_open()
-            if automatic and not self.automatic_enabled():
+            if automatic and (not self.automatic_enabled() or self._check_failed):
                 raise OperationCancelled("Автоматическая установка отменена.")
             if self.pending or self.install_lock.locked() or self._cancelling_handoff:
                 raise ValueError("Установка уже ожидает завершения игры.")
@@ -738,7 +1069,7 @@ class UpdateService:
         with self.lock:
             if (self.closed.is_set() or not self.pending or self.pending["stage"] != "queued"
                 or time.monotonic() < self._next_install_attempt or not self.can_install()
-                or (self.pending.get("automatic") and not self.automatic_enabled())):
+                or (self.pending.get("automatic") and (not self.automatic_enabled() or self._check_failed))):
                 return
             self.pending["stage"] = "preparing"
             self._save()
@@ -949,6 +1280,8 @@ class UpdateService:
                 self.store.set("updateChannel", channel)
                 self.release, self.checked = None, 0
                 self.release_channel = channel
+                self.error = ""
+                self.check_status = {"source": "", "message": "", "retryAt": 0, "apiRetryAt": 0, "cached": False, "stale": False}
                 self._save()
             self._cancel_automatic()
             with self.lock:

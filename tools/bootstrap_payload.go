@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +27,33 @@ type entry struct {
 	Name string
 	Size int64
 	Hash string
+}
+
+// A completion notice is per bootstrap child, not a shared status file. Explicit
+// zero on a warm start prevents a restarted launcher inheriting an old notice.
+func bootstrapEnvironment(inherited []string, executable string, pid int, prepared bool) []string {
+	environment := make([]string, 0, len(inherited)+3)
+	for _, value := range inherited {
+		key, _, _ := strings.Cut(value, "=")
+		if strings.EqualFold(key, "BLOCKHARBOR_LAUNCHER_EXE") || strings.EqualFold(key, "BLOCKHARBOR_BOOTSTRAP_PID") || strings.EqualFold(key, "BLOCKHARBOR_BOOTSTRAP_PREPARED") {
+			continue
+		}
+		environment = append(environment, value)
+	}
+	complete := "0"
+	if prepared {
+		complete = "1"
+	}
+	return append(environment, "BLOCKHARBOR_LAUNCHER_EXE="+executable, "BLOCKHARBOR_BOOTSTRAP_PID="+strconv.Itoa(pid), "BLOCKHARBOR_BOOTSTRAP_PREPARED="+complete)
+}
+
+func provisionLogged(base string, p payload, log io.Writer) (string, bool, error) {
+	prepared := false
+	dir, err := provision(base, p, func(line string) {
+		prepared = true
+		fmt.Fprintln(log, line)
+	})
+	return dir, prepared && err == nil, err
 }
 
 func readPayload(file *os.File) (payload, error) {

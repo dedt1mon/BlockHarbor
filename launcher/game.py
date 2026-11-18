@@ -168,12 +168,18 @@ def _meta_profile(
 
 def _repair_loader_files(cache: Path, installed: str, status: Status) -> None:
     """Loader Maven metadata uses optional checksums that launcher-lib does not read."""
-    from minecraft_launcher_lib.command import get_library_path
+    from minecraft_launcher_lib.command import get_library_path, parse_rule_list
 
     libs_dir = (cache / "libraries").resolve()
     manifest = json.loads(_manifest_path(cache, installed).read_text(encoding="utf-8"))
     for entry in manifest["libraries"]:
         lifecycle.check()
+        # Explicit downloads are handled by the version installer. In particular,
+        # a classifiers-only entry does not declare an ordinary Maven artifact.
+        if "downloads" in entry or (
+            "rules" in entry and not parse_rule_list(entry["rules"], {})
+        ):
+            continue
         path = Path(get_library_path(entry["name"], str(cache))).resolve()
         if not path.is_relative_to(libs_dir):
             raise ValueError("Некорректный путь библиотеки загрузчика.")
@@ -256,9 +262,77 @@ def _legacy_java(cache, status, callbacks):
     return java
 
 
+def _launch_metadata(cache: Path, installed: str) -> dict:
+    """Resolve the same inherited profile that the pinned command builder uses."""
+    from minecraft_launcher_lib.command import inherit_json
+
+    data = json.loads(_manifest_path(cache, installed).read_text(encoding="utf-8"))
+    if "inheritsFrom" in data:
+        data = inherit_json(data, str(cache))
+    return data
+
+
+def _library_files(cache: Path, metadata: dict) -> list[tuple[Path, dict]]:
+    """Declared artifacts and current-platform natives, never invented plain JARs."""
+    from minecraft_launcher_lib.command import get_library_path, parse_rule_list
+    from minecraft_launcher_lib.natives import get_natives
+
+    root = (cache / "libraries").resolve()
+    files = []
+
+    def add(entry: dict, fallback: Path) -> None:
+        path = root / entry["path"] if entry.get("path") else fallback
+        path = path.resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Некорректный путь библиотеки Minecraft.")
+        files.append((path, entry))
+
+    for library in metadata.get("libraries", []):
+        lifecycle.check()
+        if "rules" in library and not parse_rule_list(library["rules"], {}):
+            continue
+        maven = Path(get_library_path(library["name"], str(cache)))
+        if "downloads" not in library:
+            # Fabric/Quilt and older loader profiles can still use Maven coordinates.
+            add(library, maven)
+        else:
+            artifact = library["downloads"].get("artifact")
+            if artifact is not None:
+                add(artifact, maven)
+        native = get_natives(library)
+        if native:
+            entry = (
+                library["downloads"]["classifiers"][native]
+                if "downloads" in library
+                else {}
+            )
+            add(entry, maven.with_name(maven.stem + "-" + native + maven.suffix))
+    return files
+
+
+def _minecraft_command(installed: str, cache: Path, options: dict) -> list[str]:
+    """Correct launcher-lib 8's synthetic classpath without changing global functions."""
+    import minecraft_launcher_lib as mc
+    from minecraft_launcher_lib.command import get_classpath_separator
+
+    data = _launch_metadata(cache, installed)
+    libraries = _library_files(cache, data)
+    command = mc.command.get_minecraft_command(installed, cache, options)
+    original = mc.command.get_libraries(data, str(cache))
+    jar_id = _version_id(data.get("jar", data["id"]))
+    jar = _manifest_path(cache, jar_id).with_suffix(".jar")
+    corrected = get_classpath_separator().join(
+        [str(path) for path, _entry in libraries] + [str(jar)]
+    )
+    # Also covers loader arguments such as -DlegacyClassPath=${classpath}; all
+    # unrelated JVM/module/game arguments and authentication options stay intact.
+    return [argument.replace(original, corrected) for argument in command]
+
+
 def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
     """Check the local launch dependencies. No requests or large file hashes on a repeat Play."""
     import minecraft_launcher_lib as mc
+    from minecraft_launcher_lib.command import get_classpath_separator
 
     metadata = json.loads(_manifest_path(cache, base).read_text(encoding="utf-8"))
     jar = _manifest_path(cache, base).with_suffix(".jar")
@@ -274,32 +348,28 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
         if problem:
             return problem
 
-    # Use the library's own resolved OS-specific classpath, including loader dependencies.
-    args = mc.command.get_minecraft_command(
+    # Use declared downloads for the resolved profile, including inherited loader
+    # libraries and the selected native classifier. Other platforms are optional.
+    libraries = _library_files(cache, _launch_metadata(cache, installed))
+    args = _minecraft_command(
         installed, cache, {"username": "Player", "uuid": "0" * 32, "token": "0"}
     )
-    sizes = {}
-    for lib in metadata.get("libraries", []):
-        downloads = lib.get("downloads", {})
-        for entry in (
-            downloads.get("artifact", {}),
-            *downloads.get("classifiers", {}).values(),
-        ):
-            if "path" in entry and "size" in entry:
-                sizes[cache / "libraries" / entry["path"]] = entry["size"]
+    sizes = {path: entry["size"] for path, entry in libraries if "size" in entry}
+    required = [path for path, _entry in libraries]
     for flag in ("-cp", "-classpath", "--class-path", "-p", "--module-path"):
         if flag not in args:
             continue
-        for library in args[args.index(flag) + 1].split(os.pathsep):
+        for library in args[args.index(flag) + 1].split(get_classpath_separator()):
             if not library:
                 continue
-            path = Path(library)
-            try:
-                size = path.stat().st_size
-            except FileNotFoundError:
-                return path.name
-            if not size or size != sizes.get(path, size):
-                return path.name
+            required.append(Path(library).resolve())
+    for path in dict.fromkeys(required):
+        lifecycle.check()
+        if not path.is_file():
+            return path.name
+        size = path.stat().st_size
+        if not size or size != sizes.get(path, size):
+            return path.name
     if metadata.get("logging", {}).get("client"):
         log_id = metadata["logging"]["client"]["file"]["id"]
         if not (cache / "assets" / "log_configs" / log_id).is_file():
@@ -897,12 +967,12 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.4.8",
+        "launcherVersion": "2.4.9",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]
     try:
-        command = mc.command.get_minecraft_command(installed, cache, options)
+        command = _minecraft_command(installed, cache, options)
     except BaseException:
         shutil.rmtree(natives, ignore_errors=True)
         raise

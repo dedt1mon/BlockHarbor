@@ -237,7 +237,6 @@ async function api(path, opt = {}) {
       "/api/preview",
       "/api/skin-preview",
       "/api/skin.png",
-      "/api/card",
     ].includes(path.split("?")[0]) &&
     r.ok
   )
@@ -792,13 +791,7 @@ function profile() {
     (state.skin
       ? '<div><button type="button" class="linkbtn" data-act="officialSkin">Установить скин в Java-профиле</button></div>'
       : "") +
-    "</div></div>" +
-    (hasBuild
-      ? '<details class="panel"><summary>Карточки друзей</summary><p>Карточкой можно вручную передать другу скин и псевдоним для Fabric 1.20.1.</p><div class="actions">' +
-        btn("exportCard", "Сохранить мою карточку", "user") +
-        btn("importCard", "Импортировать карточку друга", "upload") +
-        "</div></details>"
-      : "")
+    "</div></div>"
   );
 }
 function generalSettings() {
@@ -889,11 +882,9 @@ function render() {
     gallery: () => window.ExperienceUI?.gallery() || "",
   }[view]();
   if (view === "profile" && window.ExperienceUI) $("#view").insertAdjacentHTML("beforeend", ExperienceUI.wardrobe());
-  if (view === "friends" && window.SharedBuildsUI) $("#view").insertAdjacentHTML("beforeend", SharedBuildsUI.panel(active()));
   window.ExperienceUI?.mount();
   window.BuildCareUI?.mount();
   window.PackHubUI?.mount();
-  window.SharedBuildsUI?.mount();
   window.UpdatesUI?.mount();
   if (archiveOpen && $(".deleted-builds")) $(".deleted-builds").open = true;
   updatePlayButtons();
@@ -1153,7 +1144,7 @@ async function downloadPlayerFile(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 async function dispatch(action) {
-  for (const extension of [window.ExperienceUI, window.BuildCareUI, window.PackHubUI, window.SharedBuildsUI, window.UpdatesUI]) {
+  for (const extension of [window.ExperienceUI, window.BuildCareUI, window.PackHubUI, window.UpdatesUI]) {
     if (extension?.dispatch && await extension.dispatch(action)) return;
   }
   switch (action) {
@@ -1307,31 +1298,6 @@ async function dispatch(action) {
         "/api/skin.png",
         (state.nickname || "BlockHarbor") + ".png",
       );
-    case "exportCard": {
-      const real = localMode()
-        ? state.nickname || "Player"
-        : state.account || state.realName;
-      if (!real) throw Error("Введи настоящее имя Java-профиля.");
-      await downloadPlayerFile("/api/card", real + ".bhplayer");
-      return notice(
-        "Карточка готова. Отправь файл другу и попроси его импортировать карточку в свою сборку.",
-      );
-    }
-    case "importCard":
-      if (active().version !== "1.20.1" || active().loader !== "fabric")
-        throw Error("Выбери сборку Fabric 1.20.1 для импорта карточки.");
-      return confirmBox(
-        "Импортировать карточку друга?",
-        "Будут добавлены ник, скин (если он есть) и необходимые моды из Modrinth в сборку «" +
-          esc(active().name) +
-          "».",
-        "Выбрать файл",
-        "chooseCard",
-      );
-    case "chooseCard":
-      closeDialog();
-      $("#cardPick").click();
-      return;
     case "pickSkin":
       $("#skinPick").click();
       return;
@@ -1777,20 +1743,6 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", () => {
   if (state && !document.hidden) tick(true);
-});
-
-$("#cardPick").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  e.target.value = "";
-  if (!file) return;
-  try {
-    const j = await putFile(file, "card", state.active);
-    lastJob = j.job;
-    notice("Импортируем карточку друга…", false, true);
-    await tick();
-  } catch (err) {
-    notice(err.message, true);
-  }
 });
 
 window.addEventListener("load", () => { if (state) render(); });

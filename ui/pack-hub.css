@@ -31,27 +31,11 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .pack-card-footer .btn { font-size: 12px; padding: 9px 10px; }
 .pack-card-footer .meta { font-size: 11px; }
 .pack-pager { display: flex; justify-content: center; gap: 20px; align-items: center; padding-top: 20px; }
-.pack-release label,.pack-preview > label,.share-result label,.share-compare label { display: grid; gap: 8px; margin: 18px 0; }
+.pack-release label,.pack-preview > label { display: grid; gap: 8px; margin: 18px 0; }
 .pack-preview .tags { margin: 16px 0; }
 .pack-optional { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
 .pack-optional label { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .pack-optional label:last-child { border: 0; }
 .pack-optional span { flex: 1; overflow-wrap: anywhere; }
 .pack-optional small { color: var(--muted); white-space: nowrap; }
-.share-panel { margin-top: 18px; }
-.share-panel .line h3 { margin: 0; }
-.share-status-details { margin-top: 18px; color: var(--muted); font-size: 13px; }
-.share-status-details summary { cursor: pointer; }
-.share-status-details .btn { margin-top: 3px; }
-.share-room-state { line-height: 1.65; }
-.share-code { display: block; width: 100%; min-height: 135px; max-height: 300px; resize: vertical; word-break: break-all; font: 12px/1.6 Consolas,monospace; }
-.share-address { font: 13px/1.6 Consolas,monospace; color: var(--lime); overflow-wrap: anywhere; }
-.share-files { list-style: none; margin: 0 0 18px; padding: 0; max-height: 200px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-.share-files li { padding: 9px 12px; display: grid; gap: 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.share-files li:last-child { border: 0; }
-.share-files span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.share-warning { padding: 15px; border: 1px solid #92754b; border-radius: 10px; background: #e5b7690c; }
-.share-warning p { font-size: 13px; }
-.share-success { color: var(--lime); padding: 12px 0; }
-.share-review .dialog-actions { flex-wrap: wrap; }
 @media(max-width:760px) { .pack-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } .pack-grid { grid-template-columns: 1fr; } .pack-intro { align-items: flex-start; flex-direction: column; gap: 9px; } }

@@ -5,7 +5,7 @@
 (() => {
   const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const choices = new Map();
-  let searchGeneration = 0, selectedProject = null, prepared = null, shared = null, comparison = null;
+  let searchGeneration = 0, selectedProject = null, prepared = null;
   let searchController = null, releaseController = null, catalogScroll = 0, returnFocus = null, catalogOpen = false;
   const feature = (action, params = {}, options = {}) => api("/api/feature?" + new URLSearchParams({action, ...params}), options);
   const button = (attr, label, icon = "", cls = "") => `<button type="button" class="btn ${cls}" ${attr}>${icon ? ic(icon) : ""}${label}</button>`;
@@ -222,52 +222,6 @@
     notice("Модпак готов к скачиванию.");
   }
 
-  function friendsPanel(profile) {
-    if (!profile) return `<section class="panel share-panel"><div class="line">${ic("layers")}<h3>Сборка друга</h3></div><p>Открой описание .bhshare или вставь код приглашения. BlockHarbor покажет состав и подготовит новую сборку.</p>${button("data-share-import", "Подготовить сборку друга", "download", "main")}</section>`;
-    return `<section class="panel share-panel"><div class="line">${ic("layers")}<h3>Одинаковая сборка для друзей</h3></div><p>Обменяйтесь описанием сборки. BlockHarbor покажет недостающие моды, разные версии и личные клиентские дополнения.</p><div class="actions">${button("data-share-create", "Поделиться составом", "upload")}${button("data-share-import", "Сравнить со сборкой друга", "search", "main")}${button("data-share-invite", "Приглашение в мир", "users")}</div><p class="note">Код содержит состав сборки и, если добавлен, адрес текущего мира. Передай его другу любым удобным способом.</p><details class="share-status-details"><summary>Последний сигнал e4steam</summary><p class="share-room-state">Нажми «Обновить», чтобы прочитать текущий журнал.</p>${button("data-share-status", "Обновить", "refresh")}</details></section>`;
-  }
-
-  function showShareResult(data) {
-    shared = data;
-    modal(data.descriptor.invite ? "Приглашение в мир" : "Поделиться составом сборки", `<section class="share-result"><h3>${esc(data.descriptor.name)}</h3><p>Minecraft ${esc(data.descriptor.minecraft)} · ${esc(loaders[data.descriptor.loader])} · ${data.descriptor.files.length} дополнений</p>${data.descriptor.invite ? `<p class="share-address">${esc(data.descriptor.invite.address)}</p><p class="note">Приглашение действует только пока хозяин держит этот сеанс открытым. Право входа проверяет Steam.</p>` : ""}<label>Код для друга<textarea class="field share-code" readonly spellcheck="false">${esc(data.code)}</textarea></label><div class="actions">${button("data-share-copy", "Скопировать код", "copy", "main")}${button("data-share-save", "Скачать .bhshare", "download")}</div>${data.manual ? `<p class="note">Для ${data.manual} обязательных файлов нет источника загрузки. Друг увидит их в списке для ручного добавления; можно также передать обычный ZIP сборки.</p>` : ""}</section>`);
-  }
-
-  function compareBox() {
-    modal("Сравнить сборки", `<section class="share-compare"><p>Сравним описание с «${esc(active()?.name || "Новая сборка")}». До подтверждения файлы останутся на месте.</p><label>Код или JSON описания<textarea class="field share-code" data-share-input placeholder="bhshare:…" spellcheck="false"></textarea></label><div class="actions">${button("data-share-load", "Открыть .bhshare", "folder")}${button("data-share-compare", "Сравнить", "search", "main")}</div></section>`);
-  }
-
-  function shareRows(rows, label) {
-    if (!rows.length) return "";
-    return `<h4>${label} · ${rows.length}</h4><ul class="share-files">${rows.map(row => `<li><strong>${esc(row.title || row.path)}</strong><span>${esc(row.number || row.path)}</span></li>`).join("")}</ul>`;
-  }
-
-  function comparisonView(data) {
-    comparison = data;
-    modal("Сравнение со сборкой «" + data.name + "»", `<section class="share-review"><div class="tags"><span class="pill">Minecraft ${esc(data.minecraft)}</span><span class="pill">${esc(loaders[data.loader])}</span><span class="pill">${data.matching} совпадают</span></div>
-      ${shareRows(data.missing, "Нужно добавить")}${data.different.length ? `<h4>Разные версии · ${data.different.length}</h4><ul class="share-files">${data.different.map(row => `<li><strong>${esc(row.wanted.title)}</strong><span>${esc(row.current.number || row.current.path)} → ${esc(row.wanted.number || row.wanted.path)}</span></li>`).join("")}</ul>` : ""}
-      ${shareRows(data.optional, "Личные компоненты друга — можно не устанавливать")}${shareRows(data.extra, "Твои дополнения — сохранятся")}
-      ${data.warnings.map(text => `<p class="note">${esc(text)}</p>`).join("")}
-      ${data.manual.length ? `<div class="share-warning"><strong>Нужны файлы от друга</strong><p>У этих дополнений нет проверяемого источника. Добавь их вручную или загрузи ZIP сборки, затем повтори сравнение.</p>${shareRows(data.manual, "Файлы")}</div>` : ""}
-      ${data.ready ? '<p class="share-success">Обязательные файлы совпадают.</p>' : `<p>Будет загружено ${fmt(data.downloadBytes)}. Миры и сохранения исходной сборки останутся на месте.</p>`}
-      <div class="dialog-actions">${data.canApply ? button("data-share-apply=\"clone\"", "Подготовить отдельную сборку", "copy", "main") : ""}${data.canApply && data.sameBase && !data.ready ? button("data-share-apply=\"existing\"", "Применить к текущей", "refresh") : ""}${data.invite && data.ready ? button("data-share-add-server", "Добавить мир в Minecraft", "users", "main") : ""}</div>
-      ${data.invite ? `<p class="note">Адрес мира: <span class="share-address">${esc(data.invite.address)}</span>. После синхронизации повтори сравнение и добавь мир в список серверов.</p>` : ""}
-      </section>`);
-  }
-
-  async function loadShareFile() {
-    const picker = document.createElement("input");
-    picker.type = "file";
-    picker.accept = ".bhshare,application/json";
-    picker.addEventListener("change", async () => {
-      const file = picker.files[0];
-      if (!file) return;
-      if (file.size > 4 * 1024 ** 2) return notice("Описание сборки превышает 4 МБ.", true);
-      const input = document.querySelector("[data-share-input]");
-      if (input) input.value = await file.text();
-    }, {once: true});
-    picker.click();
-  }
-
   document.addEventListener("submit", event => {
     if (!event.target.matches("[data-pack-search]")) return;
     event.preventDefault();
@@ -288,7 +242,7 @@
     const target = event.target.closest("button");
     if (!target || target.disabled) return;
     const d = target.dataset;
-    if (!Object.keys(d).some(key => key.startsWith("pack") || key.startsWith("share"))) return;
+    if (!Object.keys(d).some(key => key.startsWith("pack"))) return;
     try {
       if (d.packBack === "catalog") return openCatalog({focusProject: selectedProject});
       if (d.packBack === "releases") return await showReleases(selectedProject);
@@ -317,58 +271,6 @@
         prepared = null;
         closeDialog();
         return;
-      }
-      if ("shareCreate" in d || "shareMakeInvite" in d) {
-        target.disabled = true;
-        const invitation = "shareMakeInvite" in d;
-        const p = {id: active().id};
-        if (invitation) {p.address = document.querySelector("[data-share-address]").value; p.label = active().name;}
-        notice("Сверяем точные версии дополнений…", false, true);
-        const data = await act(invitation ? "shareInvite" : "shareCreate", p);
-        notice("");
-        showShareResult(data);
-        return;
-      }
-      if ("shareInvite" in d) {
-        return modal("Приглашение в текущий мир", `<p>Открой одиночный мир для друзей Steam и скопируй зелёный адрес из чата Minecraft. В приглашение войдут адрес и точный состав выбранной сборки.</p><label>Адрес e4steam<input class="field" data-share-address placeholder="s-…-….steam" maxlength="150" spellcheck="false"></label><p class="note">После закрытия и повторного открытия мира нужен новый адрес. Доступ «Только по приглашению» также требует приглашения через Steam.</p><div class="dialog-actions">${button("data-share-make-invite", "Создать приглашение", "users", "main")}</div>`);
-      }
-      if ("shareImport" in d) return compareBox();
-      if ("shareLoad" in d) return await loadShareFile();
-      if ("shareCompare" in d) {
-        target.disabled = true;
-        comparisonView(await act("shareCompare", {id: active()?.id || "", descriptor: document.querySelector("[data-share-input]").value}));
-        return;
-      }
-      if (d.shareApply) {
-        target.disabled = true;
-        await runJob("shareApply", {id: active()?.id || "", token: comparison.token, mode: d.shareApply});
-        closeDialog();
-        return;
-      }
-      if ("shareAddServer" in d) {
-        const data = await act("shareAddServer", {id: active().id, address: comparison.invite.address, label: comparison.invite.label});
-        notice(data.message);
-        return;
-      }
-      if ("shareCopy" in d) {
-        try {await navigator.clipboard.writeText(shared.code); notice("Код скопирован.");}
-        catch {document.querySelector(".share-code").select(); notice("Код выделен. Нажми Ctrl+C.");}
-        return;
-      }
-      if ("shareSave" in d) {
-        const blob = new Blob([JSON.stringify(shared.descriptor, null, 2)], {type: "application/json"});
-        const url = URL.createObjectURL(blob), link = document.createElement("a");
-        link.href = url;
-        link.download = shared.name;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-        return;
-      }
-      if ("shareStatus" in d) {
-        target.disabled = true;
-        const data = await feature("shareRoomState", {id: active().id});
-        const players = data.liveParticipants !== null ? ` Удалённых участников: ${data.peerCount}. ${data.liveParticipants.length ? data.liveParticipants.join(", ") + "." : ""}` : "";
-        document.querySelector(".share-room-state").textContent = `${data.gameRunning ? "Minecraft запущен. " : "Minecraft сейчас закрыт. "}${data.message}${players} ${data.note}`;
       }
     } catch (error) {notice(error.message, true);}
     finally {if (target.isConnected) target.disabled = false;}
@@ -403,8 +305,5 @@
       return false;
     },
   };
-  window.SharedBuildsUI = {panel: friendsPanel, mount() {}, async dispatch(action) {
-    if (action === "shareCompare") {compareBox(); return true;}
-    return false;
-  }};
+
 })();

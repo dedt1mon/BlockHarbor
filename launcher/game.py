@@ -897,7 +897,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.4.0",
+        "launcherVersion": "2.4.1",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]

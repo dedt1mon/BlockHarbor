@@ -59,7 +59,7 @@ def _engine(root: Path, status: Status) -> Path:
         digest = hashlib.sha256()
         size = 0
         status("Загружаем Prism с GitHub · 43,7 МБ")
-        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.2.0"})
+        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.3.0"})
         try:
             with lifecycle.response(urlopen(request, timeout=25)) as source, archive.open("wb") as dest:
                 while block := source.read(512 * 1024):

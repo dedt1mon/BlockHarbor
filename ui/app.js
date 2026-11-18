@@ -510,9 +510,10 @@ function addons() {
     resourcepacks: "Добавленные наборы включаются в Minecraft: «Настройки → Наборы ресурсов».",
   };
   return head(p.name, playControls(), esc(p.description || "")) +
-    '<div class="tags">' + selectInfo(p) + btn("folder", "Папка сборки", "folder") +
-    (window.PackHubUI?.exportButton(p) || "") + "</div>" +
-    (window.BuildCareUI?.toolbar(p) || "") + (window.ExperienceUI?.toolbar(p) || "") +
+    '<div class="build-settings-bar"><div class="tags build-settings-info">' + selectInfo(p) +
+    '</div><div class="build-settings-actions" role="group" aria-label="Действия сборки">' +
+    btn("folder", "Папка сборки", "folder") + (window.PackHubUI?.exportButton(p) || "") +
+    (window.ExperienceUI?.buildActions() || "") + "</div></div>" +
     '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button></div>' +
     (kind === "worlds"
       ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')

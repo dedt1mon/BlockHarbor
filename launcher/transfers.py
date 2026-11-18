@@ -74,7 +74,7 @@ def open_https(url, hosts, *, headers=None, timeout=15):
     request = Request(
         url,
         headers={
-            "User-Agent": "BlockHarbor/2.2.0 (desktop launcher; dedt1mon/BlockHarbor)",
+            "User-Agent": "BlockHarbor/2.3.0 (desktop launcher; dedt1mon/BlockHarbor)",
             "Accept-Encoding": "identity",
             **(headers or {}),
         },

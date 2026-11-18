@@ -32,8 +32,8 @@
     }
     if ($("#buildFilterEmpty")) $("#buildFilterEmpty").hidden = count > 0 || !state.profiles.length;
   }
-  function toolbar(p) {
-    return `<div class="experience-toolbar">${expButton("editBuild","Оформление","image")}${expButton("performance","Производительность","monitor")}${expButton("diagnostics","Диагностика","search")}${expButton("shortcut","Ярлык","link")}</div>`;
+  function buildActions() {
+    return expButton("editBuild", "Оформление", "image");
   }
   function settingsPanel() {
     const p = state.experience?.preferences || {};
@@ -213,5 +213,5 @@
   document.addEventListener("dragover",e=>{if(view==="addons"&&e.dataTransfer?.types.includes("Files")){e.preventDefault();if($("#filePick"))$("#view").classList.add("drop-ready");}});
   document.addEventListener("dragleave",e=>{if(!e.relatedTarget)$("#view").classList.remove("drop-ready");});
   document.addEventListener("drop",e=>{if(view!=="addons"||!e.dataTransfer?.files.length)return;e.preventDefault();$("#view").classList.remove("drop-ready");const input=$("#filePick");if(!input)return notice("Открой вкладку модов, шейдеров или ресурс-паков для добавления файлов.",true);input.files=e.dataTransfer.files;input.dispatchEvent(new Event("change"));});
-  window.ExperienceUI = {toolbar,settingsPanel,wardrobe,gallery,filterBar,preferences,media,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();filterRows();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
+  window.ExperienceUI = {buildActions,settingsPanel,wardrobe,gallery,filterBar,preferences,media,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();filterRows();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
 })();

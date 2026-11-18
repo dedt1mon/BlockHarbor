@@ -40,6 +40,11 @@ Var SetupMutex
 Var PendingFile
 Var Elevated
 Var AutoUpdate
+Var RemoveData
+Var RemoveAppRadio
+Var RemoveDataRadio
+Var RegisteredUninstall
+Var UninstallSummary
 
 !define MUI_ICON "${ICON_FILE}"
 !define MUI_UNICON "${ICON_FILE}"
@@ -59,6 +64,8 @@ Page custom ShortcutPage ShortcutLeave
 !insertmacro MUI_PAGE_INSTFILES
 Page custom PinHelpPage
 !insertmacro MUI_PAGE_FINISH
+UninstPage custom un.RemoveDataPage un.RemoveDataLeave
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "$UninstallSummary"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Russian"
@@ -327,10 +334,141 @@ Function un.onInit
     SetShellVarContext current
     SetRegView 64
     Call un.AcquireSetupLock
+    ; There is deliberately no command-line switch for deleting personal data.
+    ; Silent removal (including any upgrade tooling) always preserves it.
+    StrCpy $RemoveData 0
+    Call un.UpdateUninstallSummary
+FunctionEnd
+
+Function un.CheckRegisteredInstall
+    ; The helper repeats this check against canonical directory handles. This
+    ; early check also keeps a copied/old uninstaller from offering full cleanup.
+    StrCpy $RegisteredUninstall 0
+    ClearErrors
+    ReadRegStr $0 HKCU "${APP_REG}" "InstallLocation"
+    ${If} ${Errors}
+    ${OrIf} $0 == ""
+        Return
+    ${EndIf}
+    ReadRegStr $1 HKCU "${UNINSTALL_REG}" "InstallLocation"
+    ${If} ${Errors}
+    ${OrIf} $1 == ""
+        Return
+    ${EndIf}
+    GetFullPathName $2 "$INSTDIR"
+    GetFullPathName $0 "$0"
+    GetFullPathName $1 "$1"
+    ${If} ${Errors}
+        Return
+    ${EndIf}
+    StrCmp $0 $2 0 not_registered
+    StrCmp $1 $2 0 not_registered
+    StrCpy $RegisteredUninstall 1
+    not_registered:
+FunctionEnd
+
+Function un.UpdateUninstallSummary
+    ${If} $RemoveData == 1
+        StrCpy $UninstallSummary "Будут удалены приложение BlockHarbor и ВСЕ локальные данные из %LOCALAPPDATA%\BlockHarbor.$\r$\n$\r$\nСборки, миры, резервные копии, скриншоты, скины, настройки, кэши, компоненты и локальные данные входа Prism. Восстановить удалённые данные будет нельзя.$\r$\n$\r$\nНажми «Удалить», чтобы продолжить."
+    ${Else}
+        StrCpy $UninstallSummary "Будут удалены приложение BlockHarbor и его ярлыки.$\r$\n$\r$\nСборки, миры, резервные копии, скриншоты, скины, настройки и загруженные компоненты останутся в %LOCALAPPDATA%\BlockHarbor.$\r$\n$\r$\nНажми «Удалить», чтобы продолжить."
+    ${EndIf}
+FunctionEnd
+
+Function un.RemoveDataPage
+    IfSilent 0 show_options
+    StrCpy $RemoveData 0
+    Abort
+    show_options:
+    !insertmacro MUI_HEADER_TEXT "Удаление BlockHarbor" "Выбери, что удалить. По умолчанию данные сохраняются."
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+        StrCpy $RemoveData 0
+        Call un.UpdateUninstallSummary
+        Abort
+    ${EndIf}
+    ${NSD_CreateFirstRadioButton} 0 0 100% 18u "Удалить только приложение"
+    Pop $RemoveAppRadio
+    ${NSD_CreateLabel} 12u 21u 94% 24u "Сборки, миры, настройки и загруженные компоненты останутся на компьютере."
+    Pop $0
+    ${NSD_CreateAdditionalRadioButton} 0 48u 100% 18u "Удалить приложение и все локальные данные"
+    Pop $RemoveDataRadio
+    ${NSD_CreateLabel} 12u 69u 94% 36u "Безвозвратно: сборки, миры, резервные копии, скриншоты, скины, настройки, кэши, компоненты и локальные данные входа Prism."
+    Pop $0
+    Call un.CheckRegisteredInstall
+    ${If} $RegisteredUninstall == 1
+        ${NSD_CreateLabel} 0 112u 100% 28u "Папка данных: %LOCALAPPDATA%\BlockHarbor.$\r$\nУчётные записи Microsoft и Steam сохранятся."
+        Pop $0
+    ${Else}
+        StrCpy $RemoveData 0
+        EnableWindow $RemoveDataRadio 0
+        ${NSD_CreateLabel} 0 112u 100% 28u "Полная очистка недоступна: эта папка не совпадает с зарегистрированной установкой BlockHarbor."
+        Pop $0
+    ${EndIf}
+    ${If} $RemoveData == 1
+        ${NSD_Check} $RemoveDataRadio
+    ${Else}
+        ${NSD_Check} $RemoveAppRadio
+    ${EndIf}
+    nsDialogs::Show
+FunctionEnd
+
+Function un.RemoveDataLeave
+    ${NSD_GetState} $RemoveDataRadio $RemoveData
+    Call un.UpdateUninstallSummary
+FunctionEnd
+
+Function un.RemoveLocalData
+    ; Validate again immediately before extraction/launch, not just on the page.
+    Call un.CheckRegisteredInstall
+    ${If} $RegisteredUninstall != 1
+        MessageBox MB_OK|MB_ICONSTOP "Удаление остановлено: папка приложения не совпадает с текущей зарегистрированной установкой. Запусти удаление BlockHarbor через «Параметры → Приложения» Windows." /SD IDOK
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
+    ClearErrors
+    InitPluginsDir
+    SetOutPath "$PLUGINSDIR"
+    ${If} ${Errors}
+    ${OrIf} $PLUGINSDIR == ""
+        MessageBox MB_OK|MB_ICONSTOP "Не удалось подготовить временную папку для очистки данных. Удаление остановлено. Проверь свободное место и доступ к временной папке Windows." /SD IDOK
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
+    ; This executable and the uninstaller run outside the data being removed.
+    ; INSTDIR itself may be inside the data root, so do not use it as the cwd.
+    ClearErrors
+    File /oname=BlockHarborDataCleanup.exe "${CLEANUP_EXE}"
+    ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Не удалось извлечь компонент очистки данных. Удаление остановлено. Проверь свободное место и повтори попытку." /SD IDOK
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
+    ClearErrors
+    ExecWait '"$PLUGINSDIR\BlockHarborDataCleanup.exe" --remove-data --install-dir "$INSTDIR"' $0
+    ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Не удалось запустить компонент очистки данных. Удаление остановлено; ярлыки и регистрация приложения сохранены." /SD IDOK
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
+    ${If} $0 != 0
+        ; The helper has already displayed the specific error. Do not report a
+        ; successful uninstall or unregister an installation after partial work.
+        MessageBox MB_OK|MB_ICONSTOP "Очистка данных не завершена. Удаление остановлено; ярлыки и регистрация приложения сохранены. Устрани причину из предыдущего сообщения и повтори попытку." /SD IDOK
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
 FunctionEnd
 
 Section "Uninstall"
+    IfSilent 0 preserve_selection
+    StrCpy $RemoveData 0
+    preserve_selection:
     Call un.RequireClosed
+    ${If} $RemoveData == 1
+        Call un.RemoveLocalData
+    ${EndIf}
     IfFileExists "$INSTDIR\BlockHarbor.exe" 0 app_removed
     ClearErrors
     Delete "$INSTDIR\BlockHarbor.exe"
@@ -353,7 +491,8 @@ Section "Uninstall"
         DeleteRegKey HKCU "${APP_REG}"
     ${EndIf}
     Delete "$INSTDIR\Uninstall.exe"
-    ; Only an empty program folder is removed. User data has a separate root.
+    ; The helper may already have removed this folder if it was inside the data
+    ; root. For application-only removal, never recurse into unrelated files.
     RMDir "$INSTDIR"
     SetErrorLevel 0
 SectionEnd

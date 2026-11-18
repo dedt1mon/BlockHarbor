@@ -25,12 +25,6 @@ window.BuildCareUI = (() => {
     pending.set(pid, request);
     return request;
   }
-  function toolbar(profile) {
-    return `<div class="care-toolbar" data-care-pid="${text(profile.id)}">
-      ${actionButton("history", "Восстановление", "refresh")}
-      ${actionButton("clone", "Сделать копию", "copy")}
-    </div>`;
-  }
   function rowMarkup(row, pid, category) {
     const key = idFor(pid, category), selectedNames = chosen(pid, category);
     const query = (queries.get(key) || "").toLocaleLowerCase("ru-RU");
@@ -252,5 +246,5 @@ window.BuildCareUI = (() => {
     const data = {id: pid, name: form.elements.name.value.trim(), worlds: form.elements.worlds.checked};
     try { closeDialog(); await waitJob("careClone", data); } catch(error) { notice(error.message, true); }
   });
-  return {toolbar, content, mount, worlds, invalidate(pid) { cache.delete(pid); }, dispatch: async () => false};
+  return {content, mount, worlds, invalidate(pid) { cache.delete(pid); }, dispatch: async () => false};
 })();

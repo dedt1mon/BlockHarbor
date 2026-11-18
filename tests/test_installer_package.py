@@ -4,10 +4,12 @@ import hashlib
 import importlib.util
 import io
 import struct
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 MODULE = Path(__file__).resolve().parents[1] / "tools/build_installer.py"
 SPEC = importlib.util.spec_from_file_location("blockharbor_installer_build", MODULE)
@@ -16,6 +18,14 @@ SPEC.loader.exec_module(builder)
 
 
 class InstallerPackageTests(unittest.TestCase):
+    @staticmethod
+    def native_binary(architecture=b"\x64\x86"):
+        binary = bytearray(256)
+        binary[:2] = b"MZ"
+        struct.pack_into("<I", binary, 0x3C, 0x80)
+        binary[0x80:0x86] = b"PE\0\0" + architecture
+        return bytes(binary)
+
     def package(self):
         binary = bytearray(256)
         binary[:2] = b"MZ"
@@ -72,3 +82,58 @@ class InstallerPackageTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "single-line"):
             builder.nsis_literal("invalid\npath")
+
+    def test_cleanup_is_standalone_windows_gui_with_local_toolchain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "BlockHarborDataCleanup.exe"
+            calls = []
+
+            def compile_helper(command, **kwargs):
+                calls.append((command, kwargs))
+                output.write_bytes(self.native_binary())
+
+            with mock.patch.object(builder.subprocess, "run", side_effect=compile_helper):
+                builder.build_cleanup("/tools/go", output)
+            command, kwargs = calls[0]
+            self.assertEqual(command[:2], ["/tools/go", "build"])
+            self.assertIn("-ldflags=-H=windowsgui -s -w -buildid=", command)
+            self.assertEqual(kwargs["cwd"], builder.TOOLS / "data_cleanup")
+            self.assertEqual(
+                {key: kwargs["env"][key] for key in ("GOOS", "GOARCH", "CGO_ENABLED", "GOTOOLCHAIN", "GOWORK", "GOFLAGS")},
+                dict(GOOS="windows", GOARCH="amd64", CGO_ENABLED="0", GOTOOLCHAIN="local", GOWORK="off", GOFLAGS=""),
+            )
+            self.assertTrue(kwargs["check"])
+
+    def test_cleanup_rejects_wrong_or_missing_executable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "helper.exe"
+            for binary in (b"not an executable", self.native_binary(b"\x4c\x01")):
+                with mock.patch.object(builder.subprocess, "run", side_effect=lambda *a, **k: output.write_bytes(binary)):
+                    with self.assertRaisesRegex(ValueError, "Windows"):
+                        builder.build_cleanup("go", output)
+
+    def test_setup_build_embeds_the_verified_helper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launcher = Path(tmp) / "BlockHarbor.exe"
+            launcher.write_bytes(self.package())
+            output = Path(tmp) / "Setup.exe"
+            calls = []
+
+            def compile_step(command, **kwargs):
+                calls.append(command)
+                if command[1] == "build":
+                    target = Path(command[command.index("-o") + 1])
+                else:
+                    definitions = dict(arg[2:].split("=", 1) for arg in command if arg.startswith(("-D", "/D")))
+                    helper = Path(definitions["CLEANUP_EXE"])
+                    self.assertEqual(helper.read_bytes(), self.native_binary())
+                    self.assertEqual(helper.parent, Path(definitions["OUT_FILE"]).parent)
+                    target = Path(definitions["OUT_FILE"])
+                target.write_bytes(self.native_binary())
+
+            argv = ["build_installer.py", "--launcher", str(launcher), "--output", str(output), "--go", "/tools/go", "--makensis", "/tools/makensis"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(builder.subprocess, "run", side_effect=compile_step), mock.patch("builtins.print"):
+                builder.main()
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(output.read_bytes(), self.native_binary())
+            self.assertEqual(launcher.read_bytes(), self.package())

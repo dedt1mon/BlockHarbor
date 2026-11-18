@@ -7,6 +7,9 @@
   let lastTransferMarkup = "";
   let lastReleaseMarkup = "";
   let savingAutomatic = false;
+  let savingChannel = false;
+  let pendingChannel = null;
+  let channelRevision = 0;
   const labels = {
     queued: "В очереди", downloading: "Загрузка", verifying: "Проверка",
     completed: "Готово", cancelled: "Отменено", failed: "Ошибка", interrupted: "Прервано",
@@ -21,7 +24,7 @@
       ? `<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div>${actions}</div>`
       : head("Загрузки и обновления", actions, "Версии лаунчера, очередь файлов и результаты проверки.");
     return heading +
-      `<div id="updatesScreen"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" aria-label="Канал обновлений"><option value="stable">Стабильный</option><option value="test">Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
+      `<div id="updatesScreen"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" class="field" aria-label="Канал обновлений" ${savingChannel || !data ? "disabled" : ""} ${savingChannel ? 'aria-busy="true"' : ""}><option value="stable">Стабильный</option><option value="test" ${(pendingChannel || data?.channel) === "test" ? "selected" : ""}>Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
   }
 
   function releaseMarkup() {
@@ -80,7 +83,11 @@
     const screen = document.querySelector("#updatesScreen");
     if (!screen || !data) return;
     const channel = document.querySelector("#updateChannel");
-    if (channel && document.activeElement !== channel) channel.value = data.channel;
+    if (channel) {
+      channel.disabled = savingChannel;
+      if (savingChannel) channel.value = pendingChannel;
+      else if (document.activeElement !== channel) channel.value = data.channel;
+    }
     const automatic = document.querySelector("#automaticUpdates");
     if (automatic && !savingAutomatic) {
       automatic.checked = Boolean(data.autoEnabled);
@@ -115,15 +122,53 @@
   async function load(silent = false) {
     if (fetching || !document.querySelector("#updatesScreen")) return;
     fetching = true;
+    const revision = channelRevision;
     try {
-      data = await api("/api/feature?action=updateState");
-      paint();
+      const result = await api("/api/feature?action=updateState");
+      if (revision === channelRevision) {
+        data = result;
+        paint();
+      }
     } catch (error) {
       if (!silent) notice(error.message, true);
     } finally {
       fetching = false;
       clearTimeout(timer);
       if (document.querySelector("#updatesScreen")) timer = setTimeout(() => load(true), 1500);
+    }
+  }
+
+  async function saveChannel(control) {
+    if (savingChannel || !data) return;
+    const previous = data.channel;
+    const selected = control.value;
+    const focused = document.activeElement === control;
+    savingChannel = true;
+    pendingChannel = selected;
+    channelRevision++;
+    control.disabled = true;
+    control.setAttribute("aria-busy", "true");
+    try {
+      await act("updateChannel", {channel: selected});
+      data.channel = selected;
+      notice("Канал обновлений сохранён.");
+    } catch (error) {
+      data.channel = previous;
+      notice(error.message, true);
+    } finally {
+      channelRevision++;
+      savingChannel = false;
+      pendingChannel = null;
+      const current = document.querySelector("#updateChannel");
+      if (current) {
+        current.value = data.channel;
+        current.disabled = false;
+        current.removeAttribute("aria-busy");
+        if (current === control && focused && [control, document.body].includes(document.activeElement)) {
+          current.focus({preventScroll: true});
+        }
+      }
+      await load(true);
     }
   }
 
@@ -189,8 +234,9 @@
     }
   });
   document.addEventListener("change", async (event) => {
+    if (event.target.id === "updateChannel") return void saveChannel(event.target);
     const automatic = event.target.id === "automaticUpdates";
-    if (!automatic && event.target.id !== "updateChannel") return;
+    if (!automatic) return;
     const control = event.target;
     if (automatic) savingAutomatic = true;
     control.disabled = true;

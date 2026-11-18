@@ -656,6 +656,30 @@ small,
 .build-row.active {
   border-color: #506a48;
 }
+.build-settings-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-bottom: 22px;
+}
+.build-settings-info {
+  min-width: 0;
+}
+.build-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+  max-width: 100%;
+}
+.build-settings-actions .btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .tabs {
   gap: 4px;
   padding-bottom: 13px;

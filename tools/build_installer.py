@@ -47,12 +47,52 @@ def nsis_literal(text, *, runtime=False):
     return value.replace('"', '$\\"')
 
 
+def build_cleanup(go, output):
+    """Compile the standalone uninstaller helper outside the deleted runtime.
+
+    os.Root.RemoveAll requires Go 1.25+. It is deliberately built from its own
+    dependency-free module; no downloaded toolchain or build hooks are used.
+    """
+    environment = dict(os.environ)
+    environment.update(
+        GOOS="windows",
+        GOARCH="amd64",
+        GOAMD64="v1",
+        CGO_ENABLED="0",
+        GOTOOLCHAIN="local",
+        GOWORK="off",
+        GOFLAGS="",
+    )
+    subprocess.run(
+        [
+            str(go),
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags=-H=windowsgui -s -w -buildid=",
+            "-o",
+            str(output),
+            ".",
+        ],
+        check=True,
+        cwd=TOOLS / "data_cleanup",
+        env=environment,
+    )
+    built = output.read_bytes()
+    if len(built) < 128 or built[:2] != b"MZ":
+        raise ValueError("The data cleanup helper is not a Windows executable")
+    offset = struct.unpack_from("<I", built, 0x3C)[0]
+    if built[offset : offset + 6] != b"PE\0\0\x64\x86":
+        raise ValueError("The data cleanup helper must be a Windows x64 executable")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--version", default="2.2.0")
+    parser.add_argument("--version", default="2.3.0")
     parser.add_argument("--makensis", default="makensis", help="NSIS 3.13+ compiler")
+    parser.add_argument("--go", default="go", help="Go 1.25+ compiler for the safe data cleanup helper")
     parser.add_argument(
         "--nsisdir", type=Path, help="NSIS data directory for a portable compiler"
     )
@@ -61,7 +101,7 @@ def main():
     if not re.fullmatch(
         r"(?:0|[1-9][0-9]{0,3})(?:\.(?:0|[1-9][0-9]{0,3})){2}", args.version
     ):
-        parser.error("--version must have three numeric parts, e.g. 2.2.0")
+        parser.error("--version must have three numeric parts, e.g. 2.3.0")
     if args.project_url:
         url = urlsplit(args.project_url)
         if url.scheme != "https" or not url.hostname or url.username or url.password:
@@ -81,13 +121,16 @@ def main():
         environment["NSISDIR"] = str(args.nsisdir.resolve())
     with tempfile.TemporaryDirectory(dir=output.parent) as temp:
         staged = Path(temp) / output.name
+        cleanup = Path(temp) / "BlockHarborDataCleanup.exe"
+        build_cleanup(args.go, cleanup)
         defines = {
             "APP_VERSION": args.version,
             "LAUNCHER_EXE": launcher,
+            "CLEANUP_EXE": cleanup,
             "ICON_FILE": PROJECT / "ui/icon.ico",
             "OUT_FILE": staged,
             "PROJECT_URL": args.project_url,
-            "APP_SIZE": (size + 1023) // 1024 + 256,
+            "APP_SIZE": (size + cleanup.stat().st_size + 1023) // 1024 + 256,
         }
         option = "/" if os.name == "nt" else "-"
         subprocess.run(

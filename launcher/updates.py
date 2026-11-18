@@ -134,15 +134,24 @@ class UpdateService:
     }
     JOBS = {"updateCheck"}
 
-    def __init__(self, store, transfers, current_version="2.0.0", *, can_install=lambda: False, request_shutdown=None):
+    def __init__(self, store, transfers, current_version="2.1.0", *, can_install=lambda: False, request_shutdown=None,
+                 namespace="", install_guard=None, handoff_metadata=None):
         version_key(current_version)
         self.store, self.transfers = store, transfers
         self.current_version = current_version
         self.can_install, self.request_shutdown = can_install, request_shutdown
+        self.install_guard = install_guard
+        self.handoff_metadata = handoff_metadata
         self.root = store.root / "updates"
+        if namespace:
+            if not re.fullmatch(r"window-[1-9][0-9]{0,2}", namespace):
+                raise ValueError("Некорректный идентификатор окна обновления.")
+            if self.root.is_symlink() or self.root.resolve().parent != store.root.resolve():
+                raise ValueError("Папка обновлений перенаправлена.")
+            self.root = self.root / namespace
         if self.root.is_symlink():
             raise ValueError("Папка обновлений перенаправлена.")
-        self.root.mkdir(exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
         self.cache = self.root / "installers"
         if self.cache.is_symlink():
             raise ValueError("Папка установщиков перенаправлена.")
@@ -399,7 +408,7 @@ class UpdateService:
                 raise ValueError("Установщик несовместим с текущим форматом данных.")
             selection = {"kind": "installer", "version": ready["version"], "receipt": ready}
         if when == "now" and not self.can_install():
-            raise ValueError("Закрой Minecraft и дождись завершения операций перед установкой.")
+            raise ValueError("Закрой все Minecraft и остальные окна BlockHarbor, затем дождись завершения операций перед установкой.")
         with self.lock:
             if self.pending or self.install_lock.locked():
                 raise ValueError("Установка уже ожидает завершения игры.")
@@ -461,6 +470,20 @@ class UpdateService:
         self._save()
 
     def _perform_install(self):
+        if self.install_guard is not None:
+            try:
+                with self.install_guard():
+                    return self._perform_install_guarded()
+            except Exception as exc:
+                with self.lock:
+                    self.error = str(exc)[:600]
+                    if self.pending and self.pending.get("stage") != "launching":
+                        self.pending["stage"] = "queued"
+                    self._save()
+                return
+        return self._perform_install_guarded()
+
+    def _perform_install_guarded(self):
         if not self.install_lock.acquire(blocking=False):
             return
         process = None
@@ -505,6 +528,7 @@ class UpdateService:
                 "sha256": receipt["sha256"], "size": binary.stat().st_size,
                 "target": str(target), "version": selection["version"],
                 "waitPids": wait_pids, "ready": str(ready_path), "id": request_id,
+                **(self.handoff_metadata() if self.handoff_metadata else {}),
             })
             log = (self.root / "handoff.log").open("ab")
             try:

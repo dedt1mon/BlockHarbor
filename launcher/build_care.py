@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from . import compatibility, e4steam, modrinth, room_bridge, skin_sync
 from .content_icons import _small_directory
 from .modfiles import file_hash, file_stamp, read_descriptor
+from .sessions import process_alive, process_identity, read_record
 from .store import KINDS, clean_filename, input_profile, require_idle_files, verify_pack
 
 BUILD_SECTIONS = (
@@ -162,10 +163,11 @@ class BuildCare:
     JOBS = {"careSnapshot", "careWorldBackup", "careBackupWorlds", "careRestore", "careClone", "careCheckUpdates", "careApplyUpdates"}
     ACTIONS = READ_ACTIONS | JOBS | {"careToggle", "careRemove", "carePin", "careRetention", "careAutoBackup"}
 
-    def __init__(self, store, transfers=None, on_clone=None):
+    def __init__(self, store, transfers=None, on_clone=None, *, owner=None, recover=True):
         self.store = store
         self.transfers = transfers
         self.on_clone = on_clone
+        self.owner = dict(owner) if owner is not None else process_identity(os.getpid())
         self.root = store.root / "recovery"
         self.root.mkdir(exist_ok=True)
         if _reparse(self.root):
@@ -186,7 +188,8 @@ class BuildCare:
             CREATE TABLE IF NOT EXISTS care_projects(pid TEXT NOT NULL, kind TEXT NOT NULL,
               name TEXT NOT NULL, stamp TEXT NOT NULL, metadata TEXT NOT NULL, PRIMARY KEY(pid,kind,name));
             """)
-        self._recover()
+        if recover:
+            self._recover()
 
     def _profile_root(self, pid):
         root = self.store._profile_directory(self.store.instances, pid)
@@ -514,30 +517,52 @@ class BuildCare:
                         db.execute("REPLACE INTO settings VALUES(?,?)", (key + ":" + journal["pid"], value))
 
     def _recover(self):
-        for work in self.root.glob("transaction-*"):
-            if not work.is_dir() or _reparse(work):
-                continue
-            journal_file = work / "journal.json"
-            if not journal_file.is_file() or journal_file.stat().st_size > 65536:
-                continue
-            journal = {}
-            try:
-                journal = json.loads(journal_file.read_text(encoding="utf-8"))
-                if journal.get("phase") != "committed":
-                    self._rollback_transaction(work, journal)
-                    self.history(journal["pid"], "Восстановление после прерывания", "Незавершённые изменения отменены.")
-                shutil.rmtree(work)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                pid = journal.get("pid") if isinstance(journal, dict) else None
-                if isinstance(pid, str) and _ID.fullmatch(pid):
-                    self.recovery_errors[pid] = str(exc)[:250]
-                else:
-                    # A malformed journal cannot identify a safe build to resume.
-                    for profile in self.store.all():
-                        self.recovery_errors[profile["id"]] = "повреждён журнал восстановления"
+        self.recover_pending()
         for work in self.root.glob("plan-*"):
             if work.is_dir() and not _reparse(work) and _ID.fullmatch(work.name.removeprefix("plan-")):
+                if process_alive(read_record(work / "owner.json").get("owner")):
+                    # Another open window can still apply its reviewed plan.
+                    continue
                 shutil.rmtree(work, ignore_errors=True)
+
+    def recover_pending(self):
+        """Recover abandoned journals while the caller holds the shared operation lock.
+
+        Existing windows must call this before mutations too: a peer can terminate
+        after moving an old file aside. Reviewed update plans are not journals and
+        are intentionally left alone here.
+        """
+        with self.lock:
+            errors = {}
+            for work in self.root.glob("transaction-*"):
+                if not work.is_dir() or _reparse(work):
+                    continue
+                journal_file = work / "journal.json"
+                # The journal is published before any destination is changed.
+                if not journal_file.exists():
+                    continue
+                journal = {}
+                try:
+                    if not journal_file.is_file() or _reparse(journal_file) or journal_file.stat().st_size > 65536:
+                        raise ValueError("Повреждён журнал восстановления.")
+                    journal = json.loads(journal_file.read_text(encoding="utf-8"))
+                    if not isinstance(journal, dict):
+                        raise ValueError("Повреждён журнал восстановления.")
+                    if journal.get("phase") != "committed":
+                        self._rollback_transaction(work, journal)
+                        self.history(journal["pid"], "Восстановление после прерывания", "Незавершённые изменения отменены.")
+                    shutil.rmtree(work)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    pid = journal.get("pid") if isinstance(journal, dict) else None
+                    if isinstance(pid, str) and _ID.fullmatch(pid):
+                        errors[pid] = str(exc)[:250]
+                    else:
+                        # Without an identified build no mutation can be assumed safe.
+                        for profile in self.store.all():
+                            errors[profile["id"]] = "повреждён журнал восстановления"
+            self.recovery_errors.clear()
+            self.recovery_errors.update(errors)
+            return dict(errors)
 
     def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
         root = self._writable_root(pid)
@@ -937,6 +962,7 @@ class BuildCare:
         directory = self.root / ("plan-" + token)
         directory.mkdir()
         try:
+            _atomic_json(directory / "owner.json", {"format": 1, "owner": self.owner})
             remove = {}
             for project, release in proposed.items():
                 current = installed.get(project)

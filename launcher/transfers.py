@@ -117,9 +117,15 @@ class TransferManager:
     therefore exposes safe independent retries in the download centre.
     """
 
-    def __init__(self, root):
+    def __init__(self, root, *, namespace=""):
         self.root = Path(root).resolve()
         self.cache = self.root / "download-cache"
+        if namespace:
+            if not re.fullmatch(r"window-[1-9][0-9]{0,2}", namespace):
+                raise ValueError("Некорректный идентификатор окна загрузок.")
+            if self.cache.is_symlink() or self.cache.resolve().parent != self.root:
+                raise ValueError("Кэш загрузок перенаправлен.")
+            self.cache = self.cache / namespace
         if self.cache.is_symlink():
             raise ValueError("Кэш загрузок перенаправлен.")
         self.cache.mkdir(parents=True, exist_ok=True)

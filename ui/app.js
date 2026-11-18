@@ -25,6 +25,7 @@ const paths = {
   trash: "M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
   close: "m5 5 14 14M19 5 5 19",
   folder: "M3 6h7l2 3h9v11H3z",
+  bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9 M10 21h4 M12 2V1",
   link: "M8 12l7-7m-5-2h8v8 M9 5H4v15h15v-5",
   plug: "M8 3v5m8-5v5 M5 8h14v2a7 7 0 0 1-14 0z M12 17v5",
   sun: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M12 1v3m0 16v3M1 12h3m16 0h3 M4 4l2 2m12 12 2 2M20 4l-2 2M6 18l-2 2",
@@ -69,10 +70,7 @@ const names = {
   friends: "Друзья",
   profile: "Профиль",
   settings: "Настройки",
-  packs: "Каталог сборок",
-  worlds: "Миры и копии",
   gallery: "Скриншоты",
-  downloads: "Загрузки и обновления",
 };
 const loaders = {
   vanilla: "Vanilla",
@@ -91,6 +89,7 @@ const pages = {
 };
 let state,
   view = "home",
+  settingsSection = "general",
   kind = "mods",
   lastJob = "",
   lastPlayJob = "",
@@ -101,6 +100,7 @@ let state,
   refreshAfterPlay = false,
   pollError = "",
   selectingBuild = false,
+  navigationRequest = 0,
   loadedSkin = 0;
 const active = () => state.profiles.find((p) => p.id === state.active);
 let noticeTimer = 0;
@@ -184,10 +184,26 @@ async function refresh() {
   render();
 }
 function navigate(v) {
+  navigationRequest++;
+  if (v === "downloads") return showSettingsSection("downloads");
+  if (v === "packs") return window.PackHubUI?.openCatalog();
+  if (v === "worlds") { kind = "worlds"; v = "addons"; }
   view = v;
   render();
   $("main").scrollTop = 0;
   window.scrollTo(0, 0);
+}
+async function navigateFresh(v, section = null) {
+  const request = ++navigationRequest;
+  const current = await api("/api/state");
+  if (request !== navigationRequest) return;
+  state = current;
+  if (section !== null) settingsSection = section === "downloads" ? "downloads" : "general";
+  navigate(v);
+}
+function showSettingsSection(section) {
+  settingsSection = section === "downloads" ? "downloads" : "general";
+  navigate("settings");
 }
 function selectInfo(p) {
   return (
@@ -222,20 +238,26 @@ function playControls() {
   );
 }
 function updatePlayButtons() {
+  const running = Array.isArray(state.runningProfiles)
+    ? state.runningProfiles.includes(state.active)
+    : state.gameRunning;
   const unavailable = Boolean(
-    selectingBuild || state.gameRunning || state.job?.busy,
+    selectingBuild || running || state.job?.busy,
   );
   const enableSteam = document.querySelector('[data-act="enableSteam"]');
   if (enableSteam) enableSteam.disabled = unavailable;
   document.querySelectorAll('[data-act="play"]').forEach((button) => {
     if (button.disabled !== unavailable) button.disabled = unavailable;
-    const label = state.gameRunning
-      ? "Игра запущена"
+    button.title = running
+      ? "Эта сборка уже используется. Для ещё одного Minecraft выбери другую сборку или её отдельную копию."
+      : "Запустить выбранную сборку";
+    const label = running
+      ? "Сборка запущена"
       : state.job?.busy
         ? "Подождите…"
         : "Играть";
     if (button.dataset.label !== label) {
-      button.innerHTML = ic(state.gameRunning ? "game" : "play") + label;
+      button.innerHTML = ic(running ? "game" : "play") + label;
       button.dataset.label = label;
     }
   });
@@ -402,7 +424,7 @@ function builds() {
   return (
     head(
       "Мои сборки",
-      '<button class="btn" data-view="packs">' + ic("search") + 'Каталог сборок</button>' +
+      btn("packCatalog", "Каталог сборок", "search") +
       btn("importBuild", "Загрузить сборку", "upload") +
         btn("create", "Новая сборка", "plus", "main"),
       "У каждой сборки свои миры, дополнения и настройки.",
@@ -491,9 +513,11 @@ function addons() {
     '<div class="tags">' + selectInfo(p) + btn("folder", "Папка сборки", "folder") +
     (window.PackHubUI?.exportButton(p) || "") + "</div>" +
     (window.BuildCareUI?.toolbar(p) || "") + (window.ExperienceUI?.toolbar(p) || "") +
-    '<div class="tabs">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '</div>' +
-    '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать с Modrinth", "download", "main") + '</div></div>' +
-    (window.BuildCareUI?.content(p, kind, state.contents[kind]) || '<div class="empty">Подготавливаем управление содержимым…</div>');
+    '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button></div>' +
+    (kind === "worlds"
+      ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')
+      : '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать с Modrinth", "download", "main") + '</div></div>' +
+        (window.BuildCareUI?.content(p, kind, state.contents[kind]) || '<div class="empty">Подготавливаем управление содержимым…</div>'));
 }
 async function showSteamCheck() {
   const profile = active();
@@ -703,14 +727,13 @@ function profile() {
       : "")
   );
 }
-function settings() {
+function generalSettings() {
   const modes = [
     ["local", "Локальный профиль"],
     ["prism", "Microsoft через Prism"],
     ["direct", "Свой Microsoft Client ID"],
   ];
   return (
-    head("Настройки") +
     '<div class="panel stack"><h3>Запуск Minecraft</h3><label>Профиль запуска<select id="mode" class="field">' +
     modes
       .map(
@@ -741,6 +764,15 @@ function settings() {
       : btn("signin", "Войти в Microsoft", "user")) +
     "</span></div></div>"
   );
+}
+function settings() {
+  const downloads = settingsSection === "downloads";
+  return head("Настройки") +
+    '<div class="tabs settings-tabs" role="tablist" aria-label="Разделы настроек">' +
+    '<button type="button" role="tab" id="settingsGeneralTab" aria-controls="settingsPanel" aria-selected="' + !downloads + '" class="' + (!downloads ? "on" : "") + '" data-settings-section="general">' + ic("settings") + 'Основные</button>' +
+    '<button type="button" role="tab" id="settingsDownloadsTab" aria-controls="settingsPanel" aria-selected="' + downloads + '" class="' + (downloads ? "on" : "") + '" data-settings-section="downloads">' + ic("download") + 'Загрузки и обновления</button></div>' +
+    '<section id="settingsPanel" role="tabpanel" aria-labelledby="' + (downloads ? "settingsDownloadsTab" : "settingsGeneralTab") + '">' +
+    (downloads ? (window.UpdatesUI?.render({embedded: true}) || "") : generalSettings() + (window.ExperienceUI?.settingsPanel() || "")) + '</section>';
 }
 function updateModeHelp() {
   const mode = $("#mode").value;
@@ -779,11 +811,8 @@ function render() {
     addons,
     friends: friendsView,
     profile,
-    settings: () => settings() + (window.ExperienceUI?.settingsPanel() || ""),
-    packs: () => window.PackHubUI?.render() || "",
-    worlds: () => window.BuildCareUI?.worlds(active()) || "",
+    settings,
     gallery: () => window.ExperienceUI?.gallery() || "",
-    downloads: () => window.UpdatesUI?.render() || "",
   }[view]();
   if (view === "profile" && window.ExperienceUI) $("#view").insertAdjacentHTML("beforeend", ExperienceUI.wardrobe());
   if (view === "friends" && window.SharedBuildsUI) $("#view").insertAdjacentHTML("beforeend", SharedBuildsUI.panel(active()));
@@ -794,7 +823,7 @@ function render() {
   window.UpdatesUI?.mount();
   if (archiveOpen && $(".deleted-builds")) $(".deleted-builds").open = true;
   updatePlayButtons();
-  if (view === "settings") updateModeHelp();
+  if (view === "settings" && settingsSection === "general") updateModeHelp();
   if (view === "addons") mountInstalledIcons();
   if (view === "home") drawHarbor($("#harborScene"));
   if (view === "profile" && (state.skin || characterDraft().file)) preview();
@@ -936,7 +965,7 @@ async function runJob(action, data = {}) {
 function showGameExit(job) {
   const box = $("#gameExit");
   const failure = job.gameExit;
-  if (!failure || job.gameRunning) {
+  if (!failure) {
     box.hidden = true;
     return;
   }
@@ -955,6 +984,8 @@ function showGameExit(job) {
     notice("");
   shownExit = failure.id;
   box.hidden = false;
+  const diagnosticsButton = box.querySelector('[data-experience="diagnostics"]');
+  if (diagnosticsButton) diagnosticsButton.dataset.experienceProfile = failure.profile || state.active;
   $("#gameExitMessage").textContent =
     failure.message ||
     "Minecraft завершился с ошибкой (код " +
@@ -980,12 +1011,15 @@ async function tick(wake = false) {
     const j = await api("/api/job");
     pollError = "";
     if (typeof j.gameRunning === "boolean") state.gameRunning = j.gameRunning;
+    if (Array.isArray(j.runningProfiles)) state.runningProfiles = j.runningProfiles;
+    if (typeof j.localGameRunning === "boolean") state.localGameRunning = j.localGameRunning;
+    if (typeof j.launcherCount === "number") state.launcherCount = j.launcherCount;
     state.job = j;
-    const updateNav = document.querySelector('aside [data-view="downloads"]');
+    const updateNav = document.querySelector('aside [data-view="settings"]');
     if (updateNav) updateNav.classList.toggle("has-update", Boolean(j.updateAvailable));
     if (j.updateAvailable && shownUpdate !== j.updateAvailable && !j.busy && $("#notice").hidden) {
       shownUpdate = j.updateAvailable;
-      notice("Доступен BlockHarbor " + j.updateAvailable + ". Изменения и установка — в «Загрузках».");
+      notice("Доступен BlockHarbor " + j.updateAvailable + ". Открой «Настройки → Загрузки и обновления».");
     }
     updatePlayButtons();
     if (j.busy) {
@@ -1063,7 +1097,7 @@ async function dispatch(action) {
     case "create":
       return createBox();
     case "addons":
-      return navigate("addons");
+      return navigateFresh("addons");
     case "play": {
       const args = { id: state.active };
       if (localMode()) {
@@ -1363,10 +1397,11 @@ document.addEventListener("click", async (e) => {
   const el = e.target.closest("button");
   if (!el) return;
   try {
-    if (el.dataset.view) { if ($("#dialog").open) closeDialog(); return navigate(el.dataset.view); }
+    if (el.dataset.settingsSection) return await navigateFresh("settings", el.dataset.settingsSection);
+    if (el.dataset.view) { if ($("#dialog").open) closeDialog(); return await navigateFresh(el.dataset.view); }
     if (el.dataset.kind) {
       kind = el.dataset.kind;
-      return navigate("addons");
+      return await navigateFresh("addons");
     }
     if (el.dataset.pick || el.dataset.buildSettings) {
       if (selectingBuild) return;

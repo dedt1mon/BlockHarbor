@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import io
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -12,6 +14,7 @@ from PIL import Image
 
 from launcher import compatibility, modrinth
 from launcher.build_care import BuildCare, _atomic_json
+from launcher.sessions import process_identity
 from launcher.store import Store
 
 
@@ -193,6 +196,55 @@ class BuildCareTests(unittest.TestCase):
         self.assertEqual("1.20.2", self.store.profile(self.pid)["version"])
         self.assertFalse(work.exists())
 
+    def test_existing_window_recovers_peer_transaction_and_clears_resolved_error(self):
+        jar(self.folder / "mods" / "original.jar")
+        work = self.care.root / ("transaction-" + "b" * 32)
+        (work / "old").mkdir(parents=True)
+        (work / "new").mkdir()
+        _atomic_json(work / "journal.json", {"phase": "prepared", "pid": self.pid, "oldProfile": self.store.profile(self.pid), "targets": [{"name": "mods", "had": True}]})
+        os.replace(self.folder / "mods", work / "old" / "mods")
+        jar(self.folder / "mods" / "incomplete.jar", version="2.0")
+        with patch.object(self.care, "_rollback_transaction", side_effect=OSError("sharing violation")):
+            self.assertIn(self.pid, self.care.recover_pending())
+        self.assertTrue(work.exists())
+        with self.assertRaisesRegex(ValueError, "sharing violation"):
+            self.care._writable_root(self.pid)
+        self.assertEqual({}, self.care.recover_pending())
+        self.assertNotIn(self.pid, self.care.recovery_errors)
+        self.assertEqual(self.folder, self.care._writable_root(self.pid))
+        self.assertTrue((self.folder / "mods" / "original.jar").is_file())
+        self.assertFalse((self.folder / "mods" / "incomplete.jar").exists())
+        self.assertFalse(work.exists())
+
+    def test_live_process_keeps_reviewed_plan_until_it_exits(self):
+        owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        work = self.care.root / ("plan-" + "c" * 32)
+        work.mkdir()
+        (work / "downloaded.jar").write_bytes(b"reviewed payload")
+        try:
+            _atomic_json(work / "owner.json", {"format": 1, "owner": process_identity(owner.pid)})
+            other = BuildCare(self.store)
+            self.assertEqual(b"reviewed payload", (work / "downloaded.jar").read_bytes())
+            other.recover_pending()
+            self.assertTrue(work.exists())
+        finally:
+            owner.terminate()
+            owner.wait(timeout=10)
+        BuildCare(self.store)
+        self.assertFalse(work.exists())
+
+    def test_malformed_journal_blocks_mutations_until_resolved(self):
+        work = self.care.root / ("transaction-" + "d" * 32)
+        work.mkdir()
+        _atomic_json(work / "journal.json", ["invalid journal"])
+        self.assertIn(self.pid, self.care.recover_pending())
+        with self.assertRaisesRegex(ValueError, "журнал восстановления"):
+            self.care._writable_root(self.pid)
+        # The peer successfully repaired/finished the transaction.
+        _atomic_json(work / "journal.json", {"phase": "committed", "pid": self.pid})
+        self.assertEqual({}, self.care.recover_pending())
+        self.assertFalse(work.exists())
+
     def test_clone_is_independent_and_copies_settings_and_pins(self):
         file = jar(self.folder / "mods" / "example.jar")
         self.world()
@@ -323,6 +375,9 @@ class BuildCareTests(unittest.TestCase):
         self.assertFalse(plan["blocked"])
         self.assertTrue((self.folder / "mods" / "example.jar").is_file())
         self.assertFalse((self.folder / "mods" / "example-2.jar").exists())
+        # Opening a second window must not discard the first window's review.
+        BuildCare(self.store)
+        self.assertTrue((self.care.root / ("plan-" + plan["token"]) / "owner.json").is_file())
         self.care.apply_updates(self.pid, plan["token"])
         self.assertFalse((self.folder / "mods" / "example.jar").exists())
         self.assertTrue((self.folder / "mods" / "example-2.jar").is_file())

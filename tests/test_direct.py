@@ -118,6 +118,23 @@ class DirectPlayTests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--clientId") + 1], "")
             self.assertNotIn("--demo", argv)
 
+    def test_each_jvm_uses_private_native_directory_instead_of_shared_installer_cache(self):
+        self.game["arguments"]["jvm"].insert(0, "-Djava.library.path=${natives_directory}")
+        self.write_cache()
+        other = self.root / "Second build"
+        with patch.object(mc.natives, "extract_natives") as extract, patch.object(subprocess, "Popen") as run:
+            game.install(self.version, "vanilla", self.cache, self.instance)
+            game.launch_local(self.cache, self.instance, "FirstPlayer")
+            first = run.call_args.args[0]
+            game.install(self.version, "vanilla", self.cache, other)
+            game.launch_local(self.cache, other, "SecondPlayer")
+            second = run.call_args.args[0]
+        directories = [Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("-Djava.library.path="))) for command in (first, second)]
+        self.assertNotEqual(*directories)
+        self.assertEqual(directories[0].parent, self.instance / ".blockharbor-natives")
+        self.assertEqual(directories[1].parent, other / ".blockharbor-natives")
+        self.assertEqual([call.args[2] for call in extract.call_args_list], directories)
+
     def test_legacy_release_without_java_metadata_installs_managed_java_only_when_needed(
         self,
     ):

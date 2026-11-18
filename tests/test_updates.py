@@ -119,7 +119,7 @@ class UpdatesTest(unittest.TestCase):
         self.ready()
         self.service.can_install = lambda: False
         with patch.object(updates.os, "name", "nt"), patch.object(self.service, "monitor_pending"):
-            with self.assertRaisesRegex(ValueError, "Закрой Minecraft"):
+            with self.assertRaisesRegex(ValueError, "Закрой.*Minecraft"):
                 self.service.schedule_install(when="now")
             result = self.service.schedule_install(when="idle")
             self.assertTrue(result["scheduled"])

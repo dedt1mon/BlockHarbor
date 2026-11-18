@@ -51,7 +51,7 @@ class FeatureApiTests(unittest.TestCase):
                 result = self.call(f"/api/feature?action={action}&id={self.pid}")
                 self.assertIsInstance(result, dict)
         state = self.call("/api/state")
-        self.assertEqual(state["appVersion"], "2.0.0")
+        self.assertEqual(state["appVersion"], "2.1.0")
         for name in ("experience", "build-care", "pack-hub", "updates"):
             self.assertGreater(len(self.call("/" + name + ".js",auth=False,raw=True)), 100)
 
@@ -92,7 +92,7 @@ class FeatureApiTests(unittest.TestCase):
             self.app._game_finished(0,"Мир",self.pid)
             self.assertEqual(self.app.pending_world_backups,{self.pid})
             backup.assert_not_called()
-            with patch.object(self.app,"start_job",side_effect=lambda fn:fn(lambda _:None)):
+            with patch.object(self.app,"start_job",side_effect=lambda fn, **kwargs:fn(lambda _:None)):
                 self.app.background_maintenance()
             backup.assert_called_once()
 

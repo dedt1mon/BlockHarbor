@@ -68,7 +68,7 @@ class PerformanceTests(unittest.TestCase):
                         patch.object(
                             reopened,
                             "start_job",
-                            side_effect=lambda fn: fn(lambda _: None),
+                            side_effect=lambda fn, **kwargs: fn(lambda _: None),
                         ),
                         patch.object(game, "install"),
                         patch.object(
@@ -77,6 +77,7 @@ class PerformanceTests(unittest.TestCase):
                     ):
                         reopened.action("play", {"id": pid})
                     self.assertEqual(launch.call_args.kwargs["memory_mb"], expected)
+                    reopened.close()
 
     def test_state_reads_db_independently_of_mod_count_and_sees_external_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -41,9 +41,17 @@
 .transfer-stage p { margin: 7px 0 0; color: var(--muted); line-height: 1.5; }
 .transfer-spinner { color: var(--lime); }
 @media (max-width: 950px) {
+  .settings-updates-head { flex-wrap: wrap; }
   .updater-channel, .transfer-heading { align-items: stretch; flex-direction: column; }
   .updater-channel label { max-width: 320px; }
   .transfer-metrics { flex-direction: column; gap: 3px; }
   .transfer-heading .btn { align-self: flex-start; }
   .update-release-icon { display: none; }
 }
+.settings-tabs { margin-bottom: 24px; }
+.settings-tabs button { display: inline-flex; align-items: center; gap: 9px; }
+.settings-tabs button i { width: 18px; height: 18px; }
+.settings-updates-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 2px 0 22px; }
+.settings-updates-head h2 { margin: 0 0 8px; font-size: 20px; }
+.settings-updates-head p { margin: 0; line-height: 1.5; }
+.settings-updates-head .btn { flex-shrink: 0; }

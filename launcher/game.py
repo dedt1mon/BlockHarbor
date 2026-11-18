@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import webbrowser
 import zipfile
@@ -856,19 +857,36 @@ def _start_java(
     if record.get("cache") != str(cache) or not record.get("id"):
         raise ValueError("Сначала установи файлы этой сборки для прямого запуска.")
     installed = _version_id(record["id"])
+    native_root = instance / ".blockharbor-natives"
+    if native_root.is_symlink() or native_root.resolve().parent != instance:
+        raise ValueError("Папка игровых библиотек перенаправлена.")
+    native_root.mkdir(exist_ok=True)
+    natives = Path(tempfile.mkdtemp(prefix="launch-", dir=native_root))
+    try:
+        # Provider installation can refresh its shared native cache for another
+        # build. Every JVM loads its own extracted files, never those DLLs.
+        mc.natives.extract_natives(installed, cache, natives)
+    except BaseException:
+        shutil.rmtree(natives, ignore_errors=True)
+        raise
     options = {
         "username": username,
         "uuid": player_id,
         "token": token,
         "gameDirectory": str(instance),
+        "nativesDirectory": str(natives),
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.0.0",
+        "launcherVersion": "2.1.0",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]
-    command = mc.command.get_minecraft_command(installed, cache, options)
+    try:
+        command = mc.command.get_minecraft_command(installed, cache, options)
+    except BaseException:
+        shutil.rmtree(natives, ignore_errors=True)
+        raise
     # Launcher-lib 8 leaves these placeholders unresolved in modern release metadata.
     command = [
         arg.replace("${clientid}", client_id).replace("${auth_xuid}", xuid)
@@ -887,9 +905,21 @@ def _start_java(
             creationflags=flags,
         )
     except FileNotFoundError:
+        shutil.rmtree(natives, ignore_errors=True)
         raise RuntimeError(
             "Исполняемый файл Java не найден. Проверь подключение и снова нажми «Играть» для восстановления файлов."
         ) from None
+    except BaseException:
+        shutil.rmtree(natives, ignore_errors=True)
+        raise
+    def clean_natives():
+        try:
+            process.wait()
+        except (OSError, subprocess.SubprocessError):
+            return
+        if natives.resolve().parent == native_root.resolve() and not natives.is_symlink():
+            shutil.rmtree(natives, ignore_errors=True)
+    threading.Thread(target=clean_natives, daemon=True, name="blockharbor-native-files").start()
     from .diagnostics import capture_stderr
     stderr_reader = capture_stderr(process.stderr, instance)
     try:

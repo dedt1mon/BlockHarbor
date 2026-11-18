@@ -29,7 +29,6 @@ window.BuildCareUI = (() => {
     return `<div class="care-toolbar" data-care-pid="${text(profile.id)}">
       ${actionButton("history", "Восстановление", "refresh")}
       ${actionButton("clone", "Сделать копию", "copy")}
-      ${actionButton("worlds", "Миры и копии", "layers")}
     </div>`;
   }
   function rowMarkup(row, pid, category) {
@@ -51,11 +50,9 @@ window.BuildCareUI = (() => {
     const rows = data?.contents[category] || fallbackRows.map(r => ({...r, enabled: true, title: r.name}));
     const key = idFor(profile.id, category), query = queries.get(key) || "";
     return `<section class="care-content" data-care-content data-care-pid="${text(profile.id)}" data-care-kind="${text(category)}">
-      <div class="care-content-head"><label class="care-search">${ic("search")}<input type="search" data-care-search placeholder="Найти среди установленных…" value="${text(query)}" aria-label="Найти установленное дополнение"/></label>
-      ${actionButton("updates", "Проверить обновления", "refresh")}
-      <button type="button" class="icon-button" data-care="reload" aria-label="Обновить список">${ic("refresh")}</button></div>
+      <div class="care-content-head"><label class="care-search">${ic("search")}<input type="search" data-care-search placeholder="Найти среди установленных…" value="${text(query)}" aria-label="Найти установленное дополнение"/></label></div>
       <div class="care-bulk"><label><input type="checkbox" data-care-all/> Выбрать видимые</label><span data-care-count>${chosen(profile.id, category).size} выбрано</span>
-      ${actionButton("enable", "Включить", "check")}${actionButton("disable", "Отключить", "close")}${actionButton("pin", "Закрепить", "settings")}${actionButton("unpin", "Открепить", "settings")}${actionButton("remove", "Удалить", "trash")}</div>
+      ${actionButton("enable", "Включить", "check")}${actionButton("disable", "Отключить", "close")}${actionButton("remove", "Удалить", "trash")}</div>
       <div class="care-list">${rows.map(r => rowMarkup(r, profile.id, category)).join("") || '<div class="empty">Пока нет установленных дополнений.</div>'}</div>
       <p class="care-footnote">Отключённые файлы остаются в сборке. Перед изменениями автоматически сохраняется точка восстановления.</p>
     </section>`;

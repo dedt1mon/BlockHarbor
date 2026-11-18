@@ -248,10 +248,14 @@ class GameProcessLifecycleTests(unittest.TestCase):
         self.frame.hide.assert_not_called()
         self.frame.focus.assert_not_called()
 
-        # A direct game can start while the user is still signing in through Prism.
+        # Another build can start while Prism signs in. The reserved build itself
+        # stays protected so two engines never write the same game directory.
         direct, prism_jvm = Mock(), Mock()
         direct.poll.return_value = prism_jvm.poll.return_value = None
         self.app.store.set("mode", "local")
+        with self.assertRaisesRegex(ValueError, "уже запущена"):
+            self.app.action("play", {"id": self.pid})
+        self.pid = self.app.store.create("Second", "1.20.1", "fabric")
         with patch.object(game, "launch_local", return_value=direct):
             self.assertTrue(self.play()["gameRunning"])
         game_arrived(prism_jvm)

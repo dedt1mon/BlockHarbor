@@ -63,7 +63,33 @@ def _validate(path):
     pids = data.get("waitPids")
     if not isinstance(pids, list) or not 1 <= len(pids) <= 2 or any(type(pid) is not int or not 0 < pid < 2**32 for pid in pids):
         raise ValueError("Некорректный список процессов лаунчера.")
+    if "sessionRoot" in data or "launcherSession" in data:
+        session_root = Path(data.get("sessionRoot", ""))
+        if not session_root.is_absolute() or session_root.resolve() != session_root or not re.fullmatch(r"[a-f0-9]{24}", str(data.get("launcherSession", ""))):
+            raise ValueError("Некорректный сеанс установки.")
+        shared = session_root / "updates"
+        if root != shared and not (root.parent == shared and re.fullmatch(r"window-[1-9][0-9]{0,2}", root.name)):
+            raise ValueError("Запрос установки находится вне данных сеанса.")
+        directory = session_root / "launcher-sessions"
+        if directory.is_symlink() or directory.resolve().parent != session_root:
+            raise ValueError("Каталог сеанса установки перенаправлен.")
     return data, source, target, ready
+
+
+def _hold_session_gate(data):
+    if not data.get("sessionRoot"):
+        return None
+    # The helper runs by filename in embedded Python, outside the package path.
+    if not __package__:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from launcher.sessions import atomic_json, process_identity, read_record
+    path = Path(data["sessionRoot"]) / "launcher-sessions" / "update.json"
+    gate = read_record(path)
+    if gate.get("session") != data["launcherSession"]:
+        raise ValueError("Разрешение на установку уже отозвано.")
+    gate.update(helper=process_identity(os.getpid()), targetVersion=data["version"])
+    atomic_json(path, gate)
+    return path
 
 
 def _verify(source, data):
@@ -152,9 +178,11 @@ def run(path):
     data, source, target, ready = _validate(path)
     result_path = path.parent / ("result-" + data["id"] + ".json")
     handles = None
+    gate = None
     try:
         _verify(source, data)
         handles = ProcessHandles(data["waitPids"])
+        gate = _hold_session_gate(data)
         _write(ready, {"ready": True, "id": data["id"]})
         handles.wait()
         _verify(source, data)
@@ -176,6 +204,13 @@ def run(path):
             handles.close()
         ready.unlink(missing_ok=True)
         path.unlink(missing_ok=True)
+        if gate:
+            try:
+                stored = json.loads(gate.read_text(encoding="utf-8"))
+                if stored.get("session") == data["launcherSession"]:
+                    gate.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
 
 
 if __name__ == "__main__":

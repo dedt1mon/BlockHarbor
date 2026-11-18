@@ -33,7 +33,7 @@ while (-not $owner.HasExited) {
             $game = [Diagnostics.Process]::GetProcessById([int]$row.ProcessId)
             $null = $game.Handle
         } catch { continue }
-        [Console]::WriteLine('GAME')
+        [Console]::WriteLine('GAME ' + $game.Id)
         [Console]::Out.Flush()
         $game.WaitForExit()
         exit $game.ExitCode
@@ -59,7 +59,16 @@ def _names(instance):
     return "\n".join(dict.fromkeys(p.as_posix() for p in paths))
 
 
-def observe(instance, engine, on_game):
+class ObservedGame:
+    """The watcher provides exit status; identity and memory belong to Java."""
+    def __init__(self, watcher, pid):
+        self.watcher, self.pid = watcher, pid
+
+    def poll(self):
+        return self.watcher.poll()
+
+
+def observe(instance, engine, on_game, *, on_waiting=None, on_done=None):
     key = str(instance)
     with _LOCK:
         if key in _WATCHING:
@@ -93,8 +102,11 @@ def observe(instance, engine, on_game):
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             ) as watcher:
-                if watcher.stdout.readline().strip() == b"GAME":
-                    on_game(watcher)
+                if on_waiting:
+                    on_waiting(watcher)
+                response = watcher.stdout.readline().strip().split()
+                if len(response) == 2 and response[0] == b"GAME" and response[1].isdigit() and 0 < int(response[1]) < 2**32:
+                    on_game(ObservedGame(watcher, int(response[1])))
                 watcher.wait()
         except (OSError, KeyError):
             # Optional window observation must not interrupt an authenticated game.
@@ -102,5 +114,7 @@ def observe(instance, engine, on_game):
         finally:
             with _LOCK:
                 _WATCHING.discard(key)
+            if on_done:
+                on_done()
 
     threading.Thread(target=watch, name="blockharbor-prism-game", daemon=True).start()

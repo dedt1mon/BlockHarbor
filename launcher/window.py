@@ -317,8 +317,8 @@ class NativeFrame:
 
 
 class DesktopWindow:
-    def __init__(self, root):
-        self.profile = Path(root).resolve() / "window-profile"
+    def __init__(self, root, *, namespace=""):
+        self.profile = Path(root).resolve() / ("window-profile-" + namespace if namespace else "window-profile")
         self.lock = threading.RLock()
         self.url = ""
         self.parked = False
@@ -337,6 +337,11 @@ class DesktopWindow:
     def close(self):
         with self.lock:
             return bool(self.native and self.native.close())
+
+    def closed(self):
+        """A hidden registered window is alive; an explicitly closed one is not."""
+        with self.lock:
+            return bool(self.native and self.native.hwnd and not self.awaiting_registration and not self.native.current())
 
     def game_ended(self):
         with self.lock:
@@ -364,7 +369,7 @@ class DesktopWindow:
                     base, fragment = url.split("#", 1)
                     address = base + "?window=" + marker + "#" + fragment
                     if exe.name.lower() == "firefox.exe":
-                        profile = self.profile.with_name("firefox-window-profile")
+                        profile = self.profile.with_name("firefox-" + self.profile.name)
                         profile.mkdir(parents=True, exist_ok=True)
                         command = [
                             str(exe),

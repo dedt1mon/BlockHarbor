@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,7 @@ from launcher import (
     steam_network,
 )
 from launcher.memory import automatic_heap
-from launcher.singleton import SingleInstance
+from launcher.sessions import SessionBusy, SessionCoordinator, WindowStore
 from launcher.store import (
     FALLBACK_VERSIONS,
     KINDS,
@@ -92,8 +93,23 @@ def default_root():
 
 class App:
     def __init__(self, root):
-        self.store = Store(root)
-        self.window = DesktopWindow(root)
+        self.coordinator = SessionCoordinator(root)
+        try:
+            self._initialize(root)
+            # Opening another window must remain possible during long downloads.
+            # Defer filesystem recovery until the current owner releases its lock.
+            try:
+                with self.coordinator.operation():
+                    pass
+            except SessionBusy:
+                pass
+        except BaseException:
+            self.coordinator.close()
+            raise
+
+    def _initialize(self, root):
+        self.store = WindowStore(root, recover=False)
+        self.window = DesktopWindow(root, namespace="window-" + str(self.coordinator.slot))
         # Versions before 1.1 used Microsoft Launcher for the default mode.
         if self.store.get("mode") in ("official", "alias"):
             self.store.set("mode", "local")
@@ -107,24 +123,49 @@ class App:
         self.job = {"id": "", "busy": False, "message": "", "ok": True}
         self.last_seen = time.monotonic()
         self.child = None
+        self.games = {}
         self.process_lock = threading.Lock()
         self.game_exit = None
         self.playing_id = ""
         self.playing_name = ""
         self.prism_launches = {}
         self.prism_games = {}
+        self.prism_waiting = {}
         self.parked_for_game = False
         self.pending_world_backups = set()
         self.shutdown = None
         self.experience = Experience(self.store)
-        self.transfers = TransferManager(self.store.root)
-        self.care = BuildCare(self.store, self.transfers, on_clone=self._clone_details)
+        self.transfers = TransferManager(self.store.root, namespace=self.coordinator.namespace)
+        self.care = BuildCare(self.store, self.transfers, on_clone=self._clone_details, owner=self.coordinator.owner, recover=False)
         self.metrics = SessionMetrics(self.store)
         self.performance = PerformanceProfiles(self.store, self.care.before_change, self.metrics)
         self.packs = PackHub(self.store, self.transfers)
         self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running)
-        self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update)
+        self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update,
+                                     namespace=self.coordinator.namespace, install_guard=self.coordinator.update_guard, handoff_metadata=self.coordinator.handoff)
         self.features = (self.care, self.experience, self.performance, self.packs, self.sharing, self.updates)
+        self.initial_recovery = False
+        self.coordinator.recover = self._recover_shared_state
+
+    def _recover_shared_state(self):
+        # Another window could have crashed since this window was opened.
+        # Run only after acquiring the cross-process operation lock.
+        with self.store.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.store._recover_moves(db)
+        if self.initial_recovery:
+            self.care.recover_pending()
+        else:
+            self.care._recover()
+            self.initial_recovery = True
+
+    def close(self):
+        self.coordinator.close()
+
+    def __del__(self):
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator:
+            coordinator.close()
 
     def _clone_details(self, source, destination):
         with self.store.connection() as db:
@@ -133,7 +174,9 @@ class App:
                 db.execute("INSERT OR REPLACE INTO build_details(profile,description,group_name,color,cover) VALUES(?,?,?,?,?)", (destination, *row))
 
     def _can_update(self):
-        return not self.game_running() and not self.job_snapshot()["busy"] and not any(p.poll() is None for p in self.prism_launches.values())
+        state = self.coordinator.snapshot()
+        return (state["launcherCount"] <= 1 and not state["runningProfiles"] and not self.game_running()
+                and not self.job_snapshot()["busy"] and not any(p.poll() is None for p in self.prism_launches.values()))
 
     def check_updates_in_background(self):
         if self.store.get("checkUpdatesOnStart", "1") != "1" or 0 <= time.time() - self.updates.checked < 24 * 3600:
@@ -141,7 +184,7 @@ class App:
         try:
             self.updates.check()
             if self.update_available():
-                self.experience.notify("Доступен BlockHarbor " + self.update_available() + ". Открой «Загрузки», чтобы посмотреть изменения.", "info")
+                self.experience.notify("Доступен BlockHarbor " + self.update_available() + ". Открой «Настройки → Загрузки и обновления», чтобы посмотреть изменения.", "info")
         except (ValueError, OSError):
             pass  # Details remain in the download centre; offline launch still works.
 
@@ -167,7 +210,7 @@ class App:
             raise ValueError(self.care.recovery_errors[pid])
         prism = self.prism_launches.get(pid)
         if self.profile_running(pid) or (prism is not None and prism.poll() is None):
-            raise ValueError("Закрой эту сборку в Minecraft или Prism перед изменением файлов.")
+            raise ValueError("Закрой эту сборку в Minecraft или Prism во всех окнах перед изменением файлов.")
         require_idle_files(self.store.folder(pid))
 
     def require_mutations_allowed(self):
@@ -175,6 +218,17 @@ class App:
             raise ValueError("Подготавливается обновление BlockHarbor. Дождись установщика или отмени подготовку в центре загрузок.")
 
     def feature_action(self, action, params, *, read=False):
+        service = next((item for item in self.features if action in item.ACTIONS), None)
+        reads = getattr(service, "READ_ACTIONS", {"updateState"} if service is self.updates else set())
+        # Read-only queries and cancel controls stay responsive during downloads.
+        concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
+                      "transferCancel", "transferClear", "updateCancelInstall", "updateState"}
+        if read or action in reads | concurrent:
+            return self._feature_action(action, params, read=read)
+        with self.coordinator.operation():
+            return self._feature_action(action, params, read=read)
+
+    def _feature_action(self, action, params, *, read=False):
         if action == "diagnostics":
             failure = self.game_exit if (self.game_exit or {}).get("profile") == params["id"] else None
             result = analyze(self.store, params["id"], (failure or {}).get("code"))
@@ -199,7 +253,8 @@ class App:
             if service in (self.care, self.performance, self.sharing) and pid and action not in reads | {"careCheckUpdates", "carePin", "careRetention"}:
                 self.require_profile_idle(pid)
             if action in service.JOBS:
-                return self.start_job(lambda status: service.handle(action, params, status))
+                guarded = pid if service in (self.care, self.performance, self.sharing) and action != "careCheckUpdates" else None
+                return self.start_job(lambda status: service.handle(action, params, status), profile=guarded)
             result = service.handle(action, params)
             if action not in concurrent and not (isinstance(result, dict) and result.get("review")):
                 self.experience.notify((result or {}).get("message", "Изменения сохранены."), "success")
@@ -273,6 +328,9 @@ class App:
             "mode": settings.get("mode", "local"),
             "gameRunning": job["gameRunning"],
             "gameExit": job["gameExit"],
+            "localGameRunning": job["localGameRunning"],
+            "runningProfiles": job["runningProfiles"],
+            "launcherCount": job["launcherCount"],
         }
 
     def release_catalog(self, raw=None):
@@ -315,9 +373,8 @@ class App:
             if prism:
                 self.prism_games[profile["id"]] = (process, profile["name"])
             else:
-                self.child = process
-                self.playing_id = profile["id"]
-                self.playing_name = profile["name"]
+                self.games[profile["id"]] = (process, profile["name"])
+            self.coordinator.attach(profile["id"], process)
             self.game_exit = None
             if type(getattr(process, "pid", None)) is int:
                 self.metrics.start(profile["id"], process)
@@ -325,8 +382,21 @@ class App:
                 self.window.game_started()
                 self.parked_for_game = True
 
+    def _prism_waiting(self, pid, process):
+        with self.process_lock:
+            self.prism_waiting[pid] = process
+            self.coordinator.attach(pid, process, stage="prism")
+
+    def _prism_done(self, pid):
+        with self.process_lock:
+            self.prism_waiting.pop(pid, None)
+            if pid not in self.prism_games:
+                self.prism_launches.pop(pid, None)
+                self.coordinator.release(pid)
+
     def _game_finished(self, code, name, pid=""):
         if pid:
+            self.coordinator.release(pid)
             self.metrics.finish(pid, code)
             if self.store.get("careAutoWorldBackup:" + pid) == "1":
                 self.pending_world_backups.add(pid)
@@ -346,7 +416,10 @@ class App:
             if self.pending_world_backups and not self.job_snapshot()["busy"] and not self.game_running():
                 pid = self.pending_world_backups.pop()
                 if any(p["id"] == pid for p in self.store.all()):
-                    self.start_job(lambda status: self.care.backup_after_game(pid, status) or "Копии миров актуальны.")
+                    if not self.profile_running(pid):
+                        self.start_job(lambda status: self.care.backup_after_game(pid, status) or "Копии миров актуальны.", profile=pid)
+                    else:
+                        self.pending_world_backups.add(pid)
         self.updates.monitor_pending()
 
     def process_state(self):
@@ -356,19 +429,30 @@ class App:
                 if code is not None:
                     self._game_finished(code, self.playing_name, self.playing_id)
                     self.child = None
+            for pid, (process, name) in list(self.games.items()):
+                code = process.poll()
+                if code is not None:
+                    self._game_finished(code, name, pid)
+                    del self.games[pid]
             for pid, (process, name) in list(self.prism_games.items()):
                 code = process.poll()
                 if code is not None:
                     self._game_finished(code, name, pid)
                     del self.prism_games[pid]
-            running = self.child is not None or bool(self.prism_games)
+                    self.prism_launches.pop(pid, None)
+            for pid, process in list(self.prism_waiting.items()):
+                if process.poll() is not None:
+                    del self.prism_waiting[pid]
+                    if pid not in self.prism_games:
+                        self.coordinator.release(pid)
+            running = self.child is not None or bool(self.games) or bool(self.prism_games)
             if not running and self.parked_for_game:
                 self.parked_for_game = False
                 self.last_seen = time.monotonic()
                 self.window.game_ended()
             return {
                 "gameRunning": running,
-                "gameExit": None if running else self.game_exit,
+                "gameExit": self.game_exit,
             }
 
     def game_running(self):
@@ -379,7 +463,7 @@ class App:
         with self.process_lock:
             return (
                 self.child is not None and self.playing_id == pid
-            ) or pid in self.prism_games
+            ) or pid in self.games or pid in self.prism_games or pid in self.coordinator.snapshot()["runningProfiles"]
 
     def player_name(self):
         if self.store.get("mode", "local") == "local":
@@ -388,9 +472,13 @@ class App:
 
     def job_snapshot(self):
         with self.jobs_lock:
-            return {**self.job, **self.process_state(), "updateAvailable": self.update_available()}
+            process = self.process_state()
+            sessions = self.coordinator.snapshot()
+            if self.child is not None and self.playing_id:
+                sessions["runningProfiles"] = sorted(set(sessions["runningProfiles"]) | {self.playing_id})
+            return {**self.job, **process, **sessions, "localGameRunning": process["gameRunning"], "updateAvailable": self.update_available()}
 
-    def start_job(self, fn):
+    def start_job(self, fn, *, profile=None):
         self.require_mutations_allowed()
         with self.jobs_lock:
             if self.job["busy"]:
@@ -404,7 +492,10 @@ class App:
 
         def worker():
             try:
-                result = fn(status)
+                with self.coordinator.operation(wait=True, status=status):
+                    if profile:
+                        self.require_profile_idle(profile)
+                    result = fn(status)
                 final = {"message": result or "Готово.", "ok": True, "busy": False}
             except modrinth.NeedsReview as exc:
                 final = {
@@ -419,9 +510,12 @@ class App:
                     "ok": False,
                     "busy": False,
                 }
+            try:
+                self.experience.notify(final["message"], "success" if final["ok"] else "error")
+            except (OSError, sqlite3.Error):
+                pass  # A history failure must not hide the operation's result.
             with self.jobs_lock:
                 self.job.update(final)
-            self.experience.notify(final["message"], "success" if final["ok"] else "error")
 
         threading.Thread(target=worker, daemon=True).start()
         return {"job": jid}
@@ -474,7 +568,7 @@ class App:
             )
         if apply_skin and not target:
             raise ValueError("Укажи имя своего профиля Minecraft для установки скина.")
-        if self.game_running() and (apply_skin or convert):
+        if self.profile_running(profile["id"]) and (apply_skin or convert):
             raise ValueError(
                 "Закрой Minecraft и ещё раз сохрани параметры, чтобы игра загрузила новый скин."
             )
@@ -509,9 +603,10 @@ class App:
                             "Сборка изменилась во время сохранения. Открой профиль заново."
                         )
                 db.executemany("REPLACE INTO settings VALUES (?, ?)", values.items())
+            store.remember(values)
             return "Успешно сохранено"
 
-        return self.start_job(save)
+        return self.start_job(save, profile=profile["id"])
 
     def import_card(self, src, pid):
         profile = self.store.profile(pid)
@@ -529,9 +624,19 @@ class App:
                 card.write_bytes(payload)
                 return cards.apply_card(card, folder, own_name=own_name)
 
-        return self.start_job(apply)
+        return self.start_job(apply, profile=pid)
 
     def action(self, action, p):
+        if action == "diagnostics" or any(action in service.ACTIONS for service in self.features):
+            return self.feature_action(action, p)
+        # Window-specific selection can change while another window prepares a
+        # different build. Every filesystem mutation uses the shared operation lock.
+        if action in {"select", "logout", "folder", "openSteam"}:
+            return self._action(action, p)
+        with self.coordinator.operation():
+            return self._action(action, p)
+
+    def _action(self, action, p):
         s = self.store
         if action == "diagnostics" or any(action in service.ACTIONS for service in self.features):
             return self.feature_action(action, p)
@@ -582,7 +687,7 @@ class App:
                     before_publish=lambda: self.care.before_change(pid, "Установка дополнений из Modrinth"),
                     transfer=self.transfers,
                     after_publish=lambda releases: [self.care.remember_project(pid, release, {"title": release.title, "description": release.description}) for release in releases],
-                )
+                ), profile=pid
             )
         if action == "create":
             name, version, loader = input_profile(
@@ -746,7 +851,7 @@ class App:
                     + "». Перезапусти Minecraft."
                 )
 
-            return self.start_job(apply_local)
+            return self.start_job(apply_local, profile=p["id"])
         elif action == "versions":
 
             def versions(status):
@@ -822,14 +927,14 @@ class App:
                 )
                 return "Файлы для игры через Steam готовы."
 
-            return self.start_job(prepare_steam)
+            return self.start_job(prepare_steam, profile=pid)
         elif action == "enableSteam":
             profile = s.profile(p["id"])
             if profile["loader"] != "vanilla" or not e4steam.support(
                 profile["version"], "fabric"
             ):
                 raise ValueError("Переход на Fabric для этой сборки недоступен.")
-            if self.game_running():
+            if self.profile_running(profile["id"]):
                 raise ValueError("Закрой Minecraft перед изменением загрузчика.")
             folder = s.folder(profile["id"])
 
@@ -846,12 +951,12 @@ class App:
                 s.enable_fabric(profile["id"])
                 return f"Сборка «{profile['name']}» готова для Steam. Нажми «Играть»."
 
-            return self.start_job(enable)
+            return self.start_job(enable, profile=profile["id"])
         elif action == "play":
             from launcher import game
 
             if self.updates.pending:
-                raise ValueError("Запланировано обновление лаунчера. Отмени его в центре загрузок перед новым запуском игры.")
+                raise ValueError("Запланировано обновление лаунчера. Отмени его в «Настройки → Загрузки и обновления» перед новым запуском игры.")
 
             pro = s.profile(p["id"])
             if pro["id"] in self.care.recovery_errors:
@@ -860,9 +965,9 @@ class App:
             configured_memory = s.get("performanceMemory:" + p["id"], s.get("memory", "auto"))
             memory = automatic_heap() if configured_memory == "auto" else int(configured_memory)
             mode = s.get("mode", "local")
-            if self.game_running():
+            if self.profile_running(pro["id"]):
                 raise ValueError(
-                    "Minecraft уже запущен. Закрой текущее окно игры, чтобы запустить другую сборку."
+                    "Эта сборка уже запущена. Для ещё одного Minecraft выбери другую сборку или заранее сделай отдельную копию этой сборки."
                 )
             session = self.account
             if mode == "direct" and not session:
@@ -874,6 +979,18 @@ class App:
                 )
 
             def play(status):
+                self.prism_launches.pop(pro["id"], None)
+                self.coordinator.claim(pro["id"])
+                try:
+                    return launch_claimed(status)
+                finally:
+                    # Preparation errors and failed spawns must not keep a build busy.
+                    with self.process_lock:
+                        retained = pro["id"] in self.games or pro["id"] in self.prism_games or pro["id"] in self.prism_launches
+                    if not retained:
+                        self.coordinator.release(pro["id"])
+
+            def launch_claimed(status):
                 self.metrics.prepare(pro["id"])
                 image = self.skin_path()
                 target = nick if mode == "local" else self.player_name()
@@ -915,6 +1032,8 @@ class App:
                         memory,
                         status,
                         on_game=lambda child: self._track_game(child, pro, prism=True),
+                        on_waiting=lambda child: self._prism_waiting(pro["id"], child),
+                        on_done=lambda: self._prism_done(pro["id"]),
                     )
                     return "Запуск передан Prism. При первом входе заверши настройку аккаунта."
                 cache = s.root / "game-cache"
@@ -932,7 +1051,7 @@ class App:
                 self._track_game(process, pro)
                 return f"Запущен Minecraft {pro['version']} · {pro['name']}."
 
-            return self.start_job(play)
+            return self.start_job(play, profile=pro["id"])
         elif action == "folder":
             folder = s.folder(p["id"])
             if sys.platform == "win32":
@@ -1157,7 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, worlds = data["id"], data.get("worlds") is True
                 archive = tempfile.TemporaryFile(dir=self.app.store.root)
                 try:
-                    with self.app.lock:
+                    with self.app.lock, self.app.coordinator.operation():
                         if self.app.job_snapshot()["busy"]:
                             raise ValueError("Дождись завершения текущей операции.")
                         if worlds:
@@ -1198,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(raw) != length:
                     raise ValueError("Передача обложки прервана.")
                 pid = parse_qs(u.query).get("id", [""])[0]
-                with self.app.lock:
+                with self.app.lock, self.app.coordinator.operation():
                     self.app.require_mutations_allowed()
                     return self.reply(200, self.app.experience.set_cover(pid, raw))
             if u.path in ("/api/build-import", "/api/mrpack-import"):
@@ -1215,7 +1334,7 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("Передача ZIP прервана.")
                         archive.write(block)
                         remaining -= len(block)
-                    with self.app.lock:
+                    with self.app.lock, self.app.coordinator.operation():
                         self.app.require_mutations_allowed()
                         if self.app.job_snapshot()["busy"]:
                             raise ValueError("Дождись завершения текущей операции.")
@@ -1238,7 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
                         preview, format="PNG"
                     )
                     return self.reply(200, preview.getvalue(), "image/png")
-                with self.app.lock:
+                with self.app.lock, self.app.coordinator.operation():
                     self.app.require_mutations_allowed()
                     return self.reply(200, self.app.save_appearance(parameters, raw))
             if u.path == "/api/file":
@@ -1258,14 +1377,14 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError("Передача файла прервана.")
                             out.write(part)
                             left -= len(part)
-                    with self.app.lock:
+                    with self.app.lock, self.app.coordinator.operation():
                         self.app.require_mutations_allowed()
                         if card:
                             return self.reply(200, self.app.import_card(tmp, q["id"]))
                         if skin:
                             skins.validate_skin(tmp)
-                            os.replace(tmp, self.app.store.root / "skin.png")
-                            self.app.store.set("skinDigest", "")
+                            digest = skins.save_texture(self.app.store.root, skins.normalized_skin(tmp))
+                            self.app.store.set("skinDigest", digest)
                         else:
                             if self.app.job_snapshot()["busy"]:
                                 raise ValueError("Дождись завершения текущей операции.")
@@ -1311,11 +1430,10 @@ def run():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--profile", help="Open a build from its desktop shortcut")
     args = parser.parse_args()
-    # Reopening after an upgrade must select the current window implementation.
-    with SingleInstance(args.data / "activation-v10", profile=args.profile) as instance:
-        if not instance.primary:
-            return
-        app = App(args.data)
+    app = App(args.data)
+    stop = threading.Event()
+    monitor = None
+    try:
         if args.profile:
             app.store.profile(args.profile)
             app.store.set("active", args.profile)
@@ -1324,29 +1442,30 @@ def run():
             app.shutdown = server.shutdown
             url = "http://127.0.0.1:" + str(server.server_port) + "/#" + app.token
 
-            def reopen(profile=None):
-                if profile:
-                    app.store.profile(profile)
-                    app.store.set("active", profile)
-                app.last_seen = time.monotonic()
-                app.window.show(url)
+            def watch():
+                while not stop.wait(0.25):
+                    running = app.game_running()
+                    app.background_maintenance()
+                    pending_prism = bool(app.prism_waiting) or any(p.poll() is None for p in app.prism_launches.values())
+                    if not (args.no_browser or running or pending_prism or app.job_snapshot()["busy"]) and (app.window.closed() or time.monotonic() - app.last_seen > 180):
+                        server.shutdown()
+                        return
 
-            def idle():
-                running = app.game_running()
-                app.background_maintenance()
-                if args.no_browser or running or app.job_snapshot()["busy"]:
-                    return False
-                return time.monotonic() - app.last_seen > 180
-
-            instance.monitor(reopen, idle, server.shutdown)
+            monitor = threading.Thread(target=watch, daemon=True, name="blockharbor-session")
+            monitor.start()
             if args.no_browser:
                 print(url, flush=True)
             else:
-                reopen()
+                app.window.show(url)
                 checker = threading.Timer(3, app.check_updates_in_background)
                 checker.daemon = True
                 checker.start()
             server.serve_forever()
+    finally:
+        stop.set()
+        if monitor:
+            monitor.join(timeout=2)
+        app.close()
 
 
 if __name__ == "__main__":

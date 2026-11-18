@@ -139,7 +139,7 @@ def _check_purge_error(function, path, exc_info):
 
 
 class Store:
-    def __init__(self, root):
+    def __init__(self, root, *, recover=True):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.icons = IconCache(self.root)
@@ -155,7 +155,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS build_purges(id TEXT PRIMARY KEY, completed INTEGER NOT NULL DEFAULT 0);
             """)
             db.execute("BEGIN IMMEDIATE")
-            self._recover_moves(db)
+            if recover:
+                self._recover_moves(db)
             # Older portable releases check this marker on startup. Retain it so
             # reopening the same data with one of them keeps an empty list empty.
             db.execute(

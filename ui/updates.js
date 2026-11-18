@@ -14,8 +14,12 @@
     `<button class="btn ${extra}" type="button" data-updates-action="${esc(action)}" ${disabled ? "disabled" : ""}>${ic(icon)}${esc(text)}</button>`;
   const formatDate = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "Ещё не проверяли";
 
-  function render() {
-    return head("Обновления и загрузки", button("updateCheck", "Проверить обновления", "refresh"), "Версии лаунчера, очередь файлов и результаты проверки.") +
+  function render({embedded = false} = {}) {
+    const actions = button("updateCheck", "Проверить обновления", "refresh");
+    const heading = embedded
+      ? `<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div>${actions}</div>`
+      : head("Загрузки и обновления", actions, "Версии лаунчера, очередь файлов и результаты проверки.");
+    return heading +
       `<div id="updatesScreen"><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" aria-label="Канал обновлений"><option value="stable">Стабильный</option><option value="test">Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
   }
 
@@ -42,7 +46,7 @@
     }
     if (data.pending) {
       const stage = data.pending.stage;
-      body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : "Открываем установщик"}</strong><p>${stage === "queued" ? "Лаунчер дождётся выхода из Minecraft и завершения операций, затем откроет установщик." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
+      body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : "Открываем установщик"}</strong><p>${stage === "queued" ? "Закрой другие окна BlockHarbor. После выхода из всех игр и завершения операций откроется установщик." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
       if (stage !== "launching") actions += button("updateCancelInstall", "Отменить установку", "close");
     }
     if (data.rollback && !data.pending) {
@@ -121,8 +125,8 @@
   function installDialog(rollback = false) {
     const version = rollback ? data?.rollback?.version : data?.release?.version;
     if (!version) return;
-    const running = Boolean(state.gameRunning || state.job?.busy);
-    modal(rollback ? "Вернуться к предыдущей версии" : "Установить обновление", `<p>BlockHarbor ${esc(version)} ${rollback ? "заменит текущую версию приложения" : "будет установлен после закрытия лаунчера"}. Сборки и миры останутся в текущем состоянии.</p><p>${rollback ? "Совместимость формата данных проверена. Откат приложения не откатывает изменения внутри миров." : "Перед установкой сохранятся предыдущий исполняемый файл и копия настроек. Откроется обычный мастер установки Windows."}</p><div class="actions">${button(rollback ? "rollbackAfterGame" : "installAfterGame", running ? "Установить после выхода из игры" : "Закрыть лаунчер и установить", "download", "main")}${button("closeDialog", "Отмена", "close")}</div>`);
+    const running = Boolean(state.gameRunning || state.job?.busy || state.launcherCount > 1);
+    modal(rollback ? "Вернуться к предыдущей версии" : "Установить обновление", `<p>BlockHarbor ${esc(version)} ${rollback ? "заменит текущую версию приложения" : "будет установлен после закрытия лаунчера"}. Сборки и миры останутся в текущем состоянии.</p><p>${rollback ? "Совместимость формата данных проверена. Откат приложения не откатывает изменения внутри миров." : "Перед установкой сохранятся предыдущий исполняемый файл и копия настроек. Откроется обычный мастер установки Windows."}</p>${state.launcherCount > 1 ? '<p>Для установки закрой остальные окна BlockHarbor. Запущенные игры можно завершить обычным способом.</p>' : ""}<div class="actions">${button(rollback ? "rollbackAfterGame" : "installAfterGame", running ? "Установить после завершения сеансов" : "Закрыть лаунчер и установить", "download", "main")}${button("closeDialog", "Отмена", "close")}</div>`);
   }
 
   async function dispatch(action) {
@@ -137,7 +141,7 @@
       else if (action === "installAfterGame" || action === "rollbackAfterGame") {
         closeDialog();
         await act(action === "rollbackAfterGame" ? "updateRollback" : "updateInstall", { when: "idle", acknowledge: true });
-        notice("Установка запланирована. BlockHarbor дождётся завершения игры и текущих операций.");
+        notice("Установка запланирована. Закрой остальные окна BlockHarbor и заверши игры.");
       } else {
         await act(action);
         if (action === "updateDownload") notice("Обновление добавлено в очередь загрузок.");

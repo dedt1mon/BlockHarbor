@@ -1,17 +1,59 @@
 "use strict";
 
-// These screens share the launcher's existing authenticated API and modal host.
-// Their state lives independently of the installed-build screen, so pagination,
-// background job refreshes and filters do not reset a chosen release.
+// The catalog uses the existing modal host; filters, results and chosen releases
+// stay independent of the build list and background refreshes.
 (() => {
-  const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, page: null, error: "", busy: false};
+  const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const choices = new Map();
   let searchGeneration = 0, selectedProject = null, prepared = null, shared = null, comparison = null;
-  const feature = (action, params = {}) => api("/api/feature?" + new URLSearchParams({action, ...params}));
+  let searchController = null, releaseController = null, catalogScroll = 0, returnFocus = null, catalogOpen = false;
+  const feature = (action, params = {}, options = {}) => api("/api/feature?" + new URLSearchParams({action, ...params}), options);
   const button = (attr, label, icon = "", cls = "") => `<button type="button" class="btn ${cls}" ${attr}>${icon ? ic(icon) : ""}${label}</button>`;
   const option = (value, label, selected) => `<option value="${esc(value)}"${selected === value ? " selected" : ""}>${esc(label)}</option>`;
   const empty = (message) => `<div class="empty">${esc(message)}</div>`;
   const number = new Intl.NumberFormat("ru-RU");
+
+  function discardPrepared() {
+    if (!prepared) return;
+    const token = prepared.token;
+    prepared = null;
+    act("packDiscard", {token}).catch(() => {});
+  }
+
+  function stopSearch() {
+    ++searchGeneration;
+    searchController?.abort();
+    searchController = null;
+    catalog.busy = false;
+  }
+
+  function packModal(title, content, page) {
+    if (!catalogOpen) {
+      returnFocus = document.activeElement !== document.body ? document.activeElement : document.querySelector('[data-act="packCatalog"]');
+      catalogOpen = true;
+    }
+    modal(title, `<div class="pack-dialog" data-pack-view="${page}">${content}</div>`);
+  }
+
+  function rememberCatalog() {
+    const host = document.querySelector(".pack-hub");
+    if (!host) return;
+    catalog.q = host.querySelector('[name="q"]').value;
+    catalogScroll = host.querySelector(".pack-results").scrollTop;
+  }
+
+  function openCatalog({focusProject = ""} = {}) {
+    discardPrepared();
+    releaseController?.abort();
+    releaseController = null;
+    packModal("Каталог сборок", renderPacks(), "catalog");
+    loadArt();
+    const host = document.querySelector(".pack-hub");
+    host.querySelector(".pack-results").scrollTop = catalogScroll;
+    const previous = [...host.querySelectorAll("[data-pack-project]")].find(button => button.dataset.packProject === focusProject);
+    (previous || host.querySelector('[name="q"]'))?.focus({preventScroll: true});
+    if ((!catalog.page || catalog.needsSearch) && !catalog.busy) search(catalog.nextOffset);
+  }
 
   function results() {
     if (!catalog.page) return empty(catalog.error || "Выбери фильтры или найди готовую сборку по названию.");
@@ -29,8 +71,7 @@
   }
 
   function renderPacks() {
-    return head("Готовые модпаки", button("data-pack-import", "Импорт .mrpack", "upload"), "Выбери сборку на Modrinth. Каждый модпак устанавливается отдельно, со своей версией Minecraft и настройками.") +
-      `<section class="panel pack-hub"><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Найти модпак" aria-label="Название модпака" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
+    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки с Modrinth устанавливаются отдельно, со своей версией Minecraft и настройками.</p>${button("data-pack-import", "Импорт .mrpack", "upload")}</div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Найти модпак" aria-label="Название модпака" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
       <label>Загрузчик<select class="field" data-pack-filter="loader">${option("", "Любой", catalog.loader)}${Object.entries(loaders).map(([v, label]) => option(v, label, catalog.loader)).join("")}</select></label>
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
@@ -67,7 +108,11 @@
 
   async function search(offset = 0) {
     const generation = ++searchGeneration;
-    catalog.offset = offset;
+    searchController?.abort();
+    const controller = new AbortController();
+    searchController = controller;
+    catalog.nextOffset = offset;
+    catalog.needsSearch = true;
     catalog.busy = true;
     catalog.error = "";
     // Keep the previous page visible until a replacement has arrived.
@@ -78,43 +123,58 @@
       host.querySelector(".pack-page-host").innerHTML = pager();
     }
     try {
-      const page = await feature("packSearch", {q: catalog.q, version: catalog.version, loader: catalog.loader, category: catalog.category, sort: catalog.sort, offset});
-      if (generation !== searchGeneration) return;
+      const page = await feature("packSearch", {q: catalog.q, version: catalog.version, loader: catalog.loader, category: catalog.category, sort: catalog.sort, offset}, {signal: controller.signal});
+      if (generation !== searchGeneration || controller.signal.aborted) return;
       catalog.page = page;
+      catalog.offset = offset;
+      catalog.needsSearch = false;
+      catalogScroll = 0;
     } catch (error) {
-      if (generation === searchGeneration) catalog.error = error.message;
+      if (generation === searchGeneration && !controller.signal.aborted) catalog.error = error.message;
     } finally {
       if (generation === searchGeneration) {
         catalog.busy = false;
+        searchController = null;
         updateResults();
+        document.querySelector(".pack-hub .pack-results")?.scrollTo?.(0, 0);
       }
     }
   }
 
   async function showReleases(project) {
+    rememberCatalog();
+    stopSearch();
+    discardPrepared();
+    releaseController?.abort();
+    const controller = new AbortController();
+    releaseController = controller;
     selectedProject = project;
-    modal("Выпуски модпака", '<div class="pack-release" role="status">Получаем версии…</div>');
+    packModal("Выпуски модпака", `${button('data-pack-back="catalog"', "К каталогу", "back", "pack-back")}<div class="pack-release" role="status">Получаем версии…</div>`, "releases");
     const host = document.querySelector(".pack-release");
     try {
-      const data = await feature("packVersions", {project});
-      if (!host.isConnected || selectedProject !== project) return;
-      const selected = choices.get(project) || data.versions.find(v => v.type === "release")?.id || data.versions[0]?.id;
+      const data = await feature("packVersions", {project}, {signal: controller.signal});
+      if (!host.isConnected || controller.signal.aborted || selectedProject !== project) return;
+      const selected = data.versions.find(v => v.id === choices.get(project))?.id || data.versions.find(v => v.type === "release")?.id || data.versions[0]?.id;
       if (!selected) {host.innerHTML = empty("У этого модпака нет доступных выпусков .mrpack."); return;}
       choices.set(project, selected);
       host.innerHTML = `<h3>${esc(data.title)}</h3><p>${esc(data.description)}</p><label>Выпуск<select class="field" data-pack-version="${esc(project)}">${data.versions.map(v => option(v.id, `${v.number || v.name} · ${v.minecraft.join(", ")} · ${v.loaders.join(", ")}${v.type !== "release" ? " · " + v.type : ""}`, selected)).join("")}</select></label><p class="note">Перед установкой покажем точную версию игры, размер загрузки и необязательные компоненты.</p><div class="dialog-actions">${button("data-pack-prepare", "Подготовить установку", "download", "main")}</div>`;
+      host.querySelector("select")?.focus({preventScroll: true});
     } catch (error) {
-      if (host.isConnected) host.textContent = error.message;
+      if (host.isConnected && !controller.signal.aborted) host.textContent = error.message;
+    } finally {
+      if (releaseController === controller) releaseController = null;
     }
   }
 
-  function previewPack(data) {
-    if (prepared && prepared.token !== data.token) act("packDiscard", {token: prepared.token}).catch(() => {});
+  function previewPack(data, {project = null} = {}) {
+    if (prepared && prepared.token !== data.token) discardPrepared();
     prepared = data;
-    modal("Установить модпак", `<section class="pack-preview"><h3>${esc(data.title)}</h3><p>${esc(data.summary)}</p><div class="tags"><span class="pill">Minecraft ${esc(data.minecraft)}</span><span class="pill">${esc(loaders[data.loader] || data.loader)} ${esc(data.loaderVersion || "")}</span><span class="pill">${data.files} файлов</span><span class="pill">${fmt(data.downloadBytes)} загрузка</span></div>
+    selectedProject = project;
+    packModal("Установить модпак", `${button(`data-pack-back="${project ? "releases" : "catalog"}"`, project ? "К выпускам" : "К каталогу", "back", "pack-back")}<section class="pack-preview"><h3>${esc(data.title)}</h3><p>${esc(data.summary)}</p><div class="tags"><span class="pill">Minecraft ${esc(data.minecraft)}</span><span class="pill">${esc(loaders[data.loader] || data.loader)} ${esc(data.loaderVersion || "")}</span><span class="pill">${data.files} файлов</span><span class="pill">${fmt(data.downloadBytes)} загрузка</span></div>
       <label>Название новой сборки<input class="field" data-pack-name maxlength="48" value="${esc(data.name)}"></label>
       ${data.optional.length ? `<h4>Необязательные компоненты</h4><div class="pack-optional">${data.optional.map(row => `<label><input type="checkbox" data-pack-optional value="${esc(row.path)}"><span>${esc(row.path)}</span><small>${fmt(row.size)}</small></label>`).join("")}</div>` : ""}
       ${data.unsupported ? `<p class="note">${data.unsupported} файлов только для выделенного сервера будут пропущены.</p>` : ""}
-      <p class="note">Текущие сборки останутся на месте. Файлы проверяются по размеру, SHA-1 и SHA-512.</p><div class="dialog-actions">${button("data-pack-install", "Установить отдельную сборку", "download", "main")}</div></section>`);
+      <p class="note">Текущие сборки останутся на месте. Файлы проверяются по размеру, SHA-1 и SHA-512.</p><div class="dialog-actions">${button("data-pack-install", "Установить отдельную сборку", "download", "main")}</div></section>`, "preview");
   }
 
   async function importPack() {
@@ -132,12 +192,20 @@
         if (!file) return;
         if (!file.size || file.size > 2 * 1024 ** 3) return notice("Выбери .mrpack размером до 2 ГБ.", true);
         picker.disabled = true;
+        rememberCatalog();
+        stopSearch();
+        releaseController?.abort();
+        discardPrepared();
+        packModal("Проверка модпака", `${button('data-pack-back="catalog"', "К каталогу", "back", "pack-back")}<div class="pack-import-pending" role="status">Читаем файл и проверяем состав…</div>`, "import");
+        const pendingHost = document.querySelector(".pack-import-pending");
         try {
-          notice("Проверяем файл модпака…", false, true);
           const data = await api("/api/mrpack-import", {method: "POST", headers: {"Content-Type": "application/x-modrinth-modpack+zip"}, body: file});
-          notice("");
+          if (!pendingHost.isConnected || !document.querySelector("#dialog").open) {
+            await act("packDiscard", {token: data.token});
+            return;
+          }
           previewPack(data);
-        } catch (error) {notice(error.message, true);}
+        } catch (error) {if (pendingHost.isConnected && document.querySelector("#dialog").open) pendingHost.textContent = error.message;}
         finally {picker.disabled = false;}
       });
     }
@@ -222,21 +290,24 @@
     const d = target.dataset;
     if (!Object.keys(d).some(key => key.startsWith("pack") || key.startsWith("share"))) return;
     try {
+      if (d.packBack === "catalog") return openCatalog({focusProject: selectedProject});
+      if (d.packBack === "releases") return await showReleases(selectedProject);
       if ("packImport" in d) return await importPack();
       if ("packExport" in d) return await exportPack(d.packExport || active().id);
       if (d.packPage) return await search(Math.max(0, catalog.offset + (d.packPage === "next" ? 12 : -12)));
       if (d.packProject) return await showReleases(d.packProject);
       if ("packPrepare" in d) {
         const host = target.closest(".pack-release");
+        const project = selectedProject;
         target.disabled = true;
         notice("Загружаем описание модпака…", false, true);
-        const data = await act("packPreview", {project: selectedProject, version: choices.get(selectedProject)});
+        const data = await act("packPreview", {project, version: choices.get(project)});
         notice("");
         if (!host?.isConnected || !document.querySelector("#dialog").open) {
           await act("packDiscard", {token: data.token});
           return;
         }
-        previewPack(data);
+        previewPack(data, {project});
         return;
       }
       if ("packInstall" in d) {
@@ -304,18 +375,29 @@
   });
 
   document.querySelector("#dialog").addEventListener("close", () => {
-    if (!prepared) return;
-    const token = prepared.token;
-    prepared = null;
-    act("packDiscard", {token}).catch(() => {});
+    // A native dialog's queued close event can arrive after another modal opens.
+    if (document.querySelector("#dialog").open) return;
+    rememberCatalog();
+    stopSearch();
+    releaseController?.abort();
+    releaseController = null;
+    discardPrepared();
+    if (catalogOpen) {
+      catalogOpen = false;
+      const target = returnFocus?.isConnected ? returnFocus : document.querySelector('[data-act="packCatalog"]');
+      target?.focus({preventScroll: true});
+      returnFocus = null;
+    }
   });
 
   window.PackHubUI = {
     render: renderPacks,
+    openCatalog,
     mount() {loadArt(); if (document.querySelector(".pack-hub") && !catalog.page && !catalog.busy && !catalog.error) search();},
     exportButton(profile) {return profile ? button(`data-pack-export="${esc(profile.id)}"`, "Выгрузить .mrpack", "upload") : "";},
     preview: previewPack,
     async dispatch(action) {
+      if (action === "packCatalog") {openCatalog(); return true;}
       if (action === "packImport") {await importPack(); return true;}
       if (action === "packExport") {await exportPack(active().id); return true;}
       return false;

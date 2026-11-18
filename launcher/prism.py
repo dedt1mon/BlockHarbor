@@ -58,7 +58,7 @@ def _engine(root: Path, status: Status) -> Path:
         digest = hashlib.sha256()
         size = 0
         status("Загружаем Prism с GitHub · 43,7 МБ")
-        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.0.0"})
+        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.1.0"})
         try:
             with urlopen(request, timeout=60) as source, archive.open("wb") as dest:
                 while block := source.read(512 * 1024):
@@ -212,6 +212,8 @@ def launch(
     status: Status = lambda _: None,
     *,
     on_game=None,
+    on_waiting=None,
+    on_done=None,
 ) -> subprocess.Popen:
     """Start the online instance. The CLI process is not a Minecraft lifetime handle."""
     if sys.platform != "win32":
@@ -257,5 +259,5 @@ def launch(
     if on_game is not None:
         from . import prism_watch
 
-        prism_watch.observe(data / "instances" / identifier, runtime, on_game)
+        prism_watch.observe(data / "instances" / identifier, runtime, on_game, on_waiting=on_waiting, on_done=on_done)
     return process

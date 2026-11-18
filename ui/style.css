@@ -720,6 +720,19 @@ label {
 .field:focus {
   border-color: var(--lime);
 }
+input[type="search"]:focus,
+#buildSearch:focus,
+input[data-dep-query]:focus {
+  border-color: #3a4642;
+  outline: none;
+  box-shadow: none;
+}
+input[type="search"]:focus-visible,
+#buildSearch:focus-visible,
+input[data-dep-query]:focus-visible {
+  outline: 1px solid #74807d;
+  outline-offset: 2px;
+}
 fieldset {
   border: 0;
   padding: 0;
@@ -870,11 +883,49 @@ dialog p {
   display: none;
 }
 @media (prefers-reduced-motion: no-preference) {
-  #notice:not([hidden]) {
+  body:not(.reduced-motion) :is(.btn, .nav, .icon-button, .tabs button, .linkbtn, .build-favorite-toggle, .build-remove) {
+    transition:
+      background-color 140ms ease-out,
+      border-color 140ms ease-out,
+      color 140ms ease-out,
+      opacity 140ms ease-out,
+      transform 120ms ease-out;
+  }
+  body:not(.reduced-motion) :is(.btn, .icon-button, .build-favorite-toggle, .build-remove):active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  body:not(.reduced-motion) dialog[open] {
+    animation: surface-in 160ms ease-out;
+  }
+  body:not(.reduced-motion) dialog[open]::backdrop {
+    animation: backdrop-in 140ms ease-out;
+  }
+  body:not(.reduced-motion) .catalog-filter-panel:not([hidden]) {
+    animation: surface-in 140ms ease-out;
+  }
+  body:not(.reduced-motion) #notice:not([hidden]) {
     animation: notice-in 140ms ease-out;
   }
-  #notice.busy i svg {
+  body:not(.reduced-motion) #notice.busy i svg {
     animation: notice-spin 1.5s linear infinite;
+  }
+}
+@keyframes surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 @keyframes notice-in {
@@ -1312,7 +1363,12 @@ dialog:has(.catalog) #dialogBody {
 .catalog-search {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
+}
+.catalog-search > .field,
+.catalog-search > .btn {
+  margin: 0;
+  min-height: 44px;
 }
 .catalog-search input {
   min-width: 0;

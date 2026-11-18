@@ -437,6 +437,11 @@ function buildRows(profiles) {
         '»">' +
         buildIdentity(p) +
         "</button>" +
+        '<button type="button" class="btn build-favorite-toggle" data-favorite-build="' +
+        esc(p.id) + '" aria-pressed="' + favorite + '" aria-label="' +
+        favoriteLabel + ' · ' + esc(p.name) + '" title="' + favoriteLabel + '"' +
+        (favoriteRequests.has(p.id) ? ' disabled aria-busy="true"' : "") + '>' +
+        ic("star") + "</button>" +
         '<button type="button" class="btn build-settings" data-build-settings="' +
         esc(p.id) +
         '" aria-label="Настройки сборки «' +
@@ -444,11 +449,6 @@ function buildRows(profiles) {
         '»" title="Настройки сборки">' +
         ic("gear") +
         "<span>Настройки</span></button>" +
-        '<button type="button" class="btn build-favorite-toggle" data-favorite-build="' +
-        esc(p.id) + '" aria-pressed="' + favorite + '" aria-label="' +
-        favoriteLabel + ' · ' + esc(p.name) + '" title="' + favoriteLabel + '"' +
-        (favoriteRequests.has(p.id) ? ' disabled aria-busy="true"' : "") + '>' +
-        ic("star") + "</button>" +
         '<button type="button" class="btn build-settings" data-export-build="' +
         esc(p.id) +
         '" title="Выгрузить сборку в ZIP" aria-label="Выгрузить сборку «' +

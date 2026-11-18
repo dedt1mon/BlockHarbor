@@ -304,7 +304,7 @@ class UpdateService:
     }
     JOBS = {"updateCheck"}
 
-    def __init__(self, store, transfers, current_version="2.4.7", *, can_install=lambda: False, request_shutdown=None,
+    def __init__(self, store, transfers, current_version="2.4.8", *, can_install=lambda: False, request_shutdown=None,
                  namespace="", install_guard=None, handoff_metadata=None, cancel_handoff=None):
         version_key(current_version)
         self.store, self.transfers = store, transfers

@@ -74,7 +74,7 @@
   }
 
   function renderPacks() {
-    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки с Modrinth устанавливаются отдельно, со своей версией Minecraft и настройками.</p>${button("data-pack-import", "Импорт .mrpack", "upload")}</div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Найти модпак" aria-label="Название модпака" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
+    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки с Modrinth устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Найти модпак" aria-label="Название модпака" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
       <label>Загрузчик<select class="field" data-pack-filter="loader">${option("", "Любой", catalog.loader)}${Object.entries(loaders).map(([v, label]) => option(v, label, catalog.loader)).join("")}</select></label>
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
@@ -182,41 +182,6 @@
       <p class="note">Текущие сборки останутся на месте. Файлы проверяются по размеру, SHA-1 и SHA-512.</p><div class="dialog-actions">${button("data-pack-install", "Установить отдельную сборку", "download", "main")}</div></section>`, "preview");
   }
 
-  async function importPack() {
-    let picker = document.querySelector("#mrpackPick");
-    if (!picker) {
-      picker = document.createElement("input");
-      picker.type = "file";
-      picker.id = "mrpackPick";
-      picker.accept = ".mrpack,application/x-modrinth-modpack+zip";
-      picker.hidden = true;
-      document.body.append(picker);
-      picker.addEventListener("change", async () => {
-        const file = picker.files[0];
-        picker.value = "";
-        if (!file) return;
-        if (!file.size || file.size > 2 * 1024 ** 3) return notice("Выбери .mrpack размером до 2 ГБ.", true);
-        picker.disabled = true;
-        rememberCatalog();
-        stopSearch();
-        releaseController?.abort();
-        discardPrepared();
-        packModal("Проверка модпака", `${button('data-pack-back="catalog"', "К каталогу", "back", "pack-back")}<div class="pack-import-pending" role="status">Читаем файл и проверяем состав…</div>`, "import");
-        const pendingHost = document.querySelector(".pack-import-pending");
-        try {
-          const data = await api("/api/mrpack-import", {method: "POST", headers: {"Content-Type": "application/x-modrinth-modpack+zip"}, body: file});
-          if (!pendingHost.isConnected || !document.querySelector("#dialog").open) {
-            await act("packDiscard", {token: data.token});
-            return;
-          }
-          previewPack(data);
-        } catch (error) {if (pendingHost.isConnected && document.querySelector("#dialog").open) pendingHost.textContent = error.message;}
-        finally {picker.disabled = false;}
-      });
-    }
-    picker.click();
-  }
-
   document.addEventListener("submit", event => {
     if (!event.target.matches("[data-pack-search]")) return;
     event.preventDefault();
@@ -241,7 +206,6 @@
     try {
       if (d.packBack === "catalog") return openCatalog({focusProject: selectedProject});
       if (d.packBack === "releases") return await showReleases(selectedProject);
-      if ("packImport" in d) return await importPack();
       if (d.packPage) return await search(Math.max(0, catalog.offset + (d.packPage === "next" ? 12 : -12)));
       if (d.packProject) return await showReleases(d.packProject);
       if ("packPrepare" in d) {
@@ -306,7 +270,6 @@
     preview: previewPack,
     async dispatch(action) {
       if (action === "packCatalog") {openCatalog(); return true;}
-      if (action === "packImport") {await importPack(); return true;}
       return false;
     },
   };

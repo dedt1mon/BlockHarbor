@@ -17,6 +17,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from . import lifecycle
+
 from .modfiles import file_hash as _file_hash
 from .modfiles import file_stamp as _file_stamp
 from .modfiles import mod_info as _mod_info
@@ -170,6 +172,7 @@ def installed(instance_dir, version: str, loader: str, *, sizes=None) -> bool:
 
 
 def _obtain(asset, cache, status):
+    lifecycle.check()
     bundled = _BUNDLED / asset.filename
     if _verified(bundled, asset):
         return bundled
@@ -178,10 +181,11 @@ def _obtain(asset, cache, status):
     if _verified(target, asset):
         return target
     title = _TITLES[asset.role]
-    headers = {"User-Agent": "BlockHarbor/2.1.0", "Accept": "application/octet-stream"}
+    headers = {"User-Agent": "BlockHarbor/2.2.0", "Accept": "application/octet-stream"}
     attempts = list(asset.urls)
     reason = "Проверь соединение с сервером загрузки."
     for number, url in enumerate(attempts):
+        lifecycle.check()
         status(
             f"Загружаем {title} для Steam…"
             if number == 0
@@ -194,7 +198,7 @@ def _obtain(asset, cache, status):
                 dir=cache, suffix=".part", delete=False
             ) as out:
                 tmp = Path(out.name)
-                with urlopen(Request(url, headers=headers), timeout=40) as source:
+                with lifecycle.response(urlopen(Request(url, headers=headers), timeout=40)) as source:
                     remaining = asset.size
                     while remaining:
                         block = source.read(min(256 * 1024, remaining))
@@ -212,7 +216,8 @@ def _obtain(asset, cache, status):
             if not _verified(tmp, asset):
                 reason = "Контрольная сумма файла не совпадает с опубликованной."
                 continue
-            os.replace(tmp, target)
+            with lifecycle.guard():
+                os.replace(tmp, target)
             return target
         except HTTPError as exc:
             exc.close()
@@ -286,18 +291,19 @@ def ensure(
                 raise ValueError(
                     "Во время подготовки изменилось содержимое папки mods. Повтори запуск."
                 )
-            written = []
-            try:
-                for asset in missing:
-                    if asset.role in active:
-                        continue
-                    output = mods / asset.filename
-                    _publish(staged[asset.role], output)
-                    written.append((output, asset))
-                    active[asset.role] = output
-            except OSError:
-                for file, asset in reversed(written):
-                    if _verified(file, asset):
-                        file.unlink()
-                raise
+            with lifecycle.guard():
+                written = []
+                try:
+                    for asset in missing:
+                        if asset.role in active:
+                            continue
+                        output = mods / asset.filename
+                        _publish(staged[asset.role], output)
+                        written.append((output, asset))
+                        active[asset.role] = output
+                except OSError:
+                    for file, asset in reversed(written):
+                        if _verified(file, asset):
+                            file.unlink()
+                    raise
         return [active[asset.role] for asset in assets]

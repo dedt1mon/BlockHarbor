@@ -9,12 +9,14 @@ import json
 import os
 import secrets
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +29,7 @@ from launcher import (
     distances,
     e4steam,
     friends,
+    lifecycle,
     modrinth,
     room_bridge,
     skin_sync,
@@ -34,7 +37,7 @@ from launcher import (
     steam_network,
 )
 from launcher.memory import automatic_heap
-from launcher.sessions import SessionBusy, SessionCoordinator, WindowStore
+from launcher.sessions import SessionBusy, SessionCoordinator, StartupCancelled, WindowStore
 from launcher.store import (
     FALLBACK_VERSIONS,
     KINDS,
@@ -93,6 +96,18 @@ def default_root():
 
 class App:
     def __init__(self, root):
+        self.scope = lifecycle.CancellationScope()
+        self.closing = self.scope.event
+        self.lifecycle_lock = threading.RLock()
+        self.closed = threading.Event()
+        self.cleanup_started = False
+        self.cleanup_thread = None
+        self.close_reason = None
+        self.workers = set()
+        self.timers = set()
+        self.page = ""
+        self.page_close = None
+        self.shutdown = None
         self.coordinator = SessionCoordinator(root)
         try:
             self._initialize(root)
@@ -104,7 +119,7 @@ class App:
             except SessionBusy:
                 pass
         except BaseException:
-            self.coordinator.close()
+            self.close()
             raise
 
     def _initialize(self, root):
@@ -142,7 +157,8 @@ class App:
         self.packs = PackHub(self.store, self.transfers)
         self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running)
         self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update,
-                                     namespace=self.coordinator.namespace, install_guard=self.coordinator.update_guard, handoff_metadata=self.coordinator.handoff)
+                                     namespace=self.coordinator.namespace, install_guard=self.coordinator.update_guard, handoff_metadata=self.coordinator.handoff,
+                                     cancel_handoff=self.coordinator.cancel_update)
         self.features = (self.care, self.experience, self.performance, self.packs, self.sharing, self.updates)
         self.initial_recovery = False
         self.coordinator.recover = self._recover_shared_state
@@ -159,8 +175,158 @@ class App:
             self.care._recover()
             self.initial_recovery = True
 
-    def close(self):
-        self.coordinator.close()
+    def _signal_close(self, reason):
+        with self.lifecycle_lock:
+            if self.close_reason is not None:
+                return False
+            self.close_reason = reason if reason in {"user", "update"} else "user"
+            for timer in self.timers:
+                timer.cancel()
+            self.timers.clear()
+            self.page_close = None
+        self.scope.cancel()
+        for component in (getattr(self, "transfers", None), getattr(self, "updates", None)):
+            owned = getattr(component, "scope", None)
+            if isinstance(owned, lifecycle.CancellationScope):
+                owned.cancel()
+        return True
+
+    def request_close(self, reason="user"):
+        """Immediately stop accepting work; finish cleanup outside HTTP/monitor locks."""
+        if not self._signal_close(reason):
+            return False
+        thread = threading.Thread(target=self.close, name="blockharbor-close", daemon=True)
+        thread.start()
+        return True
+
+    def close(self, reason="user", timeout=6):
+        """Idempotent shutdown of this window's work, leaving live games untouched."""
+        self._signal_close(reason)
+        with self.lifecycle_lock:
+            first = not self.cleanup_started
+            if first:
+                self.cleanup_started = True
+                self.cleanup_thread = threading.current_thread()
+            same_thread = self.cleanup_thread is threading.current_thread()
+        if not first:
+            if not same_thread:
+                self.closed.wait(max(0, timeout))
+            return
+        deadline = time.monotonic() + max(0, timeout)
+
+        def remaining(limit):
+            return min(limit, max(0, deadline - time.monotonic()))
+
+        def cleanup(callback):
+            try:
+                callback()
+            except Exception:
+                # A vanished temporary directory or failed history write must
+                # not skip cancellation of the remaining owned resources.
+                pass
+
+        try:
+            if self.shutdown:
+                # BaseServer.shutdown must run off its serve_forever thread and
+                # must never block cleanup when startup failed before serving.
+                threading.Thread(target=self.shutdown, name="blockharbor-http-stop", daemon=True).start()
+            updates = getattr(self, "updates", None)
+            if updates and hasattr(updates, "close"):
+                cleanup(lambda: updates.close(reason=self.close_reason, timeout=remaining(2)))
+            transfers = getattr(self, "transfers", None)
+            if transfers:
+                cleanup(lambda: transfers.close(timeout=0))
+            metrics = getattr(self, "metrics", None)
+            if metrics and hasattr(metrics, "close"):
+                cleanup(lambda: metrics.close(timeout=remaining(0.5)))
+            downloads = getattr(self, "downloads", None)
+            if downloads:
+                cleanup(downloads.close)
+            window = getattr(self, "window", None)
+            if window:
+                cleanup(lambda: window.close(timeout=remaining(0.5)))
+            getattr(self, "pending_world_backups", set()).clear()
+            self.auth_generation = getattr(self, "auth_generation", 0) + 1
+            with self.lifecycle_lock:
+                workers = tuple(self.workers | self.scope.active_threads())
+            for thread in workers:
+                if thread is not threading.current_thread():
+                    thread.join(remaining(4))
+            if transfers:
+                cleanup(lambda: transfers.close(timeout=remaining(0.5)))
+        finally:
+            # An uninterruptible OS DNS/file call may briefly retain a daemon
+            # worker. Do not release its file transaction lock under that worker;
+            # the process exits normally, or this owner releases it as it returns.
+            with self.lifecycle_lock:
+                remaining_workers = tuple(t for t in self.workers | self.scope.active_threads() if t is not threading.current_thread() and t.is_alive())
+            coordinator = getattr(self, "coordinator", None)
+            if coordinator:
+                if remaining_workers:
+                    def release():
+                        for thread in remaining_workers:
+                            thread.join()
+                        coordinator.close()
+                    threading.Thread(target=release, name="blockharbor-session-close", daemon=True).start()
+                else:
+                    coordinator.close()
+            self.closed.set()
+
+    @contextmanager
+    def activity(self):
+        """Bind HTTP/job work to the current window and track its cleanup."""
+        thread = threading.current_thread()
+        with self.lifecycle_lock:
+            self.scope.check()
+            existing = thread in self.workers
+            self.workers.add(thread)
+        try:
+            with lifecycle.bind(self.scope):
+                yield
+        finally:
+            if not existing:
+                with self.lifecycle_lock:
+                    self.workers.discard(thread)
+
+    def later(self, delay, callback):
+        def run():
+            try:
+                with self.activity():
+                    callback()
+            except lifecycle.OperationCancelled:
+                pass
+            finally:
+                with self.lifecycle_lock:
+                    self.timers.discard(timer)
+        timer = threading.Timer(delay, run)
+        timer.daemon = True
+        with self.lifecycle_lock:
+            self.scope.check()
+            self.timers.add(timer)
+            timer.start()
+        return timer
+
+    def page_event(self, event, page):
+        if (event not in {"opened", "closed"} or not isinstance(page, str)
+                or len(page) != 24 or any(c not in "0123456789abcdef" for c in page)):
+            raise ValueError("Некорректное событие окна.")
+        with self.lifecycle_lock:
+            self.scope.check()
+            if event == "opened":
+                self.page = page
+                self.page_close = None
+                self.last_seen = time.monotonic()
+            elif page == self.page:
+                self.page_close = (page, time.monotonic() + 1.5)
+        return {"ok": True}
+
+    def window_closed(self):
+        if self.window.closed():
+            return True
+        with self.lifecycle_lock:
+            pending = self.page_close
+        return bool(pending and pending[0] == self.page and time.monotonic() >= pending[1]
+                    and self.window.page_closed())
 
     def __del__(self):
         coordinator = getattr(self, "coordinator", None)
@@ -174,11 +340,15 @@ class App:
                 db.execute("INSERT OR REPLACE INTO build_details(profile,description,group_name,color,cover) VALUES(?,?,?,?,?)", (destination, *row))
 
     def _can_update(self):
+        if self.closing.is_set() or self.transfers.active():
+            return False
         state = self.coordinator.snapshot()
         return (state["launcherCount"] <= 1 and not state["runningProfiles"] and not self.game_running()
                 and not self.job_snapshot()["busy"] and not any(p.poll() is None for p in self.prism_launches.values()))
 
     def check_updates_in_background(self):
+        if self.closing.is_set():
+            return
         if self.store.get("checkUpdatesOnStart", "1") != "1" or 0 <= time.time() - self.updates.checked < 24 * 3600:
             return
         try:
@@ -198,11 +368,20 @@ class App:
         self.experience.notify("Управление передано установщику BlockHarbor.", "info")
         # Give the HTTP response and helper handshake time to finish.
         def finish():
-            try:
-                self.window.close()
-            finally:
-                self.shutdown()
-        threading.Timer(0.75, finish).start()
+            if self.closing.is_set() or not self.updates.handoff_ready:
+                return
+            if self.window.closed():
+                self.request_close(reason="user")
+                return
+            with self.lifecycle_lock:
+                leaving_page = self.page_close is not None
+            if leaving_page:
+                # Give reload's new opened event a chance to arrive. A real
+                # fallback X is handled by the monitor as a user cancellation.
+                self.later(0.2, finish)
+                return
+            self.request_close(reason="update")
+        self.later(0.75, finish)
 
     def require_profile_idle(self, pid):
         self.store.profile(pid)
@@ -214,15 +393,17 @@ class App:
         require_idle_files(self.store.folder(pid))
 
     def require_mutations_allowed(self):
+        self.scope.check()
         if self.updates.pending and self.updates.pending.get("stage") in ("preparing", "launching"):
             raise ValueError("Подготавливается обновление BlockHarbor. Дождись установщика или отмени подготовку в центре загрузок.")
 
     def feature_action(self, action, params, *, read=False):
+        self.scope.check()
         service = next((item for item in self.features if action in item.ACTIONS), None)
         reads = getattr(service, "READ_ACTIONS", {"updateState"} if service is self.updates else set())
         # Read-only queries and cancel controls stay responsive during downloads.
         concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
-                      "transferCancel", "transferClear", "updateCancelInstall", "updateState"}
+                      "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState"}
         if read or action in reads | concurrent:
             return self._feature_action(action, params, read=read)
         with self.coordinator.operation():
@@ -241,11 +422,12 @@ class App:
         if read and action not in reads:
             raise ValueError("Это действие требует запроса на изменение.")
         # Downloads are independent of Minecraft and must remain cancellable.
-        concurrent = reads | {"updateDownload", "updateCancelInstall", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications"}
+        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications"}
         if action in reads or action in {"packPreview", "shareCreate", "shareInvite", "shareInspect", "shareCompare"}:
             return service.handle(action, params)
         with self.lock:
-            if action not in {"updateCancelInstall", "transferCancel", "transferClear"}:
+            self.scope.check()
+            if action not in {"updateCancelInstall", "updateAutomatic", "transferCancel", "transferClear"}:
                 self.require_mutations_allowed()
             if self.job_snapshot()["busy"] and action not in concurrent:
                 raise ValueError("Дождись завершения текущей операции.")
@@ -376,6 +558,8 @@ class App:
                 self.games[profile["id"]] = (process, profile["name"])
             self.coordinator.attach(profile["id"], process)
             self.game_exit = None
+            if self.closing.is_set():
+                return
             if type(getattr(process, "pid", None)) is int:
                 self.metrics.start(profile["id"], process)
             if process.poll() is None and not self.parked_for_game:
@@ -390,6 +574,8 @@ class App:
     def _prism_done(self, pid):
         with self.process_lock:
             self.prism_waiting.pop(pid, None)
+            if self.closing.is_set():
+                return
             if pid not in self.prism_games:
                 self.prism_launches.pop(pid, None)
                 self.coordinator.release(pid)
@@ -412,7 +598,11 @@ class App:
     def background_maintenance(self):
         # Called by the session monitor after game process state has been observed.
         # Backup I/O lives in the normal worker, never in the state/poll endpoint.
-        with self.lock:
+        if self.closing.is_set():
+            return
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
             if self.pending_world_backups and not self.job_snapshot()["busy"] and not self.game_running():
                 pid = self.pending_world_backups.pop()
                 if any(p["id"] == pid for p in self.store.all()):
@@ -420,10 +610,19 @@ class App:
                         self.start_job(lambda status: self.care.backup_after_game(pid, status) or "Копии миров актуальны.", profile=pid)
                     else:
                         self.pending_world_backups.add(pid)
-        self.updates.monitor_pending()
+        finally:
+            self.lock.release()
+        if not self.closing.is_set():
+            self.updates.tick_auto()
+            self.updates.monitor_pending()
 
     def process_state(self):
         with self.process_lock:
+            if self.closing.is_set():
+                processes = [self.child] if self.child is not None else []
+                processes += [row[0] for row in self.games.values()]
+                processes += [row[0] for row in self.prism_games.values()]
+                return {"gameRunning": any(process.poll() is None for process in processes), "gameExit": self.game_exit}
             if self.child is not None:
                 code = self.child.poll()
                 if code is not None:
@@ -487,16 +686,21 @@ class App:
             self.job = {"id": jid, "busy": True, "ok": True, "message": "Подготовка…"}
 
         def status(msg):
+            self.scope.check()
             with self.jobs_lock:
                 self.job["message"] = str(msg)[:700]
 
         def worker():
             try:
-                with self.coordinator.operation(wait=True, status=status):
-                    if profile:
-                        self.require_profile_idle(profile)
-                    result = fn(status)
+                with self.activity():
+                    with self.coordinator.operation(wait=True, status=status):
+                        self.scope.check()
+                        if profile:
+                            self.require_profile_idle(profile)
+                        result = fn(status)
                 final = {"message": result or "Готово.", "ok": True, "busy": False}
+            except lifecycle.OperationCancelled:
+                final = {"message": "Лаунчер закрыт. Операция остановлена.", "ok": False, "busy": False, "cancelled": True}
             except modrinth.NeedsReview as exc:
                 final = {
                     "message": str(exc),
@@ -511,13 +715,27 @@ class App:
                     "busy": False,
                 }
             try:
-                self.experience.notify(final["message"], "success" if final["ok"] else "error")
+                if not self.closing.is_set():
+                    self.experience.notify(final["message"], "success" if final["ok"] else "error")
             except (OSError, sqlite3.Error):
                 pass  # A history failure must not hide the operation's result.
             with self.jobs_lock:
                 self.job.update(final)
 
-        threading.Thread(target=worker, daemon=True).start()
+        def owned_worker():
+            try:
+                # Keep completion/notification cleanup inside the owned lifetime,
+                # not just the main file transaction above.
+                with self.activity():
+                    worker()
+            except lifecycle.OperationCancelled:
+                with self.jobs_lock:
+                    self.job.update(message="Лаунчер закрыт. Операция остановлена.", ok=False, busy=False, cancelled=True)
+
+        with self.lifecycle_lock:
+            self.scope.check()
+            thread = threading.Thread(target=owned_worker, daemon=True, name="blockharbor-operation")
+            thread.start()
         return {"job": jid}
 
     def save_appearance(self, params, uploaded):
@@ -627,6 +845,7 @@ class App:
         return self.start_job(apply, profile=pid)
 
     def action(self, action, p):
+        self.scope.check()
         if action == "diagnostics" or any(action in service.ACTIONS for service in self.features):
             return self.feature_action(action, p)
         # Window-specific selection can change while another window prepares a
@@ -955,7 +1174,7 @@ class App:
         elif action == "play":
             from launcher import game
 
-            if self.updates.pending:
+            if self.updates.pending and (not self.updates.pending.get("automatic") or self.updates.pending.get("stage") in {"preparing", "launching"}):
                 raise ValueError("Запланировано обновление лаунчера. Отмени его в «Настройки → Загрузки и обновления» перед новым запуском игры.")
 
             pro = s.profile(p["id"])
@@ -1082,6 +1301,21 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(45)
 
+    def handle(self):
+        def abort():
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        remove = self.app.scope.on_cancel(abort)
+        try:
+            with self.app.activity():
+                super().handle()
+        except (lifecycle.OperationCancelled, BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            remove()
+
     @property
     def app(self):
         return self.server.app
@@ -1169,7 +1403,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.end_headers()
-                    shutil.copyfileobj(file, self.wfile, 1024 * 1024)
+                    while block := file.read(1024 * 1024):
+                        lifecycle.check()
+                        self.wfile.write(block)
                 return
             if content_icon:
                 try:
@@ -1264,6 +1500,20 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(exc)})
 
     def do_POST(self):
+        if urlsplit(self.path).path == "/api/window":
+            if not self.trusted(False):
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "-1"))
+                if not 0 < length <= 1024:
+                    raise ValueError("Некорректное событие окна.")
+                data = json.loads(self.rfile.read(length))
+                supplied = data.get("token")
+                if not isinstance(supplied, str) or not hmac.compare_digest(supplied.encode(), self.app.token.encode()):
+                    return self.reply(403, {"error": "Сессия окна недействительна."})
+                return self.reply(200, self.app.page_event(data.get("event"), data.get("page")))
+            except (ValueError, TypeError, AttributeError):
+                return self.reply(400, {"error": "Некорректное событие окна."})
         if not self.trusted(True):
             return
         try:
@@ -1431,7 +1681,6 @@ def run():
     parser.add_argument("--profile", help="Open a build from its desktop shortcut")
     args = parser.parse_args()
     app = App(args.data)
-    stop = threading.Event()
     monitor = None
     try:
         if args.profile:
@@ -1443,13 +1692,20 @@ def run():
             url = "http://127.0.0.1:" + str(server.server_port) + "/#" + app.token
 
             def watch():
-                while not stop.wait(0.25):
-                    running = app.game_running()
-                    app.background_maintenance()
-                    pending_prism = bool(app.prism_waiting) or any(p.poll() is None for p in app.prism_launches.values())
-                    if not (args.no_browser or running or pending_prism or app.job_snapshot()["busy"]) and (app.window.closed() or time.monotonic() - app.last_seen > 180):
-                        server.shutdown()
+                while not app.closing.wait(0.2):
+                    # Explicit X has priority over games, queues and update waits.
+                    # A hidden native frame is still alive and does not enter here.
+                    if not args.no_browser and app.window_closed():
+                        app.request_close(reason="user")
                         return
+                    try:
+                        with app.activity():
+                            app.game_running()
+                            app.background_maintenance()
+                    except lifecycle.OperationCancelled:
+                        return
+                    except (OSError, ValueError, sqlite3.Error):
+                        pass  # A maintenance error must not disable X detection.
 
             monitor = threading.Thread(target=watch, daemon=True, name="blockharbor-session")
             monitor.start()
@@ -1457,20 +1713,20 @@ def run():
                 print(url, flush=True)
             else:
                 app.window.show(url)
-                checker = threading.Timer(3, app.check_updates_in_background)
-                checker.daemon = True
-                checker.start()
-            server.serve_forever()
+                app.updates.start_auto()
+            if not app.closing.is_set():
+                server.serve_forever(poll_interval=0.2)
     finally:
-        stop.set()
+        app.close()
         if monitor:
             monitor.join(timeout=2)
-        app.close()
 
 
 if __name__ == "__main__":
     try:
         run()
+    except StartupCancelled:
+        pass
     except Exception as e:
         if sys.platform != "win32":
             raise

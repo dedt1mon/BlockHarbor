@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
+from . import lifecycle
 from .skins import SkinError, _write_inside, validate_nickname
 
 
@@ -88,12 +89,13 @@ _INSTALL_LOCK = threading.RLock()
 
 
 def _download(release: ModRelease) -> bytes:
+    lifecycle.check()
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/2.1.0 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": "BlockHarbor/2.2.0 (Minecraft Java desktop launcher)"},
     )
     try:
-        with urlopen(request, timeout=30) as response:
+        with lifecycle.response(urlopen(request, timeout=30)) as response:
             raw = response.read(release.size + 1)
     except OSError as exc:
         raise SkinError(
@@ -149,6 +151,7 @@ def _ensure_mods(instance: Path, releases: tuple[ModRelease, ...]) -> list[Path]
     targets = []
     downloads = []
     for release in releases:
+        lifecycle.check()
         matches = [(p, meta) for p, meta in active if meta.get("id") in release.mod_ids]
         if len(matches) > 1:
             raise SkinError(
@@ -171,22 +174,35 @@ def _ensure_mods(instance: Path, releases: tuple[ModRelease, ...]) -> list[Path]
         targets.append(path)
         downloads.append((path, _download(release)))
 
-    # Stage verified bytes and publish complete JARs without replacing user files.
-    for target, blob in downloads:
-        temp = None
-        try:
+    # Stage the full set before a short commit. Closing the window can cancel
+    # staging, but cannot interrupt publication between its dependent JARs.
+    staged = []
+    try:
+        for target, blob in downloads:
+            lifecycle.check()
             with tempfile.NamedTemporaryFile(
                 dir=mods, prefix=".download-", delete=False
             ) as out:
                 temp = Path(out.name)
+                staged.append((temp, target, blob))
                 out.write(blob)
-            if os.name == "nt":
-                os.rename(temp, target)  # Windows rename fails when the target exists.
-            else:
-                os.link(temp, target)
-        finally:
-            if temp:
-                temp.unlink(missing_ok=True)
+        with lifecycle.guard():
+            written = []
+            try:
+                for temp, target, blob in staged:
+                    if os.name == "nt":
+                        os.rename(temp, target)  # Windows fails if the target exists.
+                    else:
+                        os.link(temp, target)
+                    written.append((target, blob))
+            except OSError:
+                for target, blob in reversed(written):
+                    if not target.is_symlink() and target.is_file() and target.read_bytes() == blob:
+                        target.unlink()
+                raise
+    finally:
+        for temp, _, _ in staged:
+            temp.unlink(missing_ok=True)
     return targets
 
 

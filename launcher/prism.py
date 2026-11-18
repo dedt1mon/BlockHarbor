@@ -14,7 +14,7 @@ from typing import Callable
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import game
+from . import game, lifecycle
 from .store import input_profile
 
 # Official portable MinGW distribution includes Qt and its C++ runtime. Original
@@ -44,6 +44,7 @@ Status = Callable[[str], None]
 
 
 def _engine(root: Path, status: Status) -> Path:
+    lifecycle.check()
     runtime = root / f"engine-{RELEASE}"
     if runtime.exists():
         if all((runtime / name).is_file() for name in REQUIRED):
@@ -58,10 +59,11 @@ def _engine(root: Path, status: Status) -> Path:
         digest = hashlib.sha256()
         size = 0
         status("Загружаем Prism с GitHub · 43,7 МБ")
-        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.1.0"})
+        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.2.0"})
         try:
-            with urlopen(request, timeout=60) as source, archive.open("wb") as dest:
+            with lifecycle.response(urlopen(request, timeout=25)) as source, archive.open("wb") as dest:
                 while block := source.read(512 * 1024):
+                    lifecycle.check()
                     size += len(block)
                     if size > SIZE:
                         raise ValueError(
@@ -82,8 +84,11 @@ def _engine(root: Path, status: Status) -> Path:
             if any(name not in zipped.namelist() for name in REQUIRED):
                 raise ValueError("Официальный архив Prism неполон.")
             # Verify the full upstream archive before extracting any member.
-            zipped.extractall(stage)
-        stage.rename(runtime)
+            for item in zipped.infolist():
+                lifecycle.check()
+                zipped.extract(item, stage)
+        with lifecycle.guard():
+            stage.rename(runtime)
     return runtime / "prismlauncher.exe"
 
 
@@ -162,6 +167,7 @@ def _link_game(folder: Path, destination: Path) -> None:
 def _instance(
     data: Path, folder: Path, name: str, version: str, loader: str, memory_mb: int
 ) -> str:
+    lifecycle.check()
     # An immutable wrapper avoids editing Prism's settings while its process may
     # still hold the instance in memory. Every wrapper shares the real gameDir.
     identity = json.dumps(
@@ -198,7 +204,8 @@ def _instance(
             f"[General]\nInstanceType=OneSix\nname=BlockHarbor · {name}\nOverrideMemory=true\nMinMemAlloc=512\nMaxMemAlloc={memory_mb}\n",
             "utf-8",
         )
-        stage.rename(destination)
+        with lifecycle.guard():
+            stage.rename(destination)
     return instance_id
 
 
@@ -216,6 +223,7 @@ def launch(
     on_done=None,
 ) -> subprocess.Popen:
     """Start the online instance. The CLI process is not a Minecraft lifetime handle."""
+    lifecycle.check()
     if sys.platform != "win32":
         raise RuntimeError(
             "Готовая интеграция Microsoft через Prism предназначена для Windows x64."
@@ -237,13 +245,14 @@ def launch(
     identifier = _instance(data, folder, name, version, loader, memory_mb)
     status("Запускаем сборку через Prism. При первом запуске войди в Microsoft.")
     try:
-        process = subprocess.Popen(
-            [str(runtime), "--dir", str(data), "--launch", identifier],
-            cwd=runtime.parent,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        with lifecycle.guard():
+            process = subprocess.Popen(
+                [str(runtime), "--dir", str(data), "--launch", identifier],
+                cwd=runtime.parent,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
     except OSError as exc:
         raise RuntimeError(
             "Windows не удалось запустить компонент Prism. Открой диагностический журнал BlockHarbor и проверь разрешения каталога приложения."

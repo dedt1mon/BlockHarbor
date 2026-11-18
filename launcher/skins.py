@@ -17,6 +17,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image
 
+from . import lifecycle
+
 Model = Literal["classic", "slim"]
 _PROFILE = "https://api.minecraftservices.com/minecraft/profile"
 _PNG = b"\x89PNG\r\n\x1a\n"
@@ -134,6 +136,7 @@ class _NoRedirects(HTTPRedirectHandler):
 def _profile_request(
     route: str, token: str, method: str, data: bytes, content_type: str | None = None
 ) -> None:
+    lifecycle.check()
     if not token or any(c.isspace() for c in token):
         raise SkinError("Войдите в профиль Minecraft Java и повторите.")
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
@@ -141,7 +144,7 @@ def _profile_request(
         headers["Content-Type"] = content_type
     request = Request(_PROFILE + route, headers=headers, method=method, data=data)
     try:
-        with build_opener(_NoRedirects()).open(request, timeout=30) as response:
+        with lifecycle.response(build_opener(_NoRedirects()).open(request, timeout=30)) as response:
             if response.status not in (200, 204):
                 raise SkinError(
                     f"Minecraft вернул неожиданный статус HTTP {response.status}."

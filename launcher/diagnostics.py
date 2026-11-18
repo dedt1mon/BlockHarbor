@@ -11,9 +11,12 @@ import io
 import json
 import os
 import re
+import stat
+import subprocess
 import threading
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import compatibility
@@ -21,6 +24,39 @@ from .store import KINDS
 from .version import VERSION
 
 MAX_LOG = 2 * 1024 * 1024
+
+
+@contextmanager
+def game_stderr(folder):
+    """Give Java its own log handle so closing Python cannot break a pipe.
+
+    A fresh launch truncates the prior log. Reports still read a bounded tail;
+    no launcher thread has to keep writing or pumping after a manual X.
+    """
+    folder = Path(folder).resolve()
+    target = folder / "logs" / "launcher-stderr.log"
+    stream = None
+    try:
+        if target.parent.resolve() != folder / "logs" or target.is_symlink():
+            raise OSError("Game log directory is redirected")
+        target.parent.mkdir(exist_ok=True)
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        stream = os.fdopen(descriptor, "wb")
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or not os.path.samestat(info, target.lstat())
+                or target.parent.resolve() != folder / "logs"):
+            raise OSError("Game log file is redirected")
+        stream.truncate(0)
+    except OSError:
+        if stream:
+            stream.close()
+        stream = None
+    try:
+        yield stream if stream is not None else subprocess.DEVNULL
+    finally:
+        if stream:
+            stream.close()
 
 
 def capture_stderr(stream, folder):
@@ -186,21 +222,29 @@ class SessionMetrics:
     def __init__(self, store):
         self.store, self.lock = store, threading.RLock()
         self.sessions, self.preparing = {}, {}
+        self.stop = threading.Event()
+        self.threads = set()
         with store.connection() as db:
             db.execute("CREATE TABLE IF NOT EXISTS game_sessions(id INTEGER PRIMARY KEY, profile TEXT, started REAL, duration REAL, preparation REAL, peak_rss INTEGER, exit_code INTEGER)")
 
     def prepare(self, pid):
         with self.lock:
+            if self.stop.is_set():
+                return
             self.preparing[pid] = time.monotonic()
 
     def start(self, pid, process):
         now = time.monotonic()
         with self.lock:
+            if self.stop.is_set():
+                return
             self.sessions[pid] = {"pid": int(process.pid), "started": time.time(), "clock": now, "preparation": round(now - self.preparing.pop(pid, now), 2), "peak": 0, "rss": None}
-        threading.Thread(target=self._sample, args=(pid,), daemon=True, name="blockharbor-metrics").start()
+            thread = threading.Thread(target=self._sample, args=(pid,), daemon=True, name="blockharbor-metrics")
+            self.threads.add(thread)
+            thread.start()
 
     def _sample(self, pid):
-        while True:
+        while not self.stop.is_set():
             with self.lock:
                 row = self.sessions.get(pid)
                 if not row:
@@ -216,13 +260,26 @@ class SessionMetrics:
                     return
                 current["rss"] = rss
                 current["peak"] = max(current["peak"], rss or 0)
-            time.sleep(3)
+            self.stop.wait(3)
+
+    def close(self, timeout=0.5):
+        self.stop.set()
+        with self.lock:
+            threads = tuple(self.threads)
+            self.sessions.clear()
+            self.preparing.clear()
+        deadline = time.monotonic() + max(0, timeout)
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(max(0, deadline - time.monotonic()))
+        with self.lock:
+            self.threads = {thread for thread in self.threads if thread.is_alive()}
 
     def finish(self, pid, code):
         with self.lock:
             session = self.sessions.pop(pid, None)
             self.preparing.pop(pid, None)
-        if session:
+        if session and not self.stop.is_set():
             with self.store.connection() as db:
                 db.execute("INSERT INTO game_sessions(profile,started,duration,preparation,peak_rss,exit_code) VALUES(?,?,?,?,?,?)", (pid, session["started"], round(time.monotonic() - session["clock"], 2), session["preparation"], session["peak"] or None, code))
                 db.execute("DELETE FROM game_sessions WHERE id NOT IN (SELECT id FROM game_sessions ORDER BY id DESC LIMIT 200)")

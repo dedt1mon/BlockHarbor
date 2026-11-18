@@ -13,6 +13,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
+from . import lifecycle
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
 
 MANIFEST = "blockharbor.json"
@@ -116,6 +117,7 @@ def _pack_options(folder):
 def _walk(folder, sections, worlds):
     stack = [(folder / section, (section,)) for section in sections]
     while stack:
+        lifecycle.check()
         path, parts = stack.pop()
         try:
             st = path.lstat()
@@ -138,6 +140,7 @@ def _walk(folder, sections, worlds):
 
 
 def export_build(store, pid, file, worlds=False):
+    lifecycle.check()
     profile = store.profile(pid)
     root = store._profile_directory(store.instances, pid)
     meta = {
@@ -197,6 +200,7 @@ def export_build(store, pid, file, worlds=False):
                     with z.open(name, "w") as out:
                         left = st.st_size
                         while left:
+                            lifecycle.check()
                             block = src.read(min(2**20, left))
                             if not block:
                                 raise ValueError(
@@ -240,6 +244,7 @@ def _members(archive, worlds):
     rows = []
     size = 0
     for item in archive.infolist():
+        lifecycle.check()
         name = item.orig_filename
         directory = name.endswith("/")
         norm = name[:-1] if directory else name
@@ -297,6 +302,7 @@ def _members(archive, worlds):
 
 
 def import_build(store, file):
+    lifecycle.check()
     file.seek(0, 2)
     if not 0 < file.tell() <= MAX_ZIP:
         raise ValueError("Нужен ZIP сборки размером до 8 ГБ.")
@@ -359,6 +365,7 @@ def import_build(store, file):
 
             def unpack(folder):
                 for item, parts in rows:
+                    lifecycle.check()
                     target = folder.joinpath(*parts)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(item) as src, target.open("xb") as out:
@@ -370,7 +377,9 @@ def import_build(store, file):
                                 )
                             out.write(data)
                         else:
-                            shutil.copyfileobj(src, out, 2**20)
+                            while block := src.read(2**20):
+                                lifecycle.check()
+                                out.write(block)
                         if out.tell() != item.file_size:
                             raise ValueError("Файл из архива извлечён не полностью.")
                 if pin:
@@ -409,22 +418,31 @@ class Downloads:
     def __init__(self):
         self.items = {}
         self.lock = threading.Lock()
+        self.timers = {}
+        self.closed = False
 
     def issue(self, file, name):
         ticket = secrets.token_urlsafe(24)
         cookie = secrets.token_urlsafe(24)
         with self.lock:
+            lifecycle.check()
+            if self.closed:
+                raise lifecycle.OperationCancelled("Лаунчер закрыт.")
             if len(self.items) >= 8:
                 raise ValueError("Сначала скачай уже подготовленные архивы.")
             self.items[ticket] = (cookie, file, name)
-        timer = threading.Timer(300, self.discard, args=(ticket,))
-        timer.daemon = True
-        timer.start()
+            timer = threading.Timer(300, self.discard, args=(ticket,))
+            timer.daemon = True
+            self.timers[ticket] = timer
+            timer.start()
         return ticket, cookie
 
     def discard(self, ticket):
         with self.lock:
             item = self.items.pop(ticket, None)
+            timer = self.timers.pop(ticket, None)
+            if timer:
+                timer.cancel()
         if item:
             item[1].close()
 
@@ -433,4 +451,18 @@ class Downloads:
             found = self.items.get(ticket)
             if not found or not hmac.compare_digest(found[0], cookie):
                 raise ValueError("Ссылка на ZIP истекла. Снова нажми «Выгрузить».")
+            timer = self.timers.pop(ticket, None)
+            if timer:
+                timer.cancel()
             return self.items.pop(ticket)[1:]
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            for timer in self.timers.values():
+                timer.cancel()
+            files = [row[1] for row in self.items.values()]
+            self.items.clear()
+            self.timers.clear()
+        for file in files:
+            file.close()

@@ -1,4 +1,18 @@
 .updater-channel { display: flex; gap: 24px; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.updater-automatic { margin-bottom: 18px; }
+.updater-auto-control { display: flex; align-items: center; justify-content: space-between; gap: 24px; cursor: pointer; }
+.updater-auto-control > span { display: grid; gap: 8px; }
+.updater-auto-control strong { font-size: 18px; color: var(--text); }
+.updater-auto-control span span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.updater-auto-control input { appearance: none; flex: 0 0 48px; width: 48px; height: 27px; border: 1px solid #ffffff23; border-radius: 20px; background: #17251e; position: relative; cursor: pointer; padding: 0; transition: background .18s ease; }
+.updater-auto-control input::before { content: ""; position: absolute; width: 19px; height: 19px; top: 3px; left: 4px; border-radius: 50%; background: #9eaaa2; transition: transform .18s ease, background .18s ease; }
+.updater-auto-control input:checked { background: var(--lime); border-color: var(--lime); }
+.updater-auto-control input:checked::before { transform: translateX(20px); background: #173520; }
+.updater-auto-control input:focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; }
+.updater-auto-control input:disabled { opacity: .55; cursor: wait; }
+.updater-automatic p { line-height: 1.6; font-size: 13px; }
+.updater-auto-status { margin-bottom: 0; color: #c5d6c6; }
+@media (prefers-reduced-motion: reduce) { .updater-auto-control input, .updater-auto-control input::before { transition: none; } }
 .updater-channel h2, .updater-release h2, .transfer-panel h2 { margin: 0 0 8px; }
 .updater-channel p, .transfer-heading p { margin: 0; }
 .updater-channel label { display: flex; flex-direction: column; gap: 8px; min-width: 205px; color: var(--muted); font-size: 13px; }

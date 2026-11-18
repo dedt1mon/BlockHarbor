@@ -21,7 +21,7 @@ import zipfile
 from collections import OrderedDict, deque
 from pathlib import Path, PurePosixPath
 
-from . import compatibility, e4steam, modrinth, room_bridge, skin_sync
+from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync
 from .content_icons import _small_directory
 from .modfiles import file_hash, file_stamp, read_descriptor
 from .sessions import process_alive, process_identity, read_record
@@ -110,6 +110,7 @@ def _walk(root, sections):
     """Do not traverse a link, Windows junction or an unexpectedly changing file."""
     count, size = 0, 0
     for section in sections:
+        lifecycle.check()
         relative = _safe_relative(section)
         base = root
         for part in relative.parts:
@@ -120,6 +121,7 @@ def _walk(root, sections):
             continue
         pending = [base]
         while pending:
+            lifecycle.check()
             path = pending.pop()
             if _reparse(path):
                 raise ValueError("В сборке есть ссылка или junction: " + str(path.relative_to(root)))
@@ -140,15 +142,27 @@ def _walk(root, sections):
                 raise ValueError("В сборке обнаружен неподдерживаемый тип файла.")
 
 
+def _copy_file(source, target):
+    """Copy into staging in bounded chunks so closing the window can cancel it."""
+    lifecycle.check()
+    with source.open("rb") as src, target.open("wb") as out:
+        while chunk := src.read(1024**2):
+            lifecycle.check()
+            out.write(chunk)
+    lifecycle.check()
+    shutil.copystat(source, target)
+
+
 def _copy_sections(source, target, sections):
     files = list(_walk(source, sections))
     needed = sum(st[0] for _, _, st in files)
     if needed + 16 * 1024**2 > shutil.disk_usage(target.parent).free:
         raise ValueError("Недостаточно места на диске для безопасной копии.")
     for path, name, stamp in files:
+        lifecycle.check()
         dest = target / name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, dest)
+        _copy_file(path, dest)
         if file_stamp(path) != stamp:
             raise ValueError("Файл изменился во время копирования. Закрой игру и повтори.")
     # Preserve empty roots (e.g. an empty mods directory).
@@ -363,12 +377,14 @@ class BuildCare:
             try:
                 with zipfile.ZipFile(temporary, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
                     for index, (path, name, stamp) in enumerate(files):
+                        lifecycle.check()
                         if index % 20 == 0:
                             status(f"Сохраняем резервную копию: {index + 1} / {len(files)}…")
                         digest = hashlib.sha256()
                         written = 0
                         with path.open("rb") as source, archive.open("payload/" + name, "w", force_zip64=stamp[0] >= 2**31) as output:
                             while chunk := source.read(1024**2):
+                                lifecycle.check()
                                 written += len(chunk)
                                 if written > stamp[0]:
                                     raise ValueError("Файл изменился во время резервного копирования.")
@@ -381,8 +397,8 @@ class BuildCare:
                     if len(raw) > MAX_MANIFEST:
                         raise ValueError("Слишком большой список файлов в резервной копии.")
                     archive.writestr("recovery.json", raw)
-                os.replace(temporary, target)
-                with self.store.connection() as db:
+                with lifecycle.guard(), self.store.connection() as db:
+                    os.replace(temporary, target)
                     db.execute("INSERT INTO care_snapshots VALUES(?,?,?,?,?,?,?,?)",
                                (sid, pid, scope, world, _plain(label, 180), manifest["created"], target.stat().st_size, len(files)))
                 self.history(pid, "Копия мира" if scope == "world" else "Точка восстановления", label + (": " + world if world else ""))
@@ -463,6 +479,7 @@ class BuildCare:
             if total + 16 * 1024**2 > shutil.disk_usage(directory).free:
                 raise ValueError("Недостаточно места для восстановления.")
             for record in records:
+                lifecycle.check()
                 name, size = record["path"], record["size"]
                 info = archive.getinfo("payload/" + name)
                 if info.file_size != size or info.flag_bits & 1 or stat.S_ISLNK(info.external_attr >> 16):
@@ -472,6 +489,7 @@ class BuildCare:
                 digest, remaining = hashlib.sha256(), size
                 with archive.open(info) as src, dest.open("xb") as out:
                     while remaining:
+                        lifecycle.check()
                         chunk = src.read(min(1024**2, remaining))
                         if not chunk:
                             raise ValueError("Файл в резервной копии обрезан.")
@@ -565,6 +583,13 @@ class BuildCare:
             return dict(errors)
 
     def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
+        # All expensive reads/copies are complete. Serialize the short rename/DB
+        # commit (including rollback) against close; never publish after cancel.
+        with lifecycle.guard():
+            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings)
+        shutil.rmtree(work)
+
+    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
         root = self._writable_root(pid)
         require_idle_files(root)
         work = self.root / ("transaction-" + secrets.token_hex(16))
@@ -610,7 +635,7 @@ class BuildCare:
                     raise ValueError("Восстановление прервано. Журнал и исходные файлы сохранены; проверь доступ к диску и перезапусти BlockHarbor.") from error
             shutil.rmtree(work, ignore_errors=True)
             raise
-        shutil.rmtree(work)
+        return work
 
     def restore(self, pid, sid, status=lambda _x: None):
         with self.lock:
@@ -652,6 +677,7 @@ class BuildCare:
             return "Создана сборка «" + name + "»."
 
     def _metadata(self, path, kind, loader, stamp):
+        lifecycle.check()
         key = str(path), stamp, kind, loader
         with self.lock:
             if key in self._meta:
@@ -684,6 +710,8 @@ class BuildCare:
                         data["description"] = _plain(meta.get("description"))
                         if meta.get("pack_format") is not None:
                             data["version"] = "Формат " + str(meta["pack_format"])
+        except lifecycle.OperationCancelled:
+            raise
         except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError, zipfile.BadZipFile):
             pass
         with self.lock:
@@ -1051,7 +1079,7 @@ class BuildCare:
                             raise ValueError("Кэш обновления повреждён. Повтори проверку.")
                         target = prepared / release.kind / release.filename
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(source, target)
+                        _copy_file(source, target)
                 self.snapshot(pid, label="Перед обновлением дополнений", status=status)
                 status("Применяем проверенный план обновления…")
                 self._transaction(pid, prepared, sections)

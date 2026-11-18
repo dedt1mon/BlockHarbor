@@ -163,8 +163,11 @@ class GameProcessLifecycleTests(unittest.TestCase):
     def setUp(self):
         root = self.enterContext(tempfile.TemporaryDirectory())
         self.app = App(Path(root))
+        self.addCleanup(self.app.close)
         self.pid = self.app.store.create("Остров друзей", "1.20.1", "fabric")
         self.frame = Mock(spec=window.NativeFrame)
+        self.frame.hwnd = 84
+        self.frame.alive.return_value = True
         self.frame.focus.return_value = True
         self.app.window.native = self.frame
         self.app.window.url = "http://127.0.0.1:7001/#test"

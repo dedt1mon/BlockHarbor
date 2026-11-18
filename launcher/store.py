@@ -10,6 +10,7 @@ import zipfile
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+from . import lifecycle
 from .content_icons import IconCache
 
 LOADERS = ("fabric", "vanilla", "forge", "neoforge", "quilt")
@@ -188,7 +189,7 @@ class Store:
     def create(self, name, version, loader, *, prepare=None):
         params = input_profile(name, version, loader)
         if prepare is None:
-            with self.connection() as db:
+            with lifecycle.guard(), self.connection() as db:
                 return self._create(db, *params)
 
         # Download before publishing this profile or acquiring a database write lock.
@@ -196,8 +197,9 @@ class Store:
         folder = self.instances / pid
         folder.mkdir()
         try:
+            lifecycle.check()
             prepare(folder)
-            with self.connection() as db:
+            with lifecycle.guard(), self.connection() as db:
                 return self._create(db, *params, pid=pid)
         except Exception:
             shutil.rmtree(folder, ignore_errors=True)
@@ -430,6 +432,7 @@ class Store:
         return result
 
     def import_file(self, pid, kind, name, incoming):
+        lifecycle.check()
         filename = clean_filename(name)
         dest = self.content_folder(pid, kind) / filename
         if dest.suffix.lower() != KINDS[kind]:
@@ -440,7 +443,10 @@ class Store:
             with dest.open("xb") as out:
                 try:
                     with open(incoming, "rb") as src:
-                        shutil.copyfileobj(src, out)
+                        while chunk := src.read(1024**2):
+                            lifecycle.check()
+                            out.write(chunk)
+                        lifecycle.check()
                 except BaseException:
                     out.close()
                     dest.unlink(missing_ok=True)
@@ -456,4 +462,5 @@ class Store:
             or not target.is_file()
         ):
             raise ValueError("Файл дополнения не найден.")
-        target.unlink()
+        with lifecycle.guard():
+            target.unlink()

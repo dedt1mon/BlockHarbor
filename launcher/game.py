@@ -25,7 +25,7 @@ from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
-from . import preparation
+from . import lifecycle, preparation
 
 REDIRECT_URI = "http://localhost:43821/callback"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -72,6 +72,7 @@ def _check(version: str, loader: str) -> str:
 
 
 def _atomic_json(path: Path, data: dict, expected: bytes | None = None) -> None:
+    lifecycle.check()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         dir=path.parent, prefix=".blockharbor-", delete=False
@@ -85,7 +86,8 @@ def _atomic_json(path: Path, data: dict, expected: bytes | None = None) -> None:
             raise RuntimeError(
                 "Профили Minecraft Launcher изменились. Закрой его и повтори операцию."
             )
-        os.replace(temporary, path)
+        with lifecycle.guard():
+            os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -171,6 +173,7 @@ def _repair_loader_files(cache: Path, installed: str, status: Status) -> None:
     libs_dir = (cache / "libraries").resolve()
     manifest = json.loads(_manifest_path(cache, installed).read_text(encoding="utf-8"))
     for entry in manifest["libraries"]:
+        lifecycle.check()
         path = Path(get_library_path(entry["name"], str(cache))).resolve()
         if not path.is_relative_to(libs_dir):
             raise ValueError("Некорректный путь библиотеки загрузчика.")
@@ -309,6 +312,7 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
             return index.name
         objects = json.loads(index.read_text(encoding="utf-8"))["objects"]
         for item in objects.values():
+            lifecycle.check()
             key = item["hash"]
             if not re.fullmatch("[a-f0-9]{40}", key):
                 return index.name
@@ -386,6 +390,7 @@ def _install(
                 result = provider.install(
                     version, cache, loader_version=pin, java=java, callback=callbacks
                 )
+                lifecycle.check()
             except subprocess.CalledProcessError as exc:
                 task = ""
                 if isinstance(exc.cmd, (tuple, list)) and "--task" in exc.cmd:
@@ -410,6 +415,8 @@ def _install(
             _repair_loader_files(cache, installed, status)
         try:
             ready = _missing_install_file(cache, version, installed) is None
+        except lifecycle.OperationCancelled:
+            raise
         except (OSError, ValueError, KeyError, mc.exceptions.VersionNotFound):
             ready = False
         if not ready:
@@ -452,6 +459,7 @@ def _install(
 def install(
     version: str, loader: str, cache: Path, instance: Path, status: Status = _quiet
 ) -> str:
+    lifecycle.check()
     loader = _check(version, loader)
     cache = Path(cache).resolve()
     with _install_lock(cache), preparation.job(status) as progress:
@@ -489,7 +497,7 @@ def _check_official_closed() -> None:
     if os.name != "nt":
         return
     executable = Path(os.environ["SystemRoot"]) / "System32/tasklist.exe"
-    result = subprocess.run(
+    result = lifecycle.run(
         [str(executable), "/FO", "CSV", "/NH"],
         capture_output=True,
         timeout=12,
@@ -624,7 +632,7 @@ def _store_app_id() -> str:
         script,
     ]
     try:
-        result = subprocess.run(
+        result = lifecycle.run(
             args,
             capture_output=True,
             timeout=15,
@@ -668,6 +676,8 @@ def open_official() -> None:
 def login(client_id: str, status: Status = _quiet) -> dict:
     """Use Microsoft PKCE in the system browser. No tokens are written to disk."""
     import minecraft_launcher_lib as mc
+
+    lifecycle.check()
 
     try:
         client_id = str(UUID(client_id.strip()))
@@ -727,14 +737,18 @@ def login(client_id: str, status: Status = _quiet) -> dict:
             raise RuntimeError("Не удалось открыть системный браузер для входа.")
         deadline = time.monotonic() + 180
         while not result and time.monotonic() < deadline:
+            lifecycle.check()
             server.handle_request()
+    lifecycle.check()
     if "code" not in result:
         raise RuntimeError("Вход отменён или время ожидания истекло. Попробуй ещё раз.")
     status("Проверка профиля Minecraft Java Edition…")
     try:
-        account = accounts.complete_login(
-            client_id, None, REDIRECT_URI, result["code"], verifier
-        )
+        with preparation.account_environment(accounts):
+            account = accounts.complete_login(
+                client_id, None, REDIRECT_URI, result["code"], verifier
+            )
+        lifecycle.check()
         if (
             not account.get("name")
             or not account.get("id")
@@ -749,6 +763,8 @@ def login(client_id: str, status: Status = _quiet) -> dict:
         raise RuntimeError(
             "У приложения нет доступа к Minecraft Services. Используй официальный запуск или одобренный Client ID."
         ) from None
+    except lifecycle.OperationCancelled:
+        raise
     except Exception:
         raise RuntimeError(
             "Сервис входа Microsoft или Xbox не выдал профиль Minecraft Java. Проверь Client ID, разрешения приложения и настройки аккаунта."
@@ -852,6 +868,8 @@ def _start_java(
 ) -> subprocess.Popen:
     import minecraft_launcher_lib as mc
 
+    lifecycle.check()
+
     cache, instance = Path(cache).resolve(), Path(instance).resolve()
     record = _record(instance)
     if record.get("cache") != str(cache) or not record.get("id"):
@@ -866,6 +884,7 @@ def _start_java(
         # Provider installation can refresh its shared native cache for another
         # build. Every JVM loads its own extracted files, never those DLLs.
         mc.natives.extract_natives(installed, cache, natives)
+        lifecycle.check()
     except BaseException:
         shutil.rmtree(natives, ignore_errors=True)
         raise
@@ -878,7 +897,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.1.0",
+        "launcherVersion": "2.2.0",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]
@@ -896,14 +915,16 @@ def _start_java(
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     # The game writes logs/latest.log. Never log the command line which includes a token.
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=instance,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            creationflags=flags,
-        )
+        from .diagnostics import game_stderr
+        with game_stderr(instance) as stderr, lifecycle.guard():
+            process = subprocess.Popen(
+                command,
+                cwd=instance,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                creationflags=flags,
+            )
     except FileNotFoundError:
         shutil.rmtree(natives, ignore_errors=True)
         raise RuntimeError(
@@ -912,23 +933,24 @@ def _start_java(
     except BaseException:
         shutil.rmtree(natives, ignore_errors=True)
         raise
+    scope = lifecycle.current_scope()
     def clean_natives():
-        try:
-            process.wait()
-        except (OSError, subprocess.SubprocessError):
+        while process.poll() is None:
+            if scope:
+                if scope.event.wait(0.5):
+                    return  # Next idle launch cleans these private native files.
+            else:
+                time.sleep(0.5)
+        if scope and scope.event.is_set():
             return
         if natives.resolve().parent == native_root.resolve() and not natives.is_symlink():
             shutil.rmtree(natives, ignore_errors=True)
     threading.Thread(target=clean_natives, daemon=True, name="blockharbor-native-files").start()
-    from .diagnostics import capture_stderr
-    stderr_reader = capture_stderr(process.stderr, instance)
     try:
         exit_code = process.wait(timeout=1.25)
     except subprocess.TimeoutExpired:
         return process
     if isinstance(exit_code, int) and exit_code != 0:
-        if stderr_reader:
-            stderr_reader.join(timeout=0.5)
         log = instance / "logs" / "latest.log"
         detail = (
             f"Журнал игры: {log}"

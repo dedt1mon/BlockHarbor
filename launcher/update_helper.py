@@ -55,6 +55,14 @@ def _validate(path):
     ready = root / ("ready-" + data["id"] + ".json")
     if Path(data.get("ready", "")) != ready or ready.is_symlink():
         raise ValueError("Файл ответа перенаправлен.")
+    if type(data.get("automatic", False)) is not bool:
+        raise ValueError("Некорректный режим установки.")
+    if data.get("automatic") and kind != "installer":
+        raise ValueError("Автоматический откат недоступен.")
+    if "commit" in data or data.get("automatic"):
+        commit = root / ("commit-" + data["id"] + ".json")
+        if Path(data.get("commit", "")) != commit or commit.is_symlink():
+            raise ValueError("Подтверждение установки перенаправлено.")
     target = Path(data.get("target", ""))
     if not target.is_absolute() or target.name.lower() != "blockharbor.exe" or target.is_symlink() or not target.is_file():
         raise ValueError("Не найден установленный BlockHarbor.exe.")
@@ -101,6 +109,29 @@ def _verify(source, data):
             digest.update(chunk)
     if digest.hexdigest() != data["sha256"]:
         raise ValueError("Контрольная сумма установщика изменилась.")
+
+
+def _require_commit(data):
+    """A closing/crashed window without its final commit cannot trigger setup."""
+    if "commit" not in data:
+        return  # Compatibility with already issued manual handoffs.
+    path = Path(data["commit"])
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+        raise ValueError("Установка отменена при закрытии BlockHarbor.")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("id") != data["id"] or value.get("install") is not True:
+        raise ValueError("Установка не была подтверждена работающим BlockHarbor.")
+
+
+def _installer_command(source, target, automatic):
+    if not automatic:
+        return [str(source)]
+    directory = str(target.parent)
+    if any(char in directory for char in '\"\r\n\0'):
+        raise ValueError("Некорректная папка установленного приложения.")
+    # NSIS requires /D to be last and unquoted, including paths with spaces.
+    # This is a CreateProcess command line, never a command-shell invocation.
+    return subprocess.list2cmdline([str(source), "/S", "/AUTOUPDATE"]) + " /D=" + directory
 
 
 class ProcessHandles:
@@ -171,7 +202,6 @@ def _restore(source, target, data):
                 winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, data["version"])
     except (ImportError, OSError, TypeError):
         pass
-    subprocess.Popen([str(target)], cwd=target.parent, close_fds=True)
 
 
 def run(path):
@@ -179,22 +209,29 @@ def run(path):
     result_path = path.parent / ("result-" + data["id"] + ".json")
     handles = None
     gate = None
+    restart = False
     try:
         _verify(source, data)
         handles = ProcessHandles(data["waitPids"])
         gate = _hold_session_gate(data)
         _write(ready, {"ready": True, "id": data["id"]})
         handles.wait()
+        _require_commit(data)
         _verify(source, data)
         if data["kind"] == "binary":
             _restore(source, target, data)
+            restart = True
             result = {"ok": True, "version": data["version"], "kind": "binary", "time": time.time()}
         else:
-            # Keep the normal installer UI, including its own running-session
-            # guard and the option to start the newly installed application.
-            process = subprocess.Popen([str(source)], cwd=source.parent, close_fds=True)
+            # Manual updates retain the normal wizard. Automatic updates keep
+            # existing shortcuts and let this helper perform the single restart.
+            automatic = data.get("automatic", False)
+            process = subprocess.Popen(_installer_command(source, target, automatic), cwd=source.parent, close_fds=True)
             code = process.wait()
             result = {"ok": code == 0, "exitCode": code, "version": data["version"], "kind": "installer", "time": time.time()}
+            if code:
+                result["error"] = "Установщик BlockHarbor завершился с кодом " + str(code) + ". Повтори обновление вручную в настройках."
+            restart = automatic and code == 0
         _write(result_path, result)
     except BaseException as exc:
         _write(result_path, {"ok": False, "error": str(exc)[:700], "time": time.time()})
@@ -204,6 +241,8 @@ def run(path):
             handles.close()
         ready.unlink(missing_ok=True)
         path.unlink(missing_ok=True)
+        if data.get("commit"):
+            Path(data["commit"]).unlink(missing_ok=True)
         if gate:
             try:
                 stored = json.loads(gate.read_text(encoding="utf-8"))
@@ -211,6 +250,16 @@ def run(path):
                     gate.unlink(missing_ok=True)
             except (OSError, ValueError):
                 pass
+    if restart:
+        command = [str(target)]
+        if data.get("sessionRoot"):
+            command.extend(["--data", data["sessionRoot"]])
+        try:
+            # The gate is released before spawning the one replacement window.
+            subprocess.Popen(command, cwd=target.parent, close_fds=True)
+        except OSError as exc:
+            _write(result_path, {"ok": False, "installed": True, "version": data["version"], "error": "Обновление установлено, но BlockHarbor не открылся: " + str(exc)[:500], "time": time.time()})
+            raise
 
 
 if __name__ == "__main__":

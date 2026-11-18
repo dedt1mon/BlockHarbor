@@ -10,6 +10,7 @@ ManifestDPIAware true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
+!include "FileFunc.nsh"
 
 !define APP_REG "Software\BlockHarbor"
 !define UNINSTALL_REG "Software\Microsoft\Windows\CurrentVersion\Uninstall\BlockHarbor"
@@ -38,6 +39,7 @@ Var PinActions
 Var SetupMutex
 Var PendingFile
 Var Elevated
+Var AutoUpdate
 
 !define MUI_ICON "${ICON_FILE}"
 !define MUI_UNICON "${ICON_FILE}"
@@ -118,6 +120,18 @@ Function .onInit
     SetShellVarContext current
     SetRegView 64
     Call AcquireSetupLock
+    StrCpy $AutoUpdate 0
+    ${GetParameters} $0
+    ClearErrors
+    ${GetOptions} $0 "/AUTOUPDATE" $1
+    ${IfNot} ${Errors}
+        StrCpy $AutoUpdate 1
+        SetSilent silent
+        IfFileExists "$INSTDIR\BlockHarbor.exe" automatic_target_ready
+        SetErrorLevel 2
+        Abort
+        automatic_target_ready:
+    ${EndIf}
     StrCpy $DesktopShortcut 1
     StrCpy $TaskbarPinHelp 0
     StrCpy $StartPinHelp 0
@@ -219,6 +233,10 @@ Function OpenInstalledShortcut
 FunctionEnd
 
 Function LaunchBlockHarbor
+    ; In automatic mode the helper owns the one restart after setup has exited.
+    ${If} $AutoUpdate == 1
+        Return
+    ${EndIf}
     ${If} $Elevated == 0
         SetOutPath "$INSTDIR"
         Exec '"$INSTDIR\BlockHarbor.exe"'
@@ -266,21 +284,24 @@ Section "BlockHarbor" SEC_APP
     ${EndIf}
 
     SetOutPath "$INSTDIR"
-    ReadRegDWORD $4 HKCU "${APP_REG}" "DesktopShortcut"
     ClearErrors
-    CreateDirectory "$SMPROGRAMS\BlockHarbor"
-    CreateShortcut "$SMPROGRAMS\BlockHarbor\BlockHarbor.lnk" "$INSTDIR\BlockHarbor.exe" "" "$INSTDIR\BlockHarbor.exe" 0
-    CreateShortcut "$SMPROGRAMS\BlockHarbor\Удалить BlockHarbor.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\Uninstall.exe" 0
-    ${If} $DesktopShortcut == 1
-        CreateShortcut "$DESKTOP\BlockHarbor.lnk" "$INSTDIR\BlockHarbor.exe" "" "$INSTDIR\BlockHarbor.exe" 0
-    ${Else}
-        ${If} $4 == 1
-            Delete "$DESKTOP\BlockHarbor.lnk"
+    ${If} $AutoUpdate != 1
+        ReadRegDWORD $4 HKCU "${APP_REG}" "DesktopShortcut"
+        ClearErrors
+        CreateDirectory "$SMPROGRAMS\BlockHarbor"
+        CreateShortcut "$SMPROGRAMS\BlockHarbor\BlockHarbor.lnk" "$INSTDIR\BlockHarbor.exe" "" "$INSTDIR\BlockHarbor.exe" 0
+        CreateShortcut "$SMPROGRAMS\BlockHarbor\Удалить BlockHarbor.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\Uninstall.exe" 0
+        ${If} $DesktopShortcut == 1
+            CreateShortcut "$DESKTOP\BlockHarbor.lnk" "$INSTDIR\BlockHarbor.exe" "" "$INSTDIR\BlockHarbor.exe" 0
+        ${Else}
+            ${If} $4 == 1
+                Delete "$DESKTOP\BlockHarbor.lnk"
+            ${EndIf}
         ${EndIf}
+        WriteRegDWORD HKCU "${APP_REG}" "DesktopShortcut" $DesktopShortcut
     ${EndIf}
 
     WriteRegStr HKCU "${APP_REG}" "InstallLocation" "$INSTDIR"
-    WriteRegDWORD HKCU "${APP_REG}" "DesktopShortcut" $DesktopShortcut
     WriteRegStr HKCU "${UNINSTALL_REG}" "DisplayName" "BlockHarbor"
     WriteRegStr HKCU "${UNINSTALL_REG}" "DisplayVersion" "${APP_VERSION}"
     WriteRegStr HKCU "${UNINSTALL_REG}" "Publisher" "BlockHarbor"

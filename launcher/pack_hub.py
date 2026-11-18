@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import build_archive, modrinth
+from . import build_archive, lifecycle, modrinth
 from .modfiles import file_hash, file_stamp
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
 
@@ -208,6 +208,7 @@ def _unique_name(store, proposed):
 
 def download_verified(url, target, hashes, size, *, transfers=None, status=lambda message: None, title=None):
     """A transport adapter shared by pack imports and friend synchronization."""
+    lifecycle.check()
     _url(url)
     if transfers is not None:
         return transfers.download(url, target, title=title or target.name, hashes=hashes,
@@ -217,7 +218,7 @@ def download_verified(url, target, hashes, size, *, transfers=None, status=lambd
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".part-" + secrets.token_hex(4))
     try:
-        with modrinth._open(url, DOWNLOAD_HOSTS) as source, tmp.open("xb") as output:
+        with lifecycle.response(modrinth._open(url, DOWNLOAD_HOSTS)) as source, tmp.open("xb") as output:
             remaining = size
             while remaining:
                 part = source.read(min(2**20, remaining))
@@ -229,7 +230,8 @@ def download_verified(url, target, hashes, size, *, transfers=None, status=lambd
                 remaining -= len(part)
             if remaining or source.read(1) or any(value.hexdigest() != hashes[name] for name, value in digest.items()):
                 raise ValueError("Размер или контрольная сумма скачанного файла модпака не совпали.")
-        os.replace(tmp, target)
+        with lifecycle.guard():
+            os.replace(tmp, target)
         return target
     finally:
         tmp.unlink(missing_ok=True)
@@ -330,6 +332,7 @@ class PackHub:
 
     def stage_import(self, source, *, source_info=None):
         """Own a copy of an uploaded archive; return the explicit install preview."""
+        lifecycle.check()
         source_info = source_info or {}
         with self.lock:
             self._expire()
@@ -347,6 +350,7 @@ class PackHub:
                     total = 0
                     with target.open("xb") as output:
                         while chunk := reader.read(2**20):
+                            lifecycle.check()
                             total += len(chunk)
                             if total > MAX_PACK:
                                 raise ValueError("Файл .mrpack превышает 2 ГБ.")
@@ -431,6 +435,7 @@ class PackHub:
 
                 def prepare(folder):
                     for number, row in enumerate(selected, 1):
+                        lifecycle.check()
                         status(f"Модпак: {number}/{len(selected)} · {row['path']}")
                         destination = folder.joinpath(*_path(row["path"]))
                         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -440,6 +445,8 @@ class PackHub:
                                 download_verified(url, destination, row["hashes"], row["fileSize"], transfers=self.transfers, status=status, title=row["path"])
                                 error = None
                                 break
+                            except lifecycle.OperationCancelled:
+                                raise
                             except (OSError, ValueError) as exc:
                                 if type(exc).__name__ == "TransferCancelled":
                                     raise
@@ -449,11 +456,13 @@ class PackHub:
                     status("Применяем настройки модпака…")
                     for layer in ("overrides", "client-overrides"):
                         for entry, relative in layers[layer]:
+                            lifecycle.check()
                             destination = folder.joinpath(*_path(relative))
                             destination.parent.mkdir(parents=True, exist_ok=True)
                             with archive.open(entry) as source, destination.open("wb") as output:
                                 left = entry.file_size
                                 while left:
+                                    lifecycle.check()
                                     chunk = source.read(min(2**20, left))
                                     if not chunk:
                                         raise ValueError("Файл настроек модпака распакован не полностью.")
@@ -462,6 +471,7 @@ class PackHub:
                                 if source.read(1):
                                     raise ValueError("Файл модпака превышает объявленный размер.")
                     if manifest["loaderVersion"]:
+                        lifecycle.check()
                         (folder / build_archive.STAMP).write_text(json.dumps({"version": manifest["minecraft"], "loader": manifest["loader"], "loader_version": manifest["loaderVersion"]}), encoding="utf-8")
                     (folder / RECEIPT).write_text(json.dumps({"format": 1, "name": title, "version": manifest["versionId"], "source": value["source"], "files": selected}, ensure_ascii=False), encoding="utf-8")
 
@@ -476,6 +486,7 @@ class PackHub:
             self.discard(preview["token"])
 
     def export_pack(self, pid, output, status=lambda message: None):
+        lifecycle.check()
         profile, folder = self.store.profile(pid), self.store.folder(pid)
         dependencies = {"minecraft": profile["version"]}
         if profile["loader"] != "vanilla":
@@ -497,6 +508,8 @@ class PackHub:
                 for file in version.get("files", []):
                     if digest and file.get("hashes", {}).get("sha512") == digest:
                         recognized[(filename, file.get("hashes", {}).get("sha512"))] = file
+        except lifecycle.OperationCancelled:
+            raise
         except (OSError, ValueError):
             pass  # A local-only pack is valid: unknown files become overrides.
         manifest = {"formatVersion": 1, "game": "minecraft", "versionId": time.strftime("%Y.%m.%d-%H%M%S", time.gmtime()),
@@ -505,6 +518,7 @@ class PackHub:
             build_archive.export_build(self.store, pid, portable, False)
             with zipfile.ZipFile(portable) as source, zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
                 for entry in source.infolist():
+                    lifecycle.check()
                     if entry.filename == build_archive.MANIFEST:
                         continue
                     parts = _path(entry.filename)
@@ -517,7 +531,9 @@ class PackHub:
                             manifest["files"].append({"path": entry.filename, "hashes": hashes, "downloads": [_url(known["url"])], "fileSize": entry.file_size})
                             continue
                     with source.open(entry) as reader, archive.open("overrides/" + entry.filename, "w") as writer:
-                        shutil.copyfileobj(reader, writer, 2**20)
+                        while chunk := reader.read(2**20):
+                            lifecycle.check()
+                            writer.write(chunk)
                 options = build_archive._pack_options(folder)
                 if options:
                     archive.writestr("overrides/options.txt", "\n".join(options) + "\n")

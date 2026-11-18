@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import catalog_filters, compatibility
+from . import catalog_filters, compatibility, lifecycle
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
 from .store import KINDS, MAX_ADDON, clean_filename, verify_pack
@@ -30,7 +30,7 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/2.1.0 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.2.0 (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):
@@ -77,6 +77,7 @@ _CDN_HOSTS = {"cdn.modrinth.com", "cdn-raw.modrinth.com"}
 
 
 def _open(url, hosts, body=None, *, timeout=30):
+    lifecycle.check()
     _allowed(url, hosts)
     try:
         return build_opener(_Redirect(hosts)).open(
@@ -113,7 +114,7 @@ def _open(url, hosts, body=None, *, timeout=30):
 
 @lru_cache(maxsize=48)
 def _get_cached(url, period):
-    with _open(url, _API_HOSTS) as response:
+    with lifecycle.response(_open(url, _API_HOSTS)) as response:
         return _read_response(response)
 
 
@@ -130,6 +131,7 @@ def _read_response(response):
 
 
 def _get(path, **params):
+    lifecycle.check()
     suffix = "?" + urlencode(params) if params else ""
     return _get_cached(_API + path + suffix, int(time.monotonic() // 300))
 
@@ -419,7 +421,7 @@ def _plan(store, profile, kind, project, version):
 @lru_cache(maxsize=32)
 def _versions_by_hash(digests, period):
     body = json.dumps({"algorithm": "sha512", "hashes": digests}).encode("ascii")
-    with _open(_API + "/version_files", _API_HOSTS, body) as response:
+    with lifecycle.response(_open(_API + "/version_files", _API_HOSTS, body)) as response:
         return _read_response(response)
 
 
@@ -645,7 +647,7 @@ def _download(release, target, transfer=None, status=lambda _message: None):
         transfer.download(release.url, target, title=release.filename, hashes={"sha512": release.sha512}, size=release.size, max_size=MAX_ADDON, hosts=_CDN_HOSTS, category="modrinth", status=status)
         return
     digest = hashlib.sha512()
-    with _open(release.url, _CDN_HOSTS) as src, target.open("xb") as out:
+    with lifecycle.response(_open(release.url, _CDN_HOSTS)) as src, target.open("xb") as out:
         remaining = release.size
         while remaining:
             chunk = src.read(min(256 * 1024, remaining))
@@ -661,6 +663,7 @@ def _download(release, target, transfer=None, status=lambda _message: None):
 
 
 def _publish_set(store, pid, releases, staged):
+    lifecycle.check()
     # Recheck all destinations after downloading. Manual imports may have completed
     # during network I/O. The launcher's mutation lock covers just this local commit.
     pending = []
@@ -695,18 +698,19 @@ def _publish_set(store, pid, releases, staged):
                     )
             known_mods[target] = ids
         pending.append((release, src, target))
-    written = []
-    try:
-        for release, src, target in pending:
-            publish_new(src, target)
-            written.append((target, release))
-    except OSError as error:
-        for path, release in reversed(written):
-            if _installed([path], release):
-                path.unlink()
-        raise CatalogError(
-            "Содержимое сборки изменилось или файл занят. Повтори установку."
-        ) from error
+    with lifecycle.guard():
+        written = []
+        try:
+            for release, src, target in pending:
+                publish_new(src, target)
+                written.append((target, release))
+        except OSError as error:
+            for path, release in reversed(written):
+                if _installed([path], release):
+                    path.unlink()
+            raise CatalogError(
+                "Содержимое сборки изменилось или файл занят. Повтори установку."
+            ) from error
     return len(written)
 
 
@@ -731,11 +735,11 @@ def _save_project_icons(store, pid, releases, status):
                 status("Сохраняем изображения дополнений…")
                 announced = True
             data = bytearray()
-            with _open(
+            with lifecycle.response(_open(
                 release.icon,
                 _CDN_HOSTS,
                 timeout=min(3, max(0.1, deadline - time.monotonic())),
-            ) as response:
+            )) as response:
                 read = getattr(response, "read1", response.read)
                 while time.monotonic() < deadline:
                     chunk = read(min(64 * 1024, MAX_IMAGE + 1 - len(data)))
@@ -747,6 +751,8 @@ def _save_project_icons(store, pid, releases, status):
                     data.extend(chunk)
                     if len(data) > MAX_IMAGE:
                         break
+        except lifecycle.OperationCancelled:
+            raise
         except (OSError, ValueError, HTTPException):
             continue
 

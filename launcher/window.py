@@ -8,9 +8,12 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from ctypes import wintypes
 from pathlib import Path
+
+from . import lifecycle
 
 WIDTH, HEIGHT = 1360, 840
 WINDOW_TITLE = "BlockHarbor"
@@ -72,6 +75,15 @@ def browser_executable():
                 if exe.is_file():
                     return exe
     return None
+
+
+def _private_profile(path):
+    if path.is_symlink() or path.resolve().parent != path.parent:
+        raise OSError("Browser profile is redirected")
+    path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
+        raise OSError("Browser profile is redirected")
+    return path
 
 
 class NativeFrame:
@@ -147,6 +159,7 @@ class NativeFrame:
         self.pid = 0
         self.frame_property = ""
         self.registration_marker = ""
+        self.owned_host = False
 
     def _identity(self, handle):
         kind = ctypes.create_unicode_buffer(128)
@@ -186,6 +199,7 @@ class NativeFrame:
             ):
                 self.hwnd, self.pid = handle, pid
                 self.frame_property, self.registration_marker = prop, marker
+                self.owned_host = True
                 return False
             return True
 
@@ -193,6 +207,26 @@ class NativeFrame:
         if self.hwnd:
             self.set_icons()
             self.set_identity()
+        return bool(self.hwnd)
+
+    def register_host(self, pid, marker):
+        """Find only our still-running Popen host before HTML can register itself."""
+        if type(pid) is not int or pid <= 0:
+            return False
+        prop = f"BlockHarbor.frame.{marker}"
+
+        @self.enum_callback
+        def match(handle, _):
+            kind, _, owner = self._identity(handle)
+            if (owner == pid and kind in ("Chrome_WidgetWin_1", "MozillaWindowClass")
+                    and self.user.SetPropW(handle, prop, 1)):
+                self.hwnd, self.pid = handle, owner
+                self.frame_property, self.registration_marker = prop, marker
+                self.owned_host = True
+                return False
+            return True
+
+        self.user.EnumWindows(match, 0)
         return bool(self.hwnd)
 
     def set_identity(self):
@@ -216,7 +250,7 @@ class NativeFrame:
         return set_window_identity(self.hwnd, clear=True)
 
     def close(self):
-        if not self.current():
+        if not self.alive():
             return False
         self.clear_identity()
         result = ctypes.c_size_t()
@@ -244,20 +278,25 @@ class NativeFrame:
             )
         return sent == 2
 
-    def current(self):
+    def alive(self):
         if not self.hwnd:
             return False
-        kind, title, pid = self._identity(self.hwnd)
+        kind, _, pid = self._identity(self.hwnd)
         return (
             kind in ("Chrome_WidgetWin_1", "MozillaWindowClass")
             and pid == self.pid
             and self.frame_property
             and self.user.GetPropW(self.hwnd, self.frame_property) == 1
-            and (
+        )
+
+    def current(self):
+        if not self.alive():
+            return False
+        _, title, _ = self._identity(self.hwnd)
+        return bool(getattr(self, "owned_host", False) or (
                 self._caption(title, WINDOW_TITLE)
                 or self._caption(title, f"{WINDOW_TITLE} [{self.registration_marker}]")
-            )
-        )
+            ))
 
     def hide(self):
         if not self.current():
@@ -326,28 +365,88 @@ class DesktopWindow:
         self.awaiting_registration = False
         self.native = None
         self.marker = ""
+        self.host_process = None
+        self.release_host = None
+        self.opened_at = 0.0
+        self.stopped = False
+
+    def _discover(self):
+        if not self.native or self.native.hwnd or not self.marker:
+            return
+        process = self.host_process
+        # No title, PID enumeration or OS handle from the default browser is
+        # ever adopted here. The Popen is a dedicated app profile we created.
+        if process is not None and process.poll() is None:
+            self.native.register_host(process.pid, self.marker)
+        if self.native.hwnd and self.parked:
+            self.native.hide()
 
     def game_started(self):
         with self.lock:
+            if self.stopped:
+                return
             if self.native and self.url:
                 self.restore_after_game = True
                 self.parked = True
                 self.native.hide()
 
-    def close(self):
+    def close(self, timeout=1):
         with self.lock:
-            return bool(self.native and self.native.close())
+            if self.stopped:
+                return False
+            self.stopped = True
+            self.restore_after_game = self.parked = False
+            self._discover()
+            closed = bool(self.native and self.native.close())
+            process, release = self.host_process, self.release_host
+            self.host_process = self.release_host = None
+        if process is not None:
+            try:
+                process.wait(timeout=max(0, timeout))
+            except subprocess.TimeoutExpired:
+                # Popen belongs to the dedicated app profile, not a user's
+                # default/shared browser. Its JobObject owns its renderers too.
+                try:
+                    process.kill()
+                    process.wait(timeout=0.5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            except OSError:
+                pass
+            finally:
+                if release:
+                    release()
+        return closed
 
     def closed(self):
         """A hidden registered window is alive; an explicitly closed one is not."""
         with self.lock:
-            return bool(self.native and self.native.hwnd and not self.awaiting_registration and not self.native.current())
+            if self.stopped:
+                return True
+            self._discover()
+            if self.native and self.native.hwnd:
+                return not self.native.alive()
+            if self.host_process is not None:
+                code = self.host_process.poll()
+                # Chromium can briefly hand off to its existing dedicated host.
+                # Allow the marked page to attach; a failed/closed new host must
+                # never keep its server alive for the former 180 second timeout.
+                return code is not None and (code != 0 or time.monotonic() - self.opened_at > 2)
+            return False
+
+    def page_closed(self):
+        """A fallback page owns no HWND. A native reload keeps its own frame."""
+        with self.lock:
+            self._discover()
+            return not self.native or not self.native.hwnd or not self.native.alive()
 
     def game_ended(self):
         with self.lock:
-            if not self.restore_after_game:
+            if self.stopped or not self.restore_after_game:
                 return
             self.restore_after_game = False
+            if self.closed():
+                return  # Manual X never becomes a fresh window after game exit.
             # An unregistered frame could not have been hidden. Its first redirect
             # or title handshake may still be in progress; reuse that same window.
             if self.parked and self.awaiting_registration:
@@ -357,10 +456,14 @@ class DesktopWindow:
 
     def show(self, url):
         with self.lock:
+            if self.stopped:
+                return
             self.url = url
             self.parked = False
             if self.native and self.native.focus():
                 return
+            if self.native and self.native.hwnd and self.native.alive():
+                return  # A title/navigation transition is not a second app host.
             exe = browser_executable() if sys.platform == "win32" else None
             if exe:
                 try:
@@ -369,8 +472,7 @@ class DesktopWindow:
                     base, fragment = url.split("#", 1)
                     address = base + "?window=" + marker + "#" + fragment
                     if exe.name.lower() == "firefox.exe":
-                        profile = self.profile.with_name("firefox-" + self.profile.name)
-                        profile.mkdir(parents=True, exist_ok=True)
+                        profile = _private_profile(self.profile.with_name("firefox-" + self.profile.name))
                         command = [
                             str(exe),
                             "-no-remote",
@@ -380,6 +482,7 @@ class DesktopWindow:
                             address,
                         ]
                     else:
+                        _private_profile(self.profile)
                         command = [
                             str(exe),
                             "--user-data-dir=" + str(self.profile),
@@ -389,7 +492,7 @@ class DesktopWindow:
                             "--no-default-browser-check",
                             "--disable-background-mode",
                         ]
-                    subprocess.Popen(
+                    process = subprocess.Popen(
                         command,
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,
@@ -401,6 +504,9 @@ class DesktopWindow:
                     self.awaiting_registration = False
                     self.native, self.marker = None, ""
                 else:
+                    self.host_process = process
+                    self.release_host = lifecycle.own_process(process)
+                    self.opened_at = time.monotonic()
                     self.awaiting_registration = True
                     self.native, self.marker = native, marker
                     return
@@ -413,12 +519,17 @@ class DesktopWindow:
         # Fallback browsers do not receive a window marker. An unrelated browser's HWND
         # cannot be supplied to this endpoint; register() resolves the one-use caption.
         with self.lock:
-            if not self.native or not self.marker or marker != self.marker:
+            if self.stopped or not self.native or not self.marker or marker != self.marker:
                 return False
-            first = self.native.hwnd is None
-            if first and not self.native.register(marker):
+            first = self.native.hwnd is None or self.awaiting_registration
+            if self.native.hwnd is None and not self.native.register(marker):
+                return False
+            if not self.native.alive():
                 return False
             self.awaiting_registration = False
+            if first:
+                self.native.set_icons()
+                self.native.set_identity()
             if self.parked:
                 self.native.hide()
             else:

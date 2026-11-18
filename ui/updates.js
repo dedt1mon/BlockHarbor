@@ -6,6 +6,7 @@
   let fetching = false;
   let lastTransferMarkup = "";
   let lastReleaseMarkup = "";
+  let savingAutomatic = false;
   const labels = {
     queued: "В очереди", downloading: "Загрузка", verifying: "Проверка",
     completed: "Готово", cancelled: "Отменено", failed: "Ошибка", interrupted: "Прервано",
@@ -20,7 +21,7 @@
       ? `<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div>${actions}</div>`
       : head("Загрузки и обновления", actions, "Версии лаунчера, очередь файлов и результаты проверки.");
     return heading +
-      `<div id="updatesScreen"><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" aria-label="Канал обновлений"><option value="stable">Стабильный</option><option value="test">Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
+      `<div id="updatesScreen"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" aria-label="Канал обновлений"><option value="stable">Стабильный</option><option value="test">Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
   }
 
   function releaseMarkup() {
@@ -46,8 +47,9 @@
     }
     if (data.pending) {
       const stage = data.pending.stage;
-      body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : "Открываем установщик"}</strong><p>${stage === "queued" ? "Закрой другие окна BlockHarbor. После выхода из всех игр и завершения операций откроется установщик." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
-      if (stage !== "launching") actions += button("updateCancelInstall", "Отменить установку", "close");
+      const automatic = data.pending.automatic;
+      body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? automatic ? "Автоматическое обновление готово" : "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : automatic ? "Устанавливаем обновление" : "Открываем установщик"}</strong><p>${stage === "queued" ? automatic ? "Закрой другие окна BlockHarbor. После завершения игр, загрузок и операций приложение обновится и откроется снова." : "Закрой другие окна BlockHarbor. После выхода из всех игр и завершения операций откроется установщик." : automatic ? "BlockHarbor ненадолго закроется и автоматически откроется после успешной установки." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
+      if (stage !== "launching") actions += button("updateCancelInstall", automatic ? "Отложить до следующего запуска" : "Отменить установку", "close");
     }
     if (data.rollback && !data.pending) {
       actions += button("rollbackDialog", `Вернуться к ${data.rollback.version}`, "back", "", !data.windows);
@@ -79,6 +81,19 @@
     if (!screen || !data) return;
     const channel = document.querySelector("#updateChannel");
     if (channel && document.activeElement !== channel) channel.value = data.channel;
+    const automatic = document.querySelector("#automaticUpdates");
+    if (automatic && !savingAutomatic) {
+      automatic.checked = Boolean(data.autoEnabled);
+      automatic.disabled = false;
+    }
+    const automaticStatus = document.querySelector("#automaticUpdateStatus");
+    if (automaticStatus) automaticStatus.textContent = !data.autoEnabled
+      ? "Автоматическое обновление выключено. Ручные действия доступны ниже."
+      : data.autoFailure && data.autoFailure.version === data.release?.version
+        ? `Автоустановка версии ${data.autoFailure.version} приостановлена после ошибки. Повторить можно кнопкой «Установить обновление».`
+        : data.autoSnoozed && data.autoSnoozed === data.release?.version
+          ? `Обновление до ${data.autoSnoozed} отложено до следующего запуска.`
+          : data.autoChecking ? "Проверяем обновление в выбранном канале…" : "Автоматическое обновление включено.";
     const release = releaseMarkup();
     if (release !== lastReleaseMarkup) {
       const open = document.querySelector(".update-notes")?.open;
@@ -143,9 +158,10 @@
         await act(action === "rollbackAfterGame" ? "updateRollback" : "updateInstall", { when: "idle", acknowledge: true });
         notice("Установка запланирована. Закрой остальные окна BlockHarbor и заверши игры.");
       } else {
+        const postponed = action === "updateCancelInstall" && data?.pending?.automatic;
         await act(action);
         if (action === "updateDownload") notice("Обновление добавлено в очередь загрузок.");
-        if (action === "updateCancelInstall") notice("Отложенная установка отменена.");
+        if (action === "updateCancelInstall") notice(postponed ? "Автоматическое обновление отложено до следующего запуска." : "Отложенная установка отменена.");
       }
       await load(true);
     } catch (error) {
@@ -173,14 +189,25 @@
     }
   });
   document.addEventListener("change", async (event) => {
-    if (event.target.id !== "updateChannel") return;
+    const automatic = event.target.id === "automaticUpdates";
+    if (!automatic && event.target.id !== "updateChannel") return;
+    const control = event.target;
+    if (automatic) savingAutomatic = true;
+    control.disabled = true;
     try {
-      await act("updateChannel", { channel: event.target.value });
+      await act(automatic ? "updateAutomatic" : "updateChannel", automatic ? {enabled: control.checked} : {channel: control.value});
+      if (automatic && data) data.autoEnabled = control.checked;
       await load();
-      notice("Канал обновлений сохранён. Проверь доступные версии.");
+      notice(automatic ? control.checked ? "Автоматическое обновление включено." : "Автоматическое обновление выключено." : "Канал обновлений сохранён.");
     } catch (error) {
       notice(error.message, true);
-      if (data) event.target.value = data.channel;
+      if (data) {
+        if (automatic) control.checked = Boolean(data.autoEnabled);
+        else control.value = data.channel;
+      }
+    } finally {
+      if (automatic) savingAutomatic = false;
+      control.disabled = false;
     }
   });
   window.UpdatesUI = { render, mount, dispatch };

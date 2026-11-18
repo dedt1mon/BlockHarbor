@@ -25,13 +25,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from . import lifecycle
+
 ATTEMPTS = 3
 SOCKET_TIMEOUT = 25
 MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.1.0", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.2.0", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -62,11 +64,12 @@ def _error(url, error):
 
 
 def _receive(url, output, limit, notify=lambda *_: None):
+    lifecycle.check()
     if urlsplit(url).scheme not in ("https", "http"):
         raise ValueError("Адрес загрузки использует неподдерживаемый протокол.")
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
-    with urlopen(Request(url, headers=_HEADERS), timeout=SOCKET_TIMEOUT) as response:
+    with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=SOCKET_TIMEOUT)) as response:
         try:
             length = int(response.headers.get("Content-Length", "0"))
         except ValueError:
@@ -76,6 +79,7 @@ def _receive(url, output, limit, notify=lambda *_: None):
         count = 0
         deadline = time.monotonic() + 20 * 60
         while block := response.read(256 * 1024):
+            lifecycle.check()
             count += len(block)
             if count > limit or time.monotonic() > deadline:
                 raise _Incomplete("Загрузка превысила ограничение.")
@@ -113,13 +117,15 @@ def metadata_response(url, **_kwargs):
         ) as error:
             if not _retry(error) or attempt + 1 == ATTEMPTS:
                 raise DownloadError(_error(url, error)) from None
-            time.sleep(0.5 * (attempt + 1))
+            lifecycle.wait(0.5 * (attempt + 1))
     raise AssertionError("unreachable")
 
 
 def json_document(url):
     try:
         return metadata_response(url).json()
+    except lifecycle.OperationCancelled:
+        raise
     except ValueError:
         raise DownloadError(
             "Каталог версий повреждён. Повтори загрузку позже."
@@ -127,11 +133,16 @@ def json_document(url):
 
 
 def _valid(path, digest=None):
+    lifecycle.check()
     if not path.is_file() or path.is_symlink():
         return False
     if digest:
         with path.open("rb") as src:
-            return hashlib.file_digest(src, "sha1").hexdigest() == digest
+            result = hashlib.sha1()
+            while block := src.read(1024 * 1024):
+                lifecycle.check()
+                result.update(block)
+            return result.hexdigest() == digest
     if not path.stat().st_size:
         return False
     if path.suffix.lower() in (".jar", ".zip"):
@@ -155,8 +166,10 @@ class Progress:
         self.last = 0.0
         self.phase = "Подготовка"
         self.maximum = 0
+        self.release_console = None
 
     def __call__(self, text):
+        lifecycle.check()
         with self.lock:
             self.status(text)
             if self.console and self.console.poll() is None:
@@ -169,6 +182,7 @@ class Progress:
                     pass
 
     def start(self):
+        lifecycle.check()
         with self.lock:
             if self.started:
                 return
@@ -184,13 +198,15 @@ class Progress:
                         "for line in sys.stdin: print(line,end='',flush=True,file=output)\n"
                     )
                     try:
-                        self.console = subprocess.Popen(
-                            [str(exe), "-u", "-c", script],
-                            stdin=subprocess.PIPE,
-                            encoding="utf-8",
-                            creationflags=subprocess.CREATE_NEW_CONSOLE,
-                            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                        )
+                        with lifecycle.guard():
+                            self.console = subprocess.Popen(
+                                [str(exe), "-u", "-c", script],
+                                stdin=subprocess.PIPE,
+                                encoding="utf-8",
+                                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                            )
+                            self.release_console = lifecycle.own_process(self.console)
                     except OSError:
                         pass
             self("Подготовка файлов Minecraft и Java…")
@@ -231,10 +247,12 @@ class Progress:
                     self(message)
 
         def maximum(value):
+            lifecycle.check()
             with self.lock:
                 self.maximum = value + 1
 
         def done(value):
+            lifecycle.check()
             with self.lock:
                 now = time.monotonic()
                 if self.maximum and (value >= self.maximum or now - self.last >= 0.5):
@@ -247,9 +265,17 @@ class Progress:
         if self.console:
             try:
                 self.console.stdin.close()
-                self.console.wait(timeout=3)
+                self.console.wait(timeout=0.5)
             except (OSError, ValueError, subprocess.TimeoutExpired):
-                self.console.terminate()
+                try:
+                    self.console.kill()
+                    self.console.wait(timeout=0.5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            finally:
+                if self.release_console:
+                    self.release_console()
+                    self.release_console = None
 
 
 class Download:
@@ -267,6 +293,7 @@ class Download:
         minecraft_directory=None,
         overwrite=False,
     ):
+        lifecycle.check()
         path = Path(path)
         if minecraft_directory is not None:
             root = Path(minecraft_directory).resolve()
@@ -275,10 +302,16 @@ class Download:
         if not overwrite and _valid(path, sha1):
             return False
         self.progress.start()
-        with _THREADS:
+        while not _THREADS.acquire(timeout=0.1):
+            lifecycle.check()
+        try:
+            lifecycle.check()
             return self.fetch(url, path, sha1, lzma_compressed)
+        finally:
+            _THREADS.release()
 
     def fetch(self, url, path, sha1, compressed):
+        lifecycle.check()
         path.parent.mkdir(parents=True, exist_ok=True)
         for attempt in range(ATTEMPTS):
             packed = plain = None
@@ -303,6 +336,7 @@ class Download:
                     ):
                         plain = Path(output.name)
                         while block := source.read(256 * 1024):
+                            lifecycle.check()
                             if output.tell() + len(block) > MAX_DOWNLOAD:
                                 raise _Incomplete("Файл Java слишком велик.")
                             output.write(block)
@@ -316,7 +350,8 @@ class Download:
                     raise _Incomplete("Архив загрузчика повреждён.")
                 if not sha1 and path.suffix.lower() == ".json":
                     json.loads(plain.read_bytes())
-                os.replace(plain, path)
+                with lifecycle.guard():
+                    os.replace(plain, path)
                 return True
             except (
                 HTTPError,
@@ -334,7 +369,7 @@ class Download:
                 self.progress(
                     f"Повтор загрузки {path.name} · {attempt + 2} / {ATTEMPTS}"
                 )
-                time.sleep(0.5 * (attempt + 1))
+                lifecycle.wait(0.5 * (attempt + 1))
             finally:
                 if plain is not None:
                     plain.unlink(missing_ok=True)
@@ -365,7 +400,7 @@ class _Processors:
         kwargs.setdefault("timeout", 900)
         check = kwargs.pop("check", True)
         try:
-            return subprocess.run(command, check=check, **kwargs)
+            return lifecycle.run(command, check=check, **kwargs)
         except subprocess.TimeoutExpired:
             raise DownloadError(
                 "Установщик загрузчика не завершился за 15 минут. Повтори подготовку."
@@ -393,35 +428,95 @@ def environment(progress):
         "mod_loader._neoforge",
         "mod_loader._quilt",
     ]
-    with _LIB_LOCK, ExitStack() as stack:
-        modules = [
-            importlib.import_module("minecraft_launcher_lib." + name) for name in names
-        ]
-        original = _helper.download_file
-        downloader = Download(progress)
-        network = SimpleNamespace(
-            get=metadata_response, session=requests.Session, Session=requests.Session
-        )
+    while not _LIB_LOCK.acquire(timeout=0.1):
+        lifecycle.check()
+    try:
+        lifecycle.check()
+        with ExitStack() as stack:
+            yield from _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names)
+    finally:
+        _LIB_LOCK.release()
 
-        def executor(max_workers=None, **kwargs):
-            return ThreadPoolExecutor(max_workers=min(max_workers or 6, 6), **kwargs)
 
-        for module in modules:
-            if getattr(module, "download_file", None) is original:
-                stack.enter_context(_replace(module, "download_file", downloader))
-            if getattr(module, "requests", None) is requests:
-                stack.enter_context(_replace(module, "requests", network))
-            if getattr(module, "ThreadPoolExecutor", None) is ThreadPoolExecutor:
-                stack.enter_context(_replace(module, "ThreadPoolExecutor", executor))
-            if module.__name__.endswith(("._forge", "._neoforge", ".forge")):
-                stack.enter_context(_replace(module, "subprocess", _Processors()))
-        yield
+def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names):
+    modules = [
+        importlib.import_module("minecraft_launcher_lib." + name) for name in names
+    ]
+    original = _helper.download_file
+    downloader = Download(progress)
+    network = SimpleNamespace(
+        get=metadata_response, session=requests.Session, Session=requests.Session
+    )
+
+    def executor(max_workers=None, **kwargs):
+        return lifecycle.Executor(max_workers=min(max_workers or 6, 6), **kwargs)
+
+    def extraction(original):
+        def guarded(*args, **kwargs):
+            # install_libraries deliberately swallows a first download failure;
+            # cancellation must not fall through to extraction of a cached JAR.
+            lifecycle.check()
+            result = original(*args, **kwargs)
+            lifecycle.check()
+            return result
+        return guarded
+
+    for module in modules:
+        if getattr(module, "download_file", None) is original:
+            stack.enter_context(_replace(module, "download_file", downloader))
+        if getattr(module, "requests", None) is requests:
+            stack.enter_context(_replace(module, "requests", network))
+        if getattr(module, "ThreadPoolExecutor", None) is ThreadPoolExecutor:
+            stack.enter_context(_replace(module, "ThreadPoolExecutor", executor))
+        if hasattr(module, "extract_natives_file"):
+            stack.enter_context(_replace(module, "extract_natives_file", extraction(module.extract_natives_file)))
+        if module.__name__.endswith(("._forge", "._neoforge", ".forge")):
+            stack.enter_context(_replace(module, "subprocess", _Processors()))
+    yield
+    lifecycle.check()
+
+
+@contextmanager
+def account_environment(accounts):
+    """Give the pinned Microsoft flow finite, scoped requests without token logs."""
+    import requests
+
+    def request(method, *args, **kwargs):
+        lifecycle.check()
+        kwargs.setdefault("timeout", SOCKET_TIMEOUT)
+        kwargs["stream"] = True
+        reply = requests.request(method, *args, **kwargs)
+        try:
+            with lifecycle.response(reply) as opened:
+                data = bytearray()
+                for block in opened.iter_content(64 * 1024):
+                    if len(data) + len(block) > MAX_METADATA:
+                        raise ValueError("Ответ службы входа слишком велик.")
+                    data.extend(block)
+                lifecycle.check()
+                reply._content = bytes(data)
+                reply._content_consumed = True
+                return reply
+        except requests.RequestException:
+            lifecycle.check()
+            raise
+
+    network = SimpleNamespace(get=lambda *a, **k: request("GET", *a, **k),
+                              post=lambda *a, **k: request("POST", *a, **k))
+    while not _LIB_LOCK.acquire(timeout=0.1):
+        lifecycle.check()
+    try:
+        lifecycle.check()
+        with _replace(accounts, "requests", network):
+            yield
+    finally:
+        _LIB_LOCK.release()
 
 
 @lru_cache(maxsize=8)
 def _java_major(path, stamp):
     try:
-        process = subprocess.run(
+        process = lifecycle.run(
             [path, "-version"],
             capture_output=True,
             text=True,
@@ -478,6 +573,7 @@ def runtime_problem(cache, component, java):
         previous = {}
     verified = {}
     for line in raw.decode("utf-8").splitlines():
+        lifecycle.check()
         name, separator, digest_time = line.partition(" /#// ")
         path = platform / component / name
         if (
@@ -502,7 +598,8 @@ def runtime_problem(cache, component, java):
                 stream.write(
                     json.dumps({"manifest": manifest, "files": verified}).encode()
                 )
-            os.replace(tmp, index_file)
+            with lifecycle.guard():
+                os.replace(tmp, index_file)
         finally:
             if tmp:
                 tmp.unlink(missing_ok=True)

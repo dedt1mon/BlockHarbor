@@ -17,6 +17,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import lifecycle
+from .startup_wait import StartupCancelled, StartupWait
 from .store import Store
 
 
@@ -104,6 +106,44 @@ class FileMutex:
         self.path, self.shared = Path(path), shared
         self.handle = None
 
+    def _lock_windows(self, fd):
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        class Overlapped(ctypes.Structure):
+            _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t), ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD), ("hEvent", wintypes.HANDLE)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+        kernel.LockFileEx.restype = wintypes.BOOL
+        kernel.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+        kernel.UnlockFileEx.restype = wintypes.BOOL
+        overlapped = Overlapped()  # Offset zero, hEvent NULL; synchronous CRT handle.
+        native = msvcrt.get_osfhandle(fd)
+        if kernel.LockFileEx(native, 1 | (0 if self.shared else 2), 0, 1, 0, ctypes.byref(overlapped)):
+            self._windows = kernel, native, overlapped
+            return True
+        error = ctypes.get_last_error()
+        # Only ERROR_LOCK_VIOLATION means another owner holds this byte range.
+        # WinError(5) also maps to errno.EACCES, but is an access/ACL failure,
+        # not evidence that an older launcher is running.
+        if error == 33:
+            return False
+        raise ctypes.WinError(error)
+
+    @staticmethod
+    def _lock_posix(handle, shared):
+        import fcntl
+
+        try:
+            fcntl.flock(handle, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                return False
+            raise
+        return True
+
     def acquire(self):
         if self.handle is not None:
             return True
@@ -114,44 +154,29 @@ class FileMutex:
         handle = os.fdopen(fd, "r+b", buffering=0)
         try:
             if os.name == "nt":
-                import ctypes
-                import msvcrt
-                from ctypes import wintypes
-                class Overlapped(ctypes.Structure):
-                    _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t), ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD), ("hEvent", wintypes.HANDLE)]
-                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-                kernel.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
-                kernel.LockFileEx.restype = wintypes.BOOL
-                kernel.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
-                kernel.UnlockFileEx.restype = wintypes.BOOL
-                overlapped = Overlapped()
-                native = msvcrt.get_osfhandle(fd)
-                if not kernel.LockFileEx(native, 1 | (0 if self.shared else 2), 0, 1, 0, ctypes.byref(overlapped)):
-                    error = ctypes.get_last_error()
-                    if error in {32, 33, 158}:
-                        handle.close()
-                        return False
-                    raise ctypes.WinError(error)
-                self._windows = kernel, native, overlapped
+                acquired = self._lock_windows(fd)
             else:
-                import fcntl
-                fcntl.flock(handle, (fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
-        except OSError as error:
+                acquired = self._lock_posix(handle, self.shared)
+        except BaseException:
             handle.close()
-            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                return False
             raise
+        if not acquired:
+            handle.close()
+            return False
         self.handle = handle
         return True
 
     def close(self):
         if self.handle is not None:
-            if os.name == "nt":
-                import ctypes
-                kernel, native, overlapped = self._windows
-                kernel.UnlockFileEx(native, 0, 1, 0, ctypes.byref(overlapped))
-            self.handle.close()
-            self.handle = None
+            handle, self.handle = self.handle, None
+            try:
+                if os.name == "nt":
+                    import ctypes
+                    kernel, native, overlapped = self._windows
+                    if not kernel.UnlockFileEx(native, 0, 1, 0, ctypes.byref(overlapped)):
+                        raise ctypes.WinError(ctypes.get_last_error())
+            finally:
+                handle.close()
 
     def __del__(self):
         try:
@@ -213,7 +238,7 @@ class WindowStore(Store):
 
 
 class SessionCoordinator:
-    def __init__(self, root, *, startup_timeout=30):
+    def __init__(self, root, *, startup_timeout=30, legacy_timeout=190, startup_status=None, startup_cancel=None):
         self.root = Path(root).resolve()
         self.directory = self.root / "launcher-sessions"
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -244,9 +269,8 @@ class SessionCoordinator:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.1)
-        if not self.legacy.acquire():
-            raise ValueError("Закрой предыдущую версию BlockHarbor перед запуском нескольких новых окон.")
         try:
+            self._acquire_legacy(legacy_timeout, startup_status, startup_cancel)
             with self.registry():
                 self._require_no_update()
                 for slot in range(1, 129):
@@ -266,19 +290,55 @@ class SessionCoordinator:
             self.close()
             raise
 
+    def _acquire_legacy(self, timeout, status, cancel):
+        if cancel is not None and cancel.is_set():
+            raise StartupCancelled()
+        if self.legacy.acquire():
+            return
+        # Version 2.0 can keep its HTTP process alive for three minutes after
+        # the browser window closes. Wait for its real OS lock to be released;
+        # never delete/recreate owner.lock or trust leftover metadata to unlock it.
+        deadline = time.monotonic() + max(0, timeout)
+        message = (
+            "Ожидаем освобождения файлов BlockHarbor. Новое окно откроется автоматически.\n\n"
+            "Если предыдущая версия ещё открыта, закрой её и запущенный через неё Minecraft. "
+            "После закрытия старого окна завершение может занять до трёх минут."
+        )
+        wait_window = StartupWait() if status is None else None
+        report = wait_window.update if wait_window is not None else status
+        try:
+            while True:
+                if (cancel is not None and cancel.is_set()) or report(message) is False:
+                    raise StartupCancelled()
+                self._require_no_update()
+                if self.legacy.acquire():
+                    return
+                if time.monotonic() >= deadline:
+                    raise ValueError(
+                        "Файлы BlockHarbor всё ещё заняты. Закрой предыдущую версию лаунчера "
+                        "и запущенные через неё игры, затем открой BlockHarbor снова."
+                    )
+                time.sleep(0.1)
+        finally:
+            if wait_window is not None:
+                wait_window.close()
+
     @property
     def namespace(self):
         return "" if self.slot == 1 else "window-" + str(self.slot)
 
     @contextmanager
     def registry(self):
+        lifecycle.check()
         mutex = FileMutex(self.directory / "registry.lock")
         deadline = time.monotonic() + 15
         while not mutex.acquire():
+            lifecycle.check()
             if time.monotonic() >= deadline:
                 raise ValueError("Другое окно запускается. Повтори запуск BlockHarbor.")
-            time.sleep(0.05)
+            lifecycle.wait(0.05)
         try:
+            lifecycle.check()
             yield
         finally:
             mutex.close()
@@ -305,39 +365,54 @@ class SessionCoordinator:
                     profiles.add(pid)
         return {"runningProfiles": sorted(profiles), "launcherCount": launchers}
 
-    def _require_no_update(self):
+    def _require_no_update(self, *, allow_owner=False):
         gate = read_record(self.directory / "update.json")
-        if gate.get("session") != self.session and (process_alive(gate.get("owner")) or process_alive(gate.get("helper"))):
+        if (not allow_owner or gate.get("session") != self.session) and (process_alive(gate.get("owner")) or process_alive(gate.get("helper"))):
             raise ValueError("Устанавливается обновление BlockHarbor. Дождись завершения установщика и открой лаунчер снова.")
 
     @contextmanager
     def operation(self, *, wait=False, timeout=300, status=None):
-        if not self.thread_lock.acquire(blocking=wait):
-            raise SessionBusy("В этом окне изменяются файлы. Дождись завершения операции.")
+        lifecycle.check()
+        deadline = time.monotonic() + timeout
+        while not self.thread_lock.acquire(blocking=False):
+            lifecycle.check()
+            if not wait or time.monotonic() >= deadline:
+                raise SessionBusy("В этом окне изменяются файлы. Дождись завершения операции.")
+            if status:
+                status("Ожидаем завершения другой операции в этом окне BlockHarbor…")
+                status = None
+            lifecycle.wait(0.1)
         acquired = False
         try:
+            lifecycle.check()
             if not self.depth:
-                deadline = time.monotonic() + timeout
                 while not self.operation_lock.acquire():
+                    lifecycle.check()
                     if not wait or time.monotonic() >= deadline:
                         raise SessionBusy("В другом окне BlockHarbor изменяются файлы. Дождись завершения операции и повтори.")
                     if status:
                         status("Ожидаем завершения подготовки в другом окне BlockHarbor…")
                         status = None
-                    time.sleep(0.1)
+                    lifecycle.wait(0.1)
                 acquired = True
             self.depth += 1
             try:
-                self._require_no_update()
+                lifecycle.check()
+                # The updater may re-enter its own held transaction. Once it
+                # hands off and releases that transaction, even this window's
+                # previously queued jobs must not launch games or change files.
+                self._require_no_update(allow_owner=self.depth > 1)
                 if acquired and self.recover is not None:
                     self.recover()
                 yield
             finally:
                 self.depth -= 1
         finally:
-            if acquired:
-                self.operation_lock.close()
-            self.thread_lock.release()
+            try:
+                if acquired:
+                    self.operation_lock.close()
+            finally:
+                self.thread_lock.release()
 
     def claim(self, pid):
         # Caller holds operation() until startup has published the child identity.
@@ -376,6 +451,17 @@ class SessionCoordinator:
     def handoff(self):
         return {"sessionRoot": str(self.root), "launcherSession": self.session}
 
+    def cancel_update(self):
+        """Clear only our stopped helper's handoff; the caller serializes installs."""
+        # Cleanup must also work after this window's cancellation event is set.
+        with lifecycle.bind(None), self.registry():
+            path = self.directory / "update.json"
+            gate = read_record(path)
+            if gate.get("session") != self.session or process_alive(gate.get("helper")):
+                return False
+            path.unlink(missing_ok=True)
+            return True
+
     def close(self):
         if self.closed:
             return
@@ -392,9 +478,11 @@ class SessionCoordinator:
         except OSError:
             pass  # A temporary/test data directory may already have been removed.
         finally:
-            if self.slot_lock:
-                self.slot_lock.close()
-            self.legacy.close()
+            try:
+                if self.slot_lock:
+                    self.slot_lock.close()
+            finally:
+                self.legacy.close()
 
     def __del__(self):
         try:

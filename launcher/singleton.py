@@ -64,8 +64,27 @@ class SingleInstance:
                         pass
             return self
         except BaseException:
-            self._handle.close()
+            self._release()
             raise
+
+    def _release(self):
+        handle, self._handle = self._handle, None
+        if handle is None:
+            return
+        try:
+            if self.primary:
+                if os.name == "nt":
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            self.primary = False
+            handle.close()
 
     def _request_window(self):
         fd, filename = tempfile.mkstemp(
@@ -146,4 +165,6 @@ class SingleInstance:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
-        self._handle.close()  # The kernel also releases the lock on abrupt process termination.
+        # Explicit unlock avoids the OS cleanup delay after a normal shutdown.
+        # The kernel still releases the lock on abrupt process termination.
+        self._release()

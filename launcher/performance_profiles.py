@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
-
-from . import distances, modrinth
+from . import distances, lifecycle, modrinth
 from .memory import automatic_heap
 
 PRESETS = {
@@ -72,6 +70,7 @@ class PerformanceProfiles:
         return "Применён профиль «" + plan["title"] + "». Предыдущие настройки доступны в точках восстановления."
 
     def recommendations(self, pid):
+        lifecycle.check()
         profile = self.store.profile(pid)
         if profile["loader"] == "vanilla":
             return {"items": [], "message": "Для модов оптимизации нужна сборка с загрузчиком модов."}
@@ -83,10 +82,12 @@ class PerformanceProfiles:
                 versions = modrinth.versions(self.store, pid, "mods", project["id"])["versions"]
                 release = next((v for v in versions if v["type"] == "release"), None)
                 return {"title": title, "description": description, "project": project["id"], "version": release, "available": bool(release)}
+            except lifecycle.OperationCancelled:
+                raise
             except (ValueError, KeyError, OSError) as exc:
                 return {"title": title, "description": description, "available": False, "error": str(exc)[:200]}
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with lifecycle.Executor(max_workers=3) as pool:
             return {"items": list(pool.map(one, PROJECTS)), "message": "Совместимость версии подтверждается каталогом. Перед установкой будет проверен состав этой сборки; результат зависит от компьютера и остальных модов."}
 
     def handle(self, action, p, status=lambda _: None):

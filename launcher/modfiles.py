@@ -10,6 +10,8 @@ import zlib
 from contextlib import contextmanager
 from functools import lru_cache
 
+from . import lifecycle
+
 
 def file_stamp(file):
     st = file.stat()
@@ -19,7 +21,15 @@ def file_stamp(file):
 @lru_cache(maxsize=1024)
 def file_hash(file, stamp, algorithm):
     with file.open("rb") as stream:
-        return hashlib.file_digest(stream, algorithm).hexdigest()
+        if lifecycle.current_scope() is None:
+            return hashlib.file_digest(stream, algorithm).hexdigest()
+        digest = hashlib.new(algorithm)
+        while True:
+            lifecycle.check()
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
 
 
 DESCRIPTORS = (

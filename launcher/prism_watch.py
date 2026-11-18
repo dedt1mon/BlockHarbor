@@ -6,6 +6,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+from . import lifecycle
+
 _LOCK = threading.Lock()
 _WATCHING = set()
 
@@ -69,6 +71,8 @@ class ObservedGame:
 
 
 def observe(instance, engine, on_game, *, on_waiting=None, on_done=None):
+    scope = lifecycle.current_scope()
+    lifecycle.check()
     key = str(instance)
     with _LOCK:
         if key in _WATCHING:
@@ -76,6 +80,20 @@ def observe(instance, engine, on_game, *, on_waiting=None, on_done=None):
         _WATCHING.add(key)
 
     def watch():
+        try:
+            with lifecycle.bind(scope):
+                observe_game()
+        except (OSError, KeyError, lifecycle.OperationCancelled):
+            # Optional window observation must not interrupt an authenticated game.
+            return
+        finally:
+            with _LOCK:
+                _WATCHING.discard(key)
+            if on_done:
+                on_done()
+
+    def observe_game():
+        release = None
         try:
             shell = (
                 Path(os.environ["SystemRoot"])
@@ -87,34 +105,32 @@ def observe(instance, engine, on_game, *, on_waiting=None, on_done=None):
                 BH_PRISM_NATIVES=_names(instance),
                 BH_PRISM_EXE=str(engine),
             )
-            with subprocess.Popen(
-                [
-                    str(shell),
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    _WATCH,
-                ],
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            ) as watcher:
+            with lifecycle.guard():
+                watcher = subprocess.Popen(
+                    [
+                        str(shell),
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        _WATCH,
+                    ],
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                release = lifecycle.own_process(watcher)
+            with watcher:
                 if on_waiting:
                     on_waiting(watcher)
                 response = watcher.stdout.readline().strip().split()
                 if len(response) == 2 and response[0] == b"GAME" and response[1].isdigit() and 0 < int(response[1]) < 2**32:
                     on_game(ObservedGame(watcher, int(response[1])))
                 watcher.wait()
-        except (OSError, KeyError):
-            # Optional window observation must not interrupt an authenticated game.
-            return
         finally:
-            with _LOCK:
-                _WATCHING.discard(key)
-            if on_done:
-                on_done()
+            if release:
+                release()
 
     threading.Thread(target=watch, name="blockharbor-prism-game", daemon=True).start()

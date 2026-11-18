@@ -16,11 +16,14 @@ import secrets
 import shutil
 import threading
 import time
+from contextlib import ExitStack
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from . import lifecycle
 
 MAX_BYTES = 8 * 1024**3
 MAX_HISTORY = 100
@@ -71,7 +74,7 @@ def open_https(url, hosts, *, headers=None, timeout=15):
     request = Request(
         url,
         headers={
-            "User-Agent": "BlockHarbor/2.0 (desktop launcher; dedt1mon/BlockHarbor)",
+            "User-Agent": "BlockHarbor/2.2.0 (desktop launcher; dedt1mon/BlockHarbor)",
             "Accept-Encoding": "identity",
             **(headers or {}),
         },
@@ -135,10 +138,41 @@ class TransferManager:
         self.tasks = {}
         self.cancel_flags = {}
         self.callbacks = {}
+        self.responses = {}
+        self.runners = set()
+        self.scope = lifecycle.CancellationScope()
         self.waiting = queue.Queue()
         self._load()
         self.worker = threading.Thread(target=self._worker, daemon=True, name="bh-downloads")
         self.worker.start()
+
+    def active(self):
+        with self.lock:
+            return any(row["state"] in ACTIVE for row in self.tasks.values())
+
+    def close(self, timeout=2):
+        """Cancel this window's queue and I/O; never resume it after closing."""
+        self.scope.cancel()
+        with self.lock:
+            for task_id, row in self.tasks.items():
+                if row["state"] in ACTIVE:
+                    self.cancel_flags[task_id].set()
+                    if row["state"] == "queued":
+                        row.update(state="cancelled", message="Лаунчер закрыт. Загрузку можно повторить.", rate=0)
+            self.callbacks.clear()
+            while True:
+                try:
+                    self.waiting.get_nowait()
+                except queue.Empty:
+                    break
+                self.waiting.task_done()
+            self.waiting.put(None)
+            self._persist()
+            threads = set(self.runners) | {self.worker}
+        deadline = time.monotonic() + max(0, timeout)
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(max(0, deadline - time.monotonic()))
 
     def _inside(self, destination):
         path = Path(destination)
@@ -218,6 +252,7 @@ class TransferManager:
         """Reconnect a durable cache consumer after an application restart."""
         destination = str(self._inside(destination))
         with self.lock:
+            self.scope.check()
             for task_id, row in self.tasks.items():
                 if row.get("background") and row.get("config", {}).get("destination") == destination:
                     self.callbacks[task_id] = callback
@@ -233,6 +268,7 @@ class TransferManager:
         if size is not None and (type(size) is not int or not 0 <= size <= max_size):
             raise ValueError("Некорректный размер загрузки.")
         with self.lock:
+            self.scope.check()
             if sum(r["state"] in ACTIVE for r in self.tasks.values()) >= MAX_PENDING:
                 raise ValueError("Очередь загрузок заполнена. Дождись завершения текущих файлов.")
             if any(
@@ -290,15 +326,20 @@ class TransferManager:
     def submit(self, url, destination, *, title=None, hashes, size=None, max_size=MAX_BYTES,
                hosts, category="content", status=lambda text: None, resume=True, on_complete=None):
         task_id = self._new(url, destination, title, hashes, size, max_size, hosts, category, resume, True)
-        if on_complete:
-            self.callbacks[task_id] = on_complete
-        self.waiting.put((task_id, status))
+        with self.lock:
+            self.scope.check()
+            if on_complete:
+                self.callbacks[task_id] = on_complete
+            self.waiting.put((task_id, status))
         return task_id
 
     def _worker(self):
         while True:
-            task_id, status = self.waiting.get()
+            item = self.waiting.get()
             try:
+                if item is None:
+                    return
+                task_id, status = item
                 self._run(task_id, status)
             except Exception:
                 pass  # The visible task contains the error; the worker stays alive.
@@ -319,10 +360,14 @@ class TransferManager:
             if row["state"] == "queued":
                 row.update(state="cancelled", message="Загрузка отменена.", rate=0)
             self._persist()
+            opened = self.responses.get(task_id)
+        if opened is not None:
+            lifecycle.abort_response(opened)
         return {"ok": True}
 
     def retry(self, task_id):
         with self.lock:
+            self.scope.check()
             row = self.tasks.get(task_id)
             if not row or row["state"] in ACTIVE or not row.get("retryable"):
                 raise ValueError("Повтори исходную операцию, чтобы загрузить этот файл заново.")
@@ -354,10 +399,25 @@ class TransferManager:
         return {"ok": True}
 
     def _check_cancel(self, task_id):
-        if self.cancel_flags[task_id].is_set():
+        if self.scope.event.is_set() or self.cancel_flags[task_id].is_set():
             raise TransferCancelled("Загрузка отменена. Уже скачанная часть сохранена для повтора, если источник поддерживает продолжение.")
 
     def _run(self, task_id, status):
+        thread = threading.current_thread()
+        with self.lock:
+            self.runners.add(thread)
+        try:
+            with lifecycle.bind(self.scope):
+                return self._run_scoped(task_id, status)
+        except lifecycle.OperationCancelled as exc:
+            self._update(task_id, state="cancelled", message="Лаунчер закрыт. Загрузку можно повторить.", rate=0)
+            self._persist()
+            raise TransferCancelled(str(exc)) from None
+        finally:
+            with self.lock:
+                self.runners.discard(thread)
+
+    def _run_scoped(self, task_id, status):
         acquired = False
         try:
             while not acquired:
@@ -372,11 +432,13 @@ class TransferManager:
                 self._persist()
                 try:
                     result = self._receive(task_id, config, title, status)
+                    self._check_cancel(task_id)
                     self._update(task_id, state="completed", message="Файл загружен и проверен.", rate=0)
                     self._persist()
-                    callback = self.callbacks.get(task_id)
-                    if callback:
-                        callback(result)
+                    with self.scope.guard():
+                        callback = self.callbacks.get(task_id)
+                        if callback:
+                            callback(result)
                     return result
                 except HTTPError as exc:
                     code = exc.code
@@ -384,15 +446,16 @@ class TransferManager:
                     if code not in {408, 429, 500, 502, 503, 504} or attempt == 3:
                         raise ValueError(f"Источник вернул HTTP {code}. Повтори загрузку позже.") from None
                 except (OSError, URLError, TimeoutError, HTTPException) as exc:
+                    self._check_cancel(task_id)
                     if attempt == 3:
                         raise ValueError("Связь с источником прервалась. Проверь подключение и повтори загрузку.") from exc
                 self._update(task_id, message="Связь прервалась. Повторяем подключение…", rate=0)
                 if self.cancel_flags[task_id].wait(attempt):
                     self._check_cancel(task_id)
-        except TransferCancelled as exc:
+        except (TransferCancelled, lifecycle.OperationCancelled) as exc:
             self._update(task_id, state="cancelled", message=str(exc), rate=0)
             self._persist()
-            raise
+            raise TransferCancelled(str(exc)) from None
         except Exception as exc:
             self._update(task_id, state="failed", message=str(exc)[:500] or "Не удалось загрузить файл.", rate=0)
             self._persist()
@@ -427,8 +490,10 @@ class TransferManager:
         if start:
             headers.update(Range=f"bytes={start}-", **{"If-Range": saved["validator"]})
         response = None
+        contexts = ExitStack()
         try:
             try:
+                self._check_cancel(task_id)
                 response = open_https(config["url"], set(config["hosts"]), headers=headers)
             except HTTPError as exc:
                 if exc.code != 416 or not start:
@@ -438,9 +503,14 @@ class TransferManager:
                 # before verification. A size match alone is not sufficient.
                 if config["size"] is not None and start == config["size"]:
                     self._verify(task_id, partial, config)
-                    return self._publish(partial, destination, metadata)
+                    return self._publish(partial, destination, metadata, task_id)
                 start = 0
+                self._check_cancel(task_id)
                 response = open_https(config["url"], set(config["hosts"]))
+            with self.lock:
+                self.responses[task_id] = response
+            response = contexts.enter_context(lifecycle.response(response))
+            self._check_cancel(task_id)
             code = response.getcode()
             if response.headers.get("Content-Encoding", "identity").lower() not in {"", "identity"}:
                 raise ValueError("Источник вернул сжатый транспорт: безопасное продолжение недоступно.")
@@ -489,6 +559,7 @@ class TransferManager:
                 while True:
                     self._check_cancel(task_id)
                     block = response.read(CHUNK)
+                    self._check_cancel(task_id)
                     if not block:
                         break
                     received += len(block)
@@ -509,8 +580,11 @@ class TransferManager:
             if expected_remaining is not None and received - start != expected_remaining:
                 raise OSError("Передача файла оборвалась.")
             self._verify(task_id, partial, config)
-            return self._publish(partial, destination, metadata)
+            return self._publish(partial, destination, metadata, task_id)
         finally:
+            with self.lock:
+                self.responses.pop(task_id, None)
+            contexts.close()
             if response is not None:
                 response.close()
 
@@ -532,9 +606,12 @@ class TransferManager:
         self._check_cancel(task_id)
         self._update(task_id, bytes=size, total=size)
 
-    def _publish(self, partial, destination, metadata):
-        self._inside(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(partial, destination)
-        metadata.unlink(missing_ok=True)
+    def _publish(self, partial, destination, metadata, task_id=None):
+        with self.scope.guard():
+            if task_id is not None:
+                self._check_cancel(task_id)
+            self._inside(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(partial, destination)
+            metadata.unlink(missing_ok=True)
         return destination

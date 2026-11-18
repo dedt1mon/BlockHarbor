@@ -171,7 +171,20 @@
       modal("Сохранить скин в гардероб", '<form id="wardrobeSave" class="stack"><label>Название<input class="field" id="wardrobeName" maxlength="60" value="Мой скин" required></label><button class="btn main" type="submit">Сохранить</button></form>');
       $("#wardrobeSave").onsubmit = async e=>{e.preventDefault();try{await act("experienceSaveSkin",{name:$("#wardrobeName").value});closeDialog();await loadWardrobe();notice("Скин добавлен в гардероб.");}catch(e){notice(e.message,true);}}; return;
     }
-    if (action === "useSkin") { await act("experienceUseSkin",{skin:el.dataset.skin}); profileDraft=null; await refresh(); return notice("Скин выбран. Он будет применён при следующем запуске игры."); }
+    if (action === "useSkin") {
+      if (profileJob || profileSubmission) return notice("Дождись сохранения параметров профиля.", true);
+      const draft = characterDraft(), file = draft.file, revision = draft.revisions.model;
+      await act("experienceUseSkin", {skin:el.dataset.skin});
+      state = await api("/api/state");
+      // Choosing a saved skin must not discard an edited player name.
+      if (draft.file === file && draft.revisions.model === revision) {
+        draft.file = null;
+        draft.model = state.model || "classic";
+        draft.dirty.model = false;
+      }
+      render();
+      return notice("Скин выбран. Он будет применён при следующем запуске игры.");
+    }
     if (action === "deleteSkin") {
       const id=el.dataset.skin;
       modal("Убрать скин из гардероба?", '<p>Текущий скин персонажа останется выбранным.</p><button class="btn danger" id="confirmWardrobeDelete">Убрать</button>');

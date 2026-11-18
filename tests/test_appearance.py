@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from launcher import aliases, game, skins
+from launcher import aliases, build_archive, game, skins
 from main import App
 from PIL import Image
 
@@ -187,3 +187,99 @@ class AppearanceTests(unittest.TestCase):
         self.assertIn("_Universal-", aliases.skin_release("26.3", "neoforge").filename)
         self.assertIsNone(aliases.skin_release("1.8", "fabric"))
         self.assertIsNone(aliases.skin_release("1.20.1", "vanilla"))
+
+
+class GlobalPlayerProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.app = App(self.root)
+        self.addCleanup(self.app.close)
+
+    def completed(self, job):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            result = self.app.job_snapshot()
+            if result["id"] == job["job"] and not result["busy"]:
+                self.assertTrue(result["ok"], result)
+                return result
+            time.sleep(0.01)
+        self.fail("Player profile save did not finish")
+
+    def test_new_installation_saves_before_builds_and_reuses_name_after_restart_and_import(self):
+        self.assertEqual(self.app.store.all(), [])
+        self.completed(self.app.save_appearance({
+            "skinDestination": "profile", "nickname": "  HarborFriend  ", "model": "slim",
+        }, None))
+        self.assertEqual(self.app.player_name(), "HarborFriend")
+        self.app.close()
+        self.app = App(self.root)
+        self.addCleanup(self.app.close)
+        self.assertEqual(self.app.player_name(), "HarborFriend")
+        self.assertEqual(self.app.store.get("model"), "slim")
+
+        for name in ("First build", "Second build"):
+            self.app.action("create", {"name": name, "version": "1.21.1", "loader": "vanilla"})
+            self.assertEqual(self.app.player_name(), "HarborFriend")
+        first = self.app.store.all()[0]["id"]
+        self.app.action("select", {"id": first})
+        self.assertEqual(self.app.player_name(), "HarborFriend")
+        archive = io.BytesIO()
+        build_archive.export_build(self.app.store, first, archive)
+        imported = build_archive.import_build(self.app.store, archive)
+        self.assertEqual(self.app.store.get("active"), imported["id"])
+        self.assertEqual(self.app.player_name(), "HarborFriend")
+
+    def test_global_skin_and_name_save_does_not_access_a_running_build(self):
+        pid = self.app.store.create("Vanilla", "1.21.1", "vanilla")
+        folder = self.app.store.folder(pid)
+        world = folder / "saves" / "Kept World" / "level.dat"
+        world.parent.mkdir(parents=True)
+        world.write_bytes(b"unchanged-world")
+        before = set(folder.rglob("*"))
+        image = io.BytesIO()
+        Image.new("RGBA", (64, 64), (15, 100, 200, 255)).save(image, format="PNG")
+        with (
+            patch.object(self.app, "profile_running", return_value=True),
+            patch.object(self.app, "require_profile_idle", side_effect=AssertionError("Build is not part of player save")),
+            patch.object(self.app.store, "profile", side_effect=AssertionError("No build lookup")),
+            patch.object(self.app.store, "folder", side_effect=AssertionError("No build folder lookup")),
+            patch.object(aliases, "ensure_skin_support") as install,
+            patch.object(aliases, "apply_alias") as alias,
+        ):
+            self.completed(self.app.save_appearance({
+                "skinDestination": "profile", "nickname": "NewFriend", "model": "slim", "id": pid,
+            }, image.getvalue()))
+        install.assert_not_called()
+        alias.assert_not_called()
+        self.assertEqual(self.app.player_name(), "NewFriend")
+        self.assertTrue(self.app.skin_path().is_file())
+        self.assertEqual(set(folder.rglob("*")), before)
+        self.assertEqual(world.read_bytes(), b"unchanged-world")
+
+    def test_invalid_explicit_nickname_or_png_does_not_replace_saved_profile(self):
+        self.app.action("saveNickname", {"nickname": "KeptName"})
+        for invalid in ("", "  ", "!", "слишком", "A" * 17, None, 42):
+            with self.subTest(nickname=invalid), self.assertRaises(ValueError):
+                self.app.save_appearance({"skinDestination": "profile", "nickname": invalid}, None)
+            with self.subTest(action_nickname=invalid), self.assertRaises(ValueError):
+                self.app.action("saveNickname", {"nickname": invalid})
+        with self.assertRaisesRegex(ValueError, "PNG"):
+            self.app.save_appearance({
+                "skinDestination": "profile", "nickname": "OtherName", "model": "slim",
+            }, b"not-an-image")
+        self.assertEqual(self.app.player_name(), "KeptName")
+        self.assertFalse(self.app.skin_path().is_file())
+
+    def test_quick_name_save_preserves_other_windows_and_official_account_identity(self):
+        other = App(self.root)
+        self.addCleanup(other.close)
+        self.app.store.set("mode", "direct")
+        self.app.account = {"name": "OfficialPlayer"}
+        result = self.app.action("saveNickname", {"nickname": "  LocalPlayer  "})
+        self.assertEqual(result, {"ok": True, "nickname": "LocalPlayer", "message": "Успешно сохранено"})
+        self.assertEqual(self.app.player_name(), "OfficialPlayer")
+        self.assertEqual(other.player_name(), "Player")
+        self.assertEqual(self.app.store.get("nickname"), "LocalPlayer")
+        fresh = App(self.root)
+        self.addCleanup(fresh.close)
+        self.assertEqual(fresh.store.get("nickname"), "LocalPlayer")

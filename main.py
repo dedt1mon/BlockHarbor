@@ -672,6 +672,12 @@ class App:
             return self.store.get("nickname") or "Player"
         return (self.account or {}).get("name") or self.store.get("realName")
 
+    def requested_nickname(self, params):
+        # An omitted value reuses the player's saved default. An explicitly
+        # empty value is invalid, rather than silently launching as someone else.
+        value = params.get("nickname", self.store.get("nickname") or "Player")
+        return skins.validate_nickname(value if isinstance(value, str) else "")
+
     def job_snapshot(self):
         with self.jobs_lock:
             process = self.process_state()
@@ -767,7 +773,7 @@ class App:
 
     def save_appearance(self, params, uploaded):
         store = self.store
-        model = params.get("model", "classic")
+        model = params.get("model", store.get("model", "classic"))
         skins._check_model(model)
         if params.get("skinDestination") == "java":
             current = self.skin_path()
@@ -782,8 +788,7 @@ class App:
 
             return self.start_job(save_for_java)
 
-        profile = store.profile(params["id"])
-        nick = skins.validate_nickname(params.get("nickname") or "Player")
+        nick = self.requested_nickname(params)
         mode = store.get("mode", "local")
         real = (self.account or {}).get("name") or params.get(
             "realName", store.get("realName")
@@ -797,6 +802,20 @@ class App:
             if uploaded or current.is_file()
             else None
         )
+        if params.get("skinDestination") == "profile":
+            # Player identity belongs to the launcher profile. Saving it must
+            # work before any build exists and while a different game is open.
+            # Compatible builds receive the saved skin during their next launch.
+            def save_player(status):
+                values = {"nickname": nick, "realName": real or "", "model": model}
+                if pixels:
+                    values["skinDigest"] = skins.save_texture(store.root, pixels)
+                store.set_many(values)
+                return "Успешно сохранено"
+
+            return self.start_job(save_player)
+
+        profile = store.profile(params["id"])
         version, loader = profile["version"], profile["loader"]
         convert = bool(
             pixels
@@ -1011,19 +1030,19 @@ class App:
                     )
             self.care.before_change(p["id"], "Удаление дополнения " + p["name"])
             s.remove(p["id"], p["kind"], p["name"])
+        elif action == "saveNickname":
+            nick = self.requested_nickname(p)
+            s.set("nickname", nick)
+            return {"ok": True, "nickname": nick, "message": "Успешно сохранено"}
         elif action == "saveProfile":
-            nick = p.get("nickname", "").strip()
-            if nick:
-                skins.validate_nickname(nick)
+            nick = self.requested_nickname(p)
             model = p.get("model")
             if model not in ("classic", "slim"):
                 raise ValueError("Неизвестная модель.")
             real = p.get("realName", "").strip()
             if real:
                 skins.validate_nickname(real)
-            s.set("realName", real)
-            s.set("nickname", nick)
-            s.set("model", model)
+            s.set_many({"realName": real, "nickname": nick, "model": model})
         elif action == "settings":
             import uuid
 
@@ -1220,9 +1239,7 @@ class App:
                 raise ValueError("Войди в Microsoft в настройках выбранного режима.")
             nick = ""
             if mode == "local":
-                nick = skins.validate_nickname(
-                    p.get("nickname") or s.get("nickname") or "Player"
-                )
+                nick = self.requested_nickname(p)
 
             def play(status):
                 self.prism_launches.pop(pro["id"], None)
@@ -1237,6 +1254,8 @@ class App:
                         self.coordinator.release(pro["id"])
 
             def launch_claimed(status):
+                if mode == "local":
+                    s.set("nickname", nick)
                 self.metrics.prepare(pro["id"])
                 image = self.skin_path()
                 target = nick if mode == "local" else self.player_name()
@@ -1283,8 +1302,6 @@ class App:
                     )
                     return "Запуск передан Prism. При первом входе заверши настройку аккаунта."
                 cache = s.root / "game-cache"
-                if mode == "local":
-                    s.set("nickname", nick)
                 game.install(pro["version"], pro["loader"], cache, folder, status)
                 if mode == "local":
                     process = game.launch_local(
@@ -1624,7 +1641,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/api/profile", "/api/skin-preview"):
                 if not 0 <= length <= 1024 * 1024:
                     raise ValueError("Файл скина превышает 1 МБ.")
-                parameters = {k: v[0] for k, v in parse_qs(u.query).items()}
+                parameters = {k: v[0] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
                 raw = self.rfile.read(length)
                 if len(raw) != length:
                     raise ValueError("Передача скина прервана.")

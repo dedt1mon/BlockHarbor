@@ -92,12 +92,36 @@ class PlayTests(unittest.TestCase):
             ),
             patch.object(game, "launch_local") as launch,
         ):
-            self.app.action("play", {"id": self.pid})
+            self.app.action("play", {"id": self.pid, "nickname": "SavedBeforeLoad"})
             state = self.wait_for_job()
             self.assertFalse(state["ok"])
             self.assertFalse(state["gameRunning"])
             self.assertEqual(state["message"], "Скачивание прервано")
             launch.assert_not_called()
+        self.assertEqual(self.app.store.get("nickname"), "SavedBeforeLoad")
+
+    def test_invalid_explicit_launch_name_is_not_replaced_with_saved_default(self):
+        self.app.action("saveNickname", {"nickname": "SavedPlayer"})
+        for invalid in ("", " ", "!", None):
+            with self.subTest(nickname=invalid), self.assertRaises(ValueError):
+                self.app.action("play", {"id": self.pid, "nickname": invalid})
+        self.assertEqual(self.app.store.get("nickname"), "SavedPlayer")
+        self.assertFalse(self.app.job_snapshot()["busy"])
+
+    def test_nickname_is_saved_before_skin_preparation_can_fail(self):
+        image = self.root / "test-skin.png"
+        image.write_bytes(b"placeholder, skin load must not be reached")
+        with (
+            patch.object(self.app, "skin_path", return_value=image),
+            patch("launcher.aliases.ensure_skin_support", side_effect=ValueError("Не удалось загрузить скин")),
+            patch.object(game, "install") as install,
+        ):
+            self.app.action("play", {"id": self.pid, "nickname": "RememberMe"})
+            result = self.wait_for_job()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "Не удалось загрузить скин")
+        self.assertEqual(self.app.store.get("nickname"), "RememberMe")
+        install.assert_not_called()
 
     def test_crash_after_startup_is_reported_once_per_process(self):
         child = Mock()

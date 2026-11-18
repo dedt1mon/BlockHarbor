@@ -289,11 +289,14 @@ function selectInfo(p) {
 function localMode() {
   return state.mode === "local";
 }
+function nicknameControls() {
+  return '<label class="play-identity"><span>Ник в игре</span><input id="playNick" autocomplete="off" spellcheck="false" maxlength="16" required pattern="[A-Za-z0-9_]{3,16}" title="От 3 до 16 латинских букв, цифр или символов подчёркивания" value="' +
+    esc(characterDraft().nickname) + '"></label>' +
+    btn("saveNickname", "Сохранить ник", "check");
+}
 function playControls() {
   const identity = localMode()
-    ? '<label class="play-identity"><span>Ник в игре</span><input id="playNick" autocomplete="off" spellcheck="false" maxlength="16" required pattern="[A-Za-z0-9_]{3,16}" title="От 3 до 16 латинских букв, цифр или символов подчёркивания" value="' +
-      esc(state.nickname || "Player") +
-      '"></label>'
+    ? nicknameControls()
     : '<span class="tag">' +
       ic("user") +
       esc(
@@ -333,6 +336,9 @@ function updatePlayButtons() {
       button.dataset.label = label;
     }
   });
+  document.querySelectorAll('[data-act="saveNickname"], [data-act="saveProfile"], [data-act="saveJavaSkin"], [data-act="saveWithFabric"]').forEach((button) => {
+    button.disabled = Boolean(nicknameSaving || profileJob || profileSubmission);
+  });
 }
 function homeBuildPicker() {
   if (state.profiles.length < 2) return "";
@@ -362,7 +368,9 @@ function home() {
     return emptyBuildView(
       "Игровая панель",
       "Чтобы запустить Minecraft, создай сборку или загрузи готовый ZIP из BlockHarbor.",
-    );
+    ) + (localMode()
+      ? '<section class="panel"><h3>Мой персонаж</h3><p>Ник общий для всех сборок. Его можно сохранить до установки Minecraft.</p><div class="play-controls">' + nicknameControls() + '</div></section>'
+      : '<section class="panel"><h3>Мой персонаж</h3><p>Настрой параметры персонажа в профиле лаунчера.</p><button type="button" class="btn" data-view="profile">' + ic("user") + 'Открыть профиль</button></section>');
   return (
     head(
       "Игровая панель",
@@ -717,17 +725,46 @@ function friendsView() {
 }
 let profileDraft = null;
 let profileJob = "";
+let profileSubmission = null;
+let nicknameSaving = false;
 function characterDraft() {
-  if (!profileDraft || profileDraft.id !== state.active) {
-    profileDraft = {
-      id: state.active,
-      nickname: state.nickname || state.account || "Player",
-      model: state.model || "classic",
-      realName: state.account || state.realName || "",
-      file: null,
-    };
+  const saved = {
+    nickname: state.nickname || "Player",
+    model: state.model || "classic",
+    realName: state.account || state.realName || "",
+  };
+  if (!profileDraft) {
+    profileDraft = { ...saved, file: null, dirty: {}, revisions: { nickname: 0, model: 0, realName: 0 } };
+  } else {
+    // A build selection or a state refresh must preserve edits to the player.
+    // Only untouched fields follow newly saved settings.
+    for (const name of Object.keys(saved)) {
+      if (!profileDraft.dirty[name]) profileDraft[name] = saved[name];
+    }
   }
   return profileDraft;
+}
+function editCharacter(name, value) {
+  const draft = characterDraft();
+  if (draft[name] !== value) {
+    draft[name] = value;
+    draft.dirty[name] = true;
+    draft.revisions[name]++;
+  }
+  return draft;
+}
+function captureCharacterFields() {
+  const draft = characterDraft();
+  if ($("#nick")) editCharacter("nickname", $("#nick").value.trim());
+  if ($("#realName")) editCharacter("realName", $("#realName").value.trim());
+  if ($("#skinModel")) editCharacter("model", $("#skinModel").value);
+  return draft;
+}
+function validatePlayerName(value) {
+  const name = value.trim();
+  if (!/^[A-Za-z0-9_]{3,16}$/.test(name))
+    throw Error("Ник должен содержать от 3 до 16 латинских букв, цифр или знаков подчёркивания.");
+  return name;
 }
 function profile() {
   const hasBuild = Boolean(active());
@@ -740,23 +777,18 @@ function profile() {
         ? ""
         : btn("create", "Новая сборка", "plus", "main") +
             btn("importBuild", "Загрузить сборку", "upload"),
-      hasBuild
-        ? ""
-        : "Для настройки ника создай или загрузи сборку. Скин для Java-профиля можно выбрать уже сейчас.",
+      "Ник общий для всех сборок и миров. Изменения профиля применяются при следующем запуске игры.",
     ) +
     '<div class="panel side-panel"><div class="skin-stage" id="skinStage">' +
     (state.skin || draft.file
       ? '<img id="skinPreview" alt="Персонаж с выбранным скином">'
       : ic("user") + "<small>Предпросмотр скина</small>") +
     '</div><div class="stack"><h3>Мой персонаж</h3>' +
-    (hasBuild
-      ? '<label>Ник в игре<input id="nick" class="field" maxlength="16" autocomplete="off" placeholder="DedTimon" value="' +
-        esc(draft.nickname) +
-        '"></label>'
-      : "") +
-    (!hasBuild || localMode()
+    '<label>Ник в игре<input id="nick" class="field" maxlength="16" required pattern="[A-Za-z0-9_]{3,16}" spellcheck="false" autocomplete="off" placeholder="Твой ник" value="' +
+    esc(draft.nickname) + '"></label>' +
+    (localMode()
       ? ""
-      : '<label>Имя профиля Minecraft<input id="realName" class="field" maxlength="16" value="' +
+      : '<small class="note">При входе через Microsoft игра использует имя твоего Java-профиля. Этот ник используется в режиме «Локальный профиль».</small><label>Имя профиля Minecraft<input id="realName" class="field" maxlength="16" value="' +
         esc(draft.realName) +
         '"></label>') +
     '<label>Модель скина<select id="skinModel" class="field"><option value="classic">Classic · широкие руки</option><option value="slim"' +
@@ -768,20 +800,17 @@ function profile() {
       ? '<small class="note">' + esc(draft.file.name) + "</small>"
       : "") +
     "</div>" +
-    (state.canUseFabricSkin && state.skin && !draft.file
-      ? '<label><span><input type="checkbox" id="useFabricSkin"> Показывать сохранённый скин в этой сборке через Fabric</span></label>'
+    (hasBuild && state.canUseFabricSkin && (state.skin || draft.file)
+      ? '<label><span><input type="checkbox" id="useFabricSkin"> Установить Fabric для скина в выбранной сборке</span></label>'
       : "") +
     '<div class="actions">' +
-    (hasBuild
-      ? btn("saveProfile", "Сохранить все параметры", "check", "main")
-      : "") +
-    ((draft.file || state.skin) &&
-    (!hasBuild || state.skinSupport || !draft.file)
+    btn("saveProfile", "Сохранить все параметры", "check", "main") +
+    ((draft.file || state.skin)
       ? btn(
           "saveJavaSkin",
           "Сохранить только для Java-профиля",
           "check",
-          hasBuild ? "" : "main",
+          "",
         )
       : "") +
     "</div>" +
@@ -845,7 +874,7 @@ function updateModeHelp() {
   const mode = $("#mode").value;
   const help = {
     local:
-      "Minecraft запускается под ником с главного экрана. Подходит для одиночной игры и серверов, принимающих локальные профили. При первом запуске потребуется интернет для загрузки выбранной версии и Java.",
+      "Minecraft запускается под общим ником из профиля лаунчера. Его можно изменить в «Профиле» или на главном экране. Подходит для одиночной игры и серверов, принимающих локальные профили. При первом запуске потребуется интернет для загрузки выбранной версии и Java.",
     prism:
       "Для серверов с проверкой аккаунта нужен Microsoft-аккаунт с Minecraft Java Edition. При первом запуске BlockHarbor подготовит Prism и предложит войти. Дальше запускай ту же сборку кнопкой «Играть».",
     direct:
@@ -1089,8 +1118,21 @@ async function tick(wake = false) {
     } else if (j.id && lastJob === j.id) {
       lastJob = "";
       if (j.id === profileJob) {
-        if (j.ok) profileDraft = null;
+        if (j.ok && profileSubmission) {
+          if (profileSubmission.destination !== "java") {
+            state.nickname = profileSubmission.nickname;
+            state.realName = profileSubmission.realName;
+          }
+          state.model = profileSubmission.model;
+          if (profileSubmission.file) state.skin = true;
+          if (profileDraft?.file === profileSubmission.file) profileDraft.file = null;
+          for (const name of profileSubmission.destination === "java" ? ["model"] : ["nickname", "model", "realName"]) {
+            if (profileDraft?.revisions[name] === profileSubmission.revisions[name]) profileDraft.dirty[name] = false;
+          }
+          characterDraft();
+        }
         profileJob = "";
+        profileSubmission = null;
       }
       const ended =
         j.ok &&
@@ -1160,12 +1202,34 @@ async function dispatch(action) {
       return createBox();
     case "addons":
       return navigateFresh("addons");
+    case "saveNickname": {
+      if (nicknameSaving || profileJob || profileSubmission) return;
+      const draft = characterDraft();
+      const name = validatePlayerName($("#playNick")?.value ?? draft.nickname);
+      editCharacter("nickname", name);
+      const revision = draft.revisions.nickname;
+      nicknameSaving = true;
+      updatePlayButtons();
+      try {
+        const saved = await act("saveNickname", { nickname: name });
+        state.nickname = saved.nickname;
+        if (draft.revisions.nickname === revision) draft.dirty.nickname = false;
+        const current = characterDraft();
+        if ($("#playNick")) $("#playNick").value = current.nickname;
+        if (localMode()) $("#topUser").textContent = saved.nickname;
+        notice("Успешно сохранено");
+      } finally {
+        nicknameSaving = false;
+        updatePlayButtons();
+      }
+      return;
+    }
     case "play": {
       const args = { id: state.active };
       if (localMode()) {
         const nameField = $("#playNick");
-        if (!nameField.reportValidity()) return;
-        args.nickname = nameField.value.trim();
+        args.nickname = validatePlayerName(nameField?.value ?? characterDraft().nickname);
+        editCharacter("nickname", args.nickname);
       }
       return runJob("play", args);
     }
@@ -1302,39 +1366,28 @@ async function dispatch(action) {
       $("#skinPick").click();
       return;
     case "saveProfile": {
-      const draft = characterDraft();
+      const draft = captureCharacterFields();
+      draft.nickname = validatePlayerName(draft.nickname);
       if (
-        (draft.file || $("#useFabricSkin")?.checked) &&
+        $("#useFabricSkin")?.checked && active() &&
         state.canUseFabricSkin
       ) {
         return modal(
           "Установить Fabric для скина?",
           "<p>Для скина в сборке «" +
             esc(active().name) +
-            "» нужен Fabric. Лаунчер установит его на ту же версию Minecraft, в папку твоих миров. Для Java-профиля можно сохранить только PNG и модель.</p>" +
+            "» нужен Fabric. Лаунчер установит его на ту же версию Minecraft, в папку твоих миров. Можно сохранить параметры в профиле без изменения сборки.</p>" +
             '<div class="actions">' +
             btn("saveWithFabric", "Установить и сохранить", "check", "main") +
-            btn("saveJavaSkin", "Сохранить только для Java-профиля", "user") +
-            "</div>",
-        );
-      }
-      if (draft.file && !state.skinSupport) {
-        return modal(
-          "Сохранить скин для Java-профиля?",
-          "<p>Для этой сборки доступна установка через Java-профиль. Сохрани PNG и модель, затем выбери «Установить скин в Java-профиле».</p>" +
-            '<div class="actions">' +
-            btn(
-              "saveJavaSkin",
-              "Сохранить только для Java-профиля",
-              "check",
-              "main",
-            ) +
-            btn("close", "Отмена", "") +
+            btn("saveProfileOnly", "Сохранить в профиле", "user") +
             "</div>",
         );
       }
       return saveAppearance();
     }
+    case "saveProfileOnly":
+      closeDialog();
+      return saveAppearance();
     case "saveWithFabric":
       closeDialog();
       return saveAppearance("fabric");
@@ -1358,40 +1411,43 @@ async function dispatch(action) {
       return notice("Сессия завершена.");
   }
 }
-async function saveAppearance(destination = "build") {
-  const draft = characterDraft();
-  draft.nickname = $("#nick")?.value.trim() || draft.nickname;
-  draft.realName = $("#realName")?.value.trim() || "";
-  draft.model = $("#skinModel").value;
-  if (destination !== "java" && !/^[a-zA-Z0-9_]{3,16}$/.test(draft.nickname))
-    throw Error(
-      "Ник должен содержать от 3 до 16 латинских букв, цифр или знаков подчёркивания.",
-    );
+async function saveAppearance(destination = "profile") {
+  if (nicknameSaving || profileJob || profileSubmission) return;
+  const draft = captureCharacterFields();
+  if (destination !== "java") draft.nickname = validatePlayerName(draft.nickname);
   const query = new URLSearchParams({
-    id: draft.id,
     nickname: draft.nickname,
     realName: draft.realName,
     model: draft.model,
     fabric: destination === "fabric" ? "1" : "0",
     skinDestination: destination,
   });
-  if (profileJob) return;
-  const j = await api("/api/profile?" + query, {
-    method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: draft.file,
-  });
-  profileJob = lastJob = j.job;
-  notice("Сохраняем параметры…", false, true);
-  await tick();
+  if (destination === "fabric") query.set("id", state.active);
+  profileSubmission = { ...draft, destination, revisions: { ...draft.revisions } };
+  updatePlayButtons();
+  try {
+    const j = await api("/api/profile?" + query, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: profileSubmission.file,
+    });
+    profileJob = lastJob = j.job;
+    notice("Сохраняем параметры…", false, true);
+    await tick();
+  } catch (error) {
+    profileSubmission = null;
+    throw error;
+  } finally {
+    updatePlayButtons();
+  }
 }
 document.addEventListener("input", (e) => {
-  if (e.target.id === "nick") characterDraft().nickname = e.target.value;
-  if (e.target.id === "realName") characterDraft().realName = e.target.value;
+  if (e.target.id === "nick" || e.target.id === "playNick") editCharacter("nickname", e.target.value);
+  if (e.target.id === "realName") editCharacter("realName", e.target.value);
 });
 document.addEventListener("change", (e) => {
   if (e.target.id === "skinModel") {
-    characterDraft().model = e.target.value;
+    editCharacter("model", e.target.value);
     if (state.skin || characterDraft().file) preview();
   }
 });
@@ -1405,15 +1461,12 @@ document.addEventListener("change", async (e) => {
   if (e.target.id === "mode") return updateModeHelp();
   if (e.target.id !== "homeBuild" || selectingBuild) return;
   const selection = e.target;
-  const draftName = $("#playNick")?.value;
   selectingBuild = true;
   selection.disabled = true;
   updatePlayButtons();
   try {
     await act("select", { id: selection.value });
     await refresh();
-    if (draftName !== undefined && $("#playNick"))
-      $("#playNick").value = draftName;
     notice("Выбрана сборка «" + active().name + "»");
   } catch (error) {
     selection.value = state.active;
@@ -1427,7 +1480,7 @@ document.addEventListener("change", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.id === "playNick") {
     e.preventDefault();
-    document.querySelector('[data-act="play"]')?.click();
+    document.querySelector(active() ? '[data-act="play"]' : '[data-act="saveNickname"]')?.click();
   }
 });
 document.addEventListener("click", async (e) => {
@@ -1707,10 +1760,7 @@ $("#skinPick").addEventListener("change", async (e) => {
   if (!file) return;
   if (file.size > 1024 * 1024)
     return notice("Файл скина превышает 1 МБ.", true);
-  const draft = characterDraft();
-  draft.nickname = $("#nick")?.value || draft.nickname;
-  draft.realName = $("#realName")?.value || "";
-  draft.model = $("#skinModel").value;
+  const draft = captureCharacterFields();
   draft.file = file;
   render();
 });

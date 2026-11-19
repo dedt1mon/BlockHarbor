@@ -6,6 +6,7 @@
   let fetching = false;
   let lastTransferMarkup = "";
   let lastReleaseMarkup = "";
+  let transferHistoryExpanded = false;
   let savingAutomatic = false;
   let savingChannel = false;
   let pendingChannel = null;
@@ -13,6 +14,7 @@
   let progressData = null;
   let completedCheck = null;
   const activeTransfers = new Set(["queued", "downloading", "verifying"]);
+  const recentTransferLimit = 4;
   const labels = {
     queued: "В очереди", downloading: "Загрузка", verifying: "Проверка",
     completed: "Готово", cancelled: "Отменено", failed: "Ошибка", interrupted: "Прервано",
@@ -150,7 +152,7 @@
     const job = state?.job;
     const liveJob = job?.busy ? `<div class="transfer-stage"><span class="transfer-spinner">${ic("refresh")}</span><div><strong>Текущая операция</strong><p>${esc(job.message)}</p></div></div>` : "";
     if (!tasks.length) return liveJob + '<div class="empty">Здесь появятся скачиваемые файлы и результаты их проверки.</div>';
-    return liveJob + tasks.map((task) => {
+    const row = (task) => {
       const running = ["queued", "downloading", "verifying"].includes(task.state);
       const total = Number(task.total);
       const bytes = Number(task.bytes) || 0;
@@ -159,7 +161,13 @@
       const speed = task.state === "downloading" && task.rate > 0 ? `${fmt(task.rate)}/с` : "";
       const actions = running ? `<button class="icon-button" data-transfer-cancel="${esc(task.id)}" aria-label="Отменить загрузку ${esc(task.title)}">${ic("close")}</button>` : task.retryable && task.state !== "completed" ? `<button class="btn" data-transfer-retry="${esc(task.id)}">${ic("refresh")}Повторить</button>` : "";
       return `<article class="transfer-row transfer-${esc(task.state)}"><div class="transfer-icon">${ic(task.state === "completed" ? "check" : task.state === "failed" ? "close" : "download")}</div><div class="transfer-info"><div class="transfer-title"><strong>${esc(task.title)}</strong><span class="pill">${esc(labels[task.state] || task.state)}</span></div>${progress}<div class="transfer-metrics"><span>${esc(amount)}${speed ? " · " + esc(speed) : ""}${task.resumed ? " · продолжена" : ""}</span><span>${esc(task.host || "")}</span></div><p class="transfer-message">${esc(task.message || "")}${!running && !task.retryable && ["failed", "cancelled", "interrupted"].includes(task.state) ? " Повтори установку из исходного окна." : ""}</p></div><div class="transfer-actions">${actions}</div></article>`;
-    }).join("");
+    };
+    const recent = tasks.slice(0, recentTransferLimit).map(row).join("");
+    const older = tasks.slice(recentTransferLimit);
+    if (!older.length) return liveJob + recent;
+    return liveJob + recent +
+      `<div class="transfer-history-controls"><button class="btn transfer-history-toggle" type="button" data-transfer-history aria-expanded="${transferHistoryExpanded}" aria-controls="transferHistory">${ic("down")}${transferHistoryExpanded ? "Скрыть историю" : "Показать историю"} (${older.length})</button></div>` +
+      `<div id="transferHistory" ${transferHistoryExpanded ? "" : "hidden"}>${transferHistoryExpanded ? older.map(row).join("") : ""}</div>`;
   }
 
   function paint() {
@@ -193,11 +201,15 @@
     }
     const transfers = transfersMarkup();
     if (transfers !== lastTransferMarkup) {
-      const focus = document.activeElement?.closest("[data-transfer-cancel], [data-transfer-retry]");
+      const focus = document.activeElement?.closest("[data-transfer-cancel], [data-transfer-retry], [data-transfer-history]");
       const focusedId = focus?.dataset.transferCancel || focus?.dataset.transferRetry;
       const focusKind = focus?.dataset.transferCancel ? "cancel" : "retry";
+      const historyFocused = focus?.hasAttribute("data-transfer-history");
       document.querySelector("#transferList").innerHTML = transfers;
-      if (focusedId) document.querySelector(`[data-transfer-${focusKind}="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true });
+      const restoreFocus = focusedId
+        ? document.querySelector(`[data-transfer-${focusKind}="${CSS.escape(focusedId)}"]`) || document.querySelector("[data-transfer-history]")
+        : historyFocused ? document.querySelector("[data-transfer-history]") : null;
+      restoreFocus?.focus({ preventScroll: true });
       lastTransferMarkup = transfers;
     }
   }
@@ -289,6 +301,7 @@
       } else {
         const postponed = action === "updateCancelInstall" && data?.pending?.automatic;
         await act(action);
+        if (action === "transferClear") transferHistoryExpanded = false;
         if (action === "updateDownload") notice("Обновление добавлено в очередь загрузок.");
         if (action === "updateCancelInstall") notice(postponed ? "Автоматическое обновление отложено до следующего запуска." : "Отложенная установка отменена.");
       }
@@ -301,6 +314,13 @@
   }
 
   document.addEventListener("click", async (event) => {
+    const history = event.target.closest("[data-transfer-history]");
+    if (history) {
+      event.preventDefault();
+      transferHistoryExpanded = !transferHistoryExpanded;
+      paint();
+      return;
+    }
     const action = event.target.closest("[data-updates-action]");
     const cancel = event.target.closest("[data-transfer-cancel]");
     const retry = event.target.closest("[data-transfer-retry]");

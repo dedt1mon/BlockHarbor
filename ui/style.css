@@ -1226,6 +1226,16 @@ select option {
     scrollbar-color: #59695d #1c2622;
     scrollbar-width: thin;
   }
+  #version::picker(select) {
+    /* Put the scrollbar inside the rounded frame, preserving the outer shadow. */
+    box-sizing: border-box;
+    padding: 0;
+    border: 5px solid #1c2622;
+    outline: 1px solid #526653;
+    outline-offset: -1px;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+  }
   select option {
     display: flex;
     align-items: center;

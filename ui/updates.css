@@ -35,6 +35,11 @@
 .update-pending p { margin: 6px 0 0; color: var(--muted); line-height: 1.5; }
 .transfer-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
 .transfer-heading .btn { flex-shrink: 0; }
+.transfer-history-controls { padding-top: 4px; }
+.transfer-history-toggle { gap: 8px; font-size: 12px; }
+.transfer-history-toggle[aria-expanded="true"] > i { transform: rotate(180deg); }
+#transferHistory { margin-top: 14px; }
+#transferHistory[hidden] { display: none; }
 .transfer-row { display: flex; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
 .transfer-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 11px; background: #ffffff06; color: var(--muted); }
 .transfer-completed .transfer-icon { background: #c5f47812; color: var(--lime); }

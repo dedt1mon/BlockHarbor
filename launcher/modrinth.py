@@ -30,7 +30,7 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/2.4.9 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.4.10 (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):

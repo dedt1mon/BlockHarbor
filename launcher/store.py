@@ -10,7 +10,7 @@ import zipfile
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from . import lifecycle
+from . import lifecycle, version_ids
 from .content_icons import IconCache
 
 LOADERS = ("fabric", "vanilla", "forge", "neoforge", "quilt")
@@ -20,7 +20,6 @@ MAX_ADDON = 512 * 1024 * 1024
 FALLBACK_VERSIONS = json.loads(
     Path(__file__).with_name("minecraft_releases.json").read_text(encoding="utf-8")
 )
-VERSION = re.compile(r"[0-9][0-9A-Za-z._-]{0,60}\Z")
 BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 DEV = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", re.I)
 
@@ -45,11 +44,7 @@ def input_profile(name, version, loader):
         or any(ord(c) < 32 for c in name)
     ):
         raise ValueError("Название сборки должно содержать от 1 до 48 символов.")
-    if (
-        not isinstance(version, str)
-        or not VERSION.fullmatch(version)
-        or ".." in version
-    ):
+    if not version_ids.valid(version):
         raise ValueError("Укажи номер версии Minecraft, например 1.20.1.")
     if loader not in LOADERS:
         raise ValueError("Выбери загрузчик из списка.")

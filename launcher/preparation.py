@@ -32,12 +32,15 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.4.9", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.4.10", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class DownloadError(RuntimeError):
-    pass
+    def __init__(self, message, *, url=None, status_code=None):
+        super().__init__(message)
+        self.url = url
+        self.status_code = status_code
 
 
 class _Incomplete(ValueError):
@@ -115,7 +118,10 @@ def metadata_response(url, **_kwargs):
             _Incomplete,
         ) as error:
             if not _retry(error) or attempt + 1 == ATTEMPTS:
-                raise DownloadError(_error(url, error)) from None
+                raise DownloadError(
+                    _error(url, error), url=url,
+                    status_code=error.code if isinstance(error, HTTPError) else None,
+                ) from None
             lifecycle.wait(0.5 * (attempt + 1))
     raise AssertionError("unreachable")
 

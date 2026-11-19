@@ -113,17 +113,21 @@ class CreateBuildTests(unittest.TestCase):
         self.assertGreaterEqual(len(bundled), 103)
         self.assertEqual(bundled[-1], "1.0")
         self.assertIn("26.3", bundled)
-        with patch.object(game, "list_versions", side_effect=OSError("offline")):
+        with patch.object(game, "version_catalog", side_effect=OSError("offline")):
             with self.assertRaisesRegex(OSError, "offline"):
                 self.app.refresh_releases()
             self.assertEqual(self.app.state()["versions"], bundled)
         updated = ["27.1", *bundled]
-        with patch.object(game, "list_versions", return_value=updated) as get:
+        full = [{"id": version, "type": "release"} for version in updated]
+        full.insert(1, {"id": "27.1-snapshot-1", "type": "snapshot"})
+        with patch.object(game, "version_catalog", return_value=full) as get:
             self.assertEqual(self.app.refresh_releases(), updated)
             self.assertEqual(self.app.refresh_releases(), updated)
             get.assert_called_once()
+        self.assertEqual(self.app.version_catalog()[:len(full)], full)
         reopened = App(self.app.store.root)
         self.assertEqual(reopened.state()["versions"], updated)
-        with patch.object(game, "list_versions", return_value=updated) as get:
+        self.assertEqual(reopened.version_catalog()[:len(full)], full)
+        with patch.object(game, "version_catalog", return_value=full) as get:
             self.assertEqual(reopened.refresh_releases(force=True), updated)
             get.assert_called_once()

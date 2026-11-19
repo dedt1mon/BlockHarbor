@@ -720,6 +720,34 @@ label {
 .field:focus {
   border-color: var(--lime);
 }
+#buildName:focus,
+#buildName:focus-visible {
+  border-color: #3a4642;
+  outline: none;
+  box-shadow: none;
+}
+#newForm [hidden] {
+  display: none;
+}
+.build-version-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+.build-version-toggle input {
+  margin: 0;
+  flex: 0 0 auto;
+}
+#loaderStatus {
+  margin: 0;
+}
+#loaderStatus[data-state="unsupported"] {
+  color: #f1a698;
+}
+#buildVanillaChoice {
+  color: var(--lime);
+}
 input[type="search"]:focus,
 #buildSearch:focus,
 input[data-dep-query]:focus {

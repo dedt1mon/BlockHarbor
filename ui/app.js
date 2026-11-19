@@ -963,33 +963,125 @@ function releaseOptions(versions, current) {
     })
     .join("");
 }
+const newBuildForms = new WeakMap();
+function currentBuildForm(form) {
+  return Boolean(form?.isConnected && $("#dialog").open && $("#newForm") === form);
+}
+function renderBuildVersions(form) {
+  const data = newBuildForms.get(form);
+  if (!data || !currentBuildForm(form)) return;
+  const select = form.querySelector("#version"), current = select.value;
+  const showAll = form.querySelector("#allBuildVersions").checked;
+  if (showAll && data.allVersions.length) {
+    const groups = {
+      release: "Релизы", snapshot: "Снапшоты", old_beta: "Бета-версии", old_alpha: "Альфа и ранние версии",
+    };
+    const entries = [...Object.keys(groups), ...new Set(data.allVersions.map(row => row.type).filter(type => !groups[type]))];
+    select.innerHTML = entries.map(type => {
+      const versions = data.allVersions.filter(row => row.type === type).map(row => row.id);
+      return versions.length ? '<optgroup label="' + esc(groups[type] || "Другие версии") + '">' + releaseOptions(versions, current) + "</optgroup>" : "";
+    }).join("");
+  } else {
+    // Hiding snapshots should not silently change a version already selected.
+    const retained = current && !data.releases.includes(current)
+      ? '<optgroup label="Выбранная версия">' + releaseOptions([current], current) + "</optgroup>"
+      : "";
+    select.innerHTML = retained + releaseOptions(data.releases, current);
+  }
+}
+function updateBuildLoaderUI(form) {
+  const data = newBuildForms.get(form);
+  if (!data || !currentBuildForm(form)) return;
+  const version = form.querySelector("#version").value;
+  const select = form.querySelector("#loader"), selected = select.value;
+  const rows = data.version === version ? data.report?.loaders || [] : [];
+  for (const option of select.options) {
+    const row = rows.find(item => item.id === option.value);
+    option.disabled = row?.supported === false;
+    option.textContent = loaders[option.value] + (option.value === "vanilla" ? " · без модов" : "") +
+      (option.disabled ? " · недоступен" : "");
+  }
+  select.value = selected;
+  const row = rows.find(item => item.id === selected);
+  const unsupported = row?.supported === false;
+  const unknown = !row || row.supported === null;
+  const status = form.querySelector("#loaderStatus");
+  status.dataset.state = data.loading ? "loading" : unsupported ? "unsupported" : unknown ? "unknown" : "supported";
+  status.textContent = data.loading
+    ? "Проверяем загрузчики для Minecraft " + version + "…"
+    : unsupported
+      ? row.message || loaders[selected] + " недоступен для Minecraft " + version + ". Выбери другой загрузчик или Vanilla."
+      : unknown
+        ? data.error ? data.error + " При установке лаунчер проверит совместимость ещё раз."
+          : row?.message || "Совместимость загрузчика пока не подтверждена. Проверим её при установке."
+        : row.message || (loaders[selected] + " доступен для Minecraft " + version + ".");
+  form.querySelector("#buildVanillaChoice").hidden = !unsupported;
+  form.querySelector('[type="submit"]').disabled = data.loading || data.submitting || unsupported || pendingBuild?.form === form;
+}
+function loadBuildLoaders(form, force = false) {
+  const data = newBuildForms.get(form);
+  if (!data || !currentBuildForm(form)) return Promise.resolve(null);
+  const version = form.querySelector("#version").value;
+  if (!force && data.version === version && (data.promise || data.report || data.error))
+    return data.promise || Promise.resolve(data.report);
+  const ticket = ++data.request;
+  data.version = version;
+  data.report = null;
+  data.error = "";
+  data.loading = true;
+  updateBuildLoaderUI(form);
+  const isCurrent = () => currentBuildForm(form) && data.request === ticket && form.querySelector("#version").value === version;
+  data.promise = (async () => {
+    try {
+      const query = new URLSearchParams({version});
+      if (force) query.set("refresh", "1");
+      const report = await api("/api/loaders?" + query);
+      if (!isCurrent()) return null;
+      if (report.version !== version || !Array.isArray(report.loaders)) throw new Error("Некорректный ответ каталога загрузчиков.");
+      data.report = report;
+      return report;
+    } catch (error) {
+      if (isCurrent()) data.error = "Не удалось проверить каталог загрузчиков. Твой выбор сохранён.";
+      return null;
+    } finally {
+      if (isCurrent()) {
+        data.loading = false;
+        data.promise = null;
+        updateBuildLoaderUI(form);
+      }
+    }
+  })();
+  return data.promise;
+}
 async function loadReleases(force = false) {
   const select = $("#version"),
     status = $("#catalogStatus");
   if (!select) return;
+  const form = select.closest("#newForm"), data = newBuildForms.get(form);
   const ticket = String(Number(select.dataset.request || 0) + 1);
   select.dataset.request = ticket;
   try {
     const result = await api("/api/releases" + (force ? "?refresh=1" : ""));
-    if (!select.isConnected || select.dataset.request !== ticket) return;
-    const selected = select.value;
+    if (!currentBuildForm(form) || select.dataset.request !== ticket) return;
     state.versions = result.versions;
-    if (
-      select.options.length !== result.versions.length ||
-      result.versions.some(
-        (version, index) => select.options[index].value !== version,
-      )
-    ) {
-      select.innerHTML = releaseOptions(result.versions, selected);
-    }
-    status.hidden = true;
-    if (force) notice("Список версий обновлён.");
+    data.releases = result.versions;
+    data.allVersions = result.allVersions || [];
+    form.querySelector("#allBuildVersions").disabled = !data.allVersions.length;
+    renderBuildVersions(form);
+    if (!force) loadBuildLoaders(form);
+    status.hidden = !result.stale;
+    status.textContent = result.stale
+      ? result.message || "Не удалось обновить каталог Mojang. Доступны сохранённые версии."
+      : "";
+    if (force) notice(result.stale ? status.textContent : "Список версий обновлён.", Boolean(result.stale));
   } catch (error) {
-    if (!select.isConnected || select.dataset.request !== ticket) return;
+    if (!currentBuildForm(form) || select.dataset.request !== ticket) return;
     status.hidden = false;
     status.textContent =
       "Не удалось обновить каталог Mojang. Доступны сохранённые версии.";
     if (force) notice(status.textContent, true);
+  } finally {
+    if (force && currentBuildForm(form) && select.dataset.request === ticket) await loadBuildLoaders(form, true);
   }
 }
 let pendingBuild = null;
@@ -1018,14 +1110,18 @@ function createBox(preferredLoader = "fabric") {
             "</option>",
         )
         .join("") +
-      '</select></label></div><button type="button" class="linkbtn" data-act="versions">' +
+      '</select></label></div><label class="build-version-toggle"><input type="checkbox" id="allBuildVersions" disabled> Показывать снапшоты и старые версии</label><div class="build-loader-compatibility"><p id="loaderStatus" class="note" aria-live="polite"></p><button type="button" class="linkbtn" id="buildVanillaChoice" data-act="useVanilla" hidden>Выбрать Vanilla</button></div><button type="button" class="linkbtn" data-act="versions">' +
       ic("refresh") +
-      ' Обновить список релизов</button><p id="catalogStatus" class="note" hidden></p><div class="dialog-actions">' +
+      ' Обновить список версий</button><p id="catalogStatus" class="note" hidden></p><div class="dialog-actions">' +
       btn("close", "Отмена", "") +
       '<button class="btn main" type="submit">' +
       ic("plus") +
       "Создать сборку</button></div></form>",
   );
+  const form = $("#newForm");
+  newBuildForms.set(form, {releases: [...state.versions], allVersions: [], version: "", request: 0,
+    report: null, promise: null, error: "", loading: false, submitting: false});
+  loadBuildLoaders(form);
   loadReleases();
 }
 async function runJob(action, data = {}) {
@@ -1125,7 +1221,7 @@ async function tick(wake = false) {
         const { form, destination } = pendingBuild;
         pendingBuild = null;
         if (j.ok) finishBuild(form, destination);
-        else form.querySelector('[type="submit"]').disabled = false;
+        else updateBuildLoaderUI(form);
       }
     }
     if (refreshAfterPlay && !document.hidden && (!j.gameRunning || wake)) {
@@ -1187,6 +1283,14 @@ async function dispatch(action) {
     }
     case "versions":
       return loadReleases(true);
+    case "useVanilla": {
+      const form = $("#newForm");
+      if (!currentBuildForm(form)) return;
+      form.querySelector("#loader").value = "vanilla";
+      updateBuildLoaderUI(form);
+      form.querySelector("#loader").focus();
+      return;
+    }
     case "folder":
       await act("folder", { id: state.active });
       return;
@@ -1340,6 +1444,13 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "realName") editCharacter("realName", e.target.value);
 });
 document.addEventListener("change", (e) => {
+  const form = e.target.closest("#newForm");
+  if (form && ["version", "loader", "allBuildVersions"].includes(e.target.id)) {
+    if (e.target.id === "allBuildVersions") renderBuildVersions(form);
+    if (e.target.id === "loader") updateBuildLoaderUI(form);
+    else loadBuildLoaders(form);
+    return;
+  }
   if (e.target.id === "skinModel") {
     editCharacter("model", e.target.value);
     if (state.skin || characterDraft().file) preview();
@@ -1571,6 +1682,7 @@ document.addEventListener("submit", async (e) => {
   const form = e.target,
     submit = form.querySelector('[type="submit"]');
   if (submit.disabled) return;
+  const data = newBuildForms.get(form);
   const destination = view === "friends" ? "friends" : "addons";
   const draft = {
     name: form.querySelector("#buildName").value,
@@ -1581,8 +1693,12 @@ document.addEventListener("submit", async (e) => {
     form.querySelector("#buildName").value === draft.name &&
     form.querySelector("#version").value === draft.version &&
     form.querySelector("#loader").value === draft.loader;
-  submit.disabled = true;
+  data.submitting = true;
+  updateBuildLoaderUI(form);
   try {
+    const compatibility = await loadBuildLoaders(form);
+    if (!isCurrent()) return;
+    if (compatibility?.loaders.find(row => row.id === draft.loader)?.supported === false) return;
     const confirmation = await confirmSteamCompatibility(draft, {isCurrent});
     if (!confirmation) return;
     const result = await act("create", {...draft, allowWithoutSteam: confirmation.allowWithoutSteam});
@@ -1599,7 +1715,8 @@ document.addEventListener("submit", async (e) => {
   } catch (err) {
     notice(err.message, true);
   } finally {
-    if (pendingBuild?.form !== form) submit.disabled = false;
+    data.submitting = false;
+    updateBuildLoaderUI(form);
   }
 });
 $("#filePick").addEventListener("change", async (e) => {

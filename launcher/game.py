@@ -22,10 +22,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from uuid import UUID
 
-from . import lifecycle, preparation
+from . import lifecycle, loader_catalog, preparation, version_ids
 
 REDIRECT_URI = "http://localhost:43821/callback"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -50,17 +50,28 @@ def _get_json(url: str):
 
 
 def list_versions() -> list[str]:
-    return [v["id"] for v in _get_json(MANIFEST)["versions"] if v["type"] == "release"]
+    return [v["id"] for v in version_catalog() if v["type"] == "release"]
+
+
+def version_catalog() -> list[dict]:
+    """All official release, snapshot and historical IDs from a single live index."""
+    rows = []
+    seen = set()
+    for entry in _get_json(MANIFEST)["versions"]:
+        version = _version_id(entry["id"])
+        kind = entry["type"]
+        if kind not in {"release", "snapshot", "old_beta", "old_alpha"}:
+            raise ValueError("Неизвестный тип версии в каталоге Minecraft.")
+        if version not in seen:
+            rows.append({"id": version, "type": kind})
+            seen.add(version)
+    if not rows:
+        raise ValueError("Каталог Minecraft вернул пустой список.")
+    return rows
 
 
 def _version_id(value: str) -> str:
-    if (
-        not isinstance(value, str)
-        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,149}", value)
-        or ".." in value
-    ):
-        raise ValueError("Недопустимый идентификатор версии Minecraft или загрузчика.")
-    return value
+    return version_ids.validate(value)
 
 
 def _check(version: str, loader: str) -> str:
@@ -135,9 +146,36 @@ def _meta_profile(
     cache: Path, version: str, loader: str, pin: str | None
 ) -> tuple[str, str]:
     """Use the loader project's native launcher profile, also used by the official client."""
-    url = f"{META[loader]}/versions/loader/{version}"
+    # A pinned, valid local profile is sufficient for offline relaunch. Do not
+    # require today's network catalog to keep an already installed game usable.
+    if pin:
+        _version_id(pin)
+        installed = _version_id(f"{loader}-loader-{pin}-{version}")
+        dest = _manifest_path(cache, installed)
+        if dest.is_file():
+            profile = json.loads(dest.read_text(encoding="utf-8"))
+            if profile.get("id") != installed or profile.get("inheritsFrom") != version or not profile.get("mainClass"):
+                raise ValueError("Метаданные загрузчика не совпали с выбранной версией.")
+            return installed, pin
+    loader_catalog.require_supported(cache, version, loader)
+    url = f"{META[loader]}/versions/loader/{quote(version, safe='')}"
+
+    def request(address):
+        try:
+            return _get_json(address)
+        except preparation.DownloadError as error:
+            if error.status_code in {400, 404}:
+                if pin:
+                    raise ValueError(
+                        f"{loader_catalog.NAMES[loader]} не принимает сочетание Minecraft {version} "
+                        f"и загрузчика {pin}. Обнови список версий и выбери совместимую сборку. "
+                        "Для игры без этого загрузчика можно создать отдельную сборку Vanilla."
+                    ) from None
+                raise ValueError(loader_catalog.unsupported_message(version, loader)) from None
+            raise
+
     if not pin:
-        loaders = [row["loader"] for row in _get_json(url)]
+        loaders = [row["loader"] for row in request(url)]
         stable = [
             row["version"]
             for row in loaders
@@ -145,7 +183,7 @@ def _meta_profile(
             and re.fullmatch(r"\d+(?:\.\d+)+", row["version"])
         ]
         if not stable:
-            raise ValueError(f"Для Minecraft {version} нет стабильного {loader}.")
+            raise ValueError(loader_catalog.unsupported_message(version, loader))
         # Quilt returns rows in mixed order. For both vendors choose the newest stable build.
         pin = max(stable, key=lambda v: tuple(int(n) for n in v.split(".")))
     _version_id(pin)
@@ -154,7 +192,7 @@ def _meta_profile(
     if dest.is_file():
         profile = json.loads(dest.read_text(encoding="utf-8"))
     else:
-        profile = _get_json(f"{url}/{pin}/profile/json")
+        profile = request(f"{url}/{quote(pin, safe='')}/profile/json")
     if (
         profile.get("id") != installed
         or profile.get("inheritsFrom") != version
@@ -424,6 +462,15 @@ def _install(
         import minecraft_launcher_lib as mc
 
         provider = mc.mod_loader.get_mod_loader(loader)
+        # Keep installed pins usable offline, including imported loader builds.
+        pinned_id = _version_id(provider.get_installed_version(version, pin)) if pin else None
+        pinned_ready = bool(
+            same and previous.get("cache") == str(cache)
+            and previous.get("id") == pinned_id and pinned_id
+            and _manifest_path(cache, pinned_id).is_file()
+        )
+        if not pinned_ready:
+            loader_catalog.require_supported(cache, version, loader)
         if loader == "forge" and not pin:
             # Maven metadata is not consistently sorted. Forge publishes per-Minecraft recommendations.
             promos = _get_json(
@@ -432,6 +479,10 @@ def _install(
             pin = promos.get(f"{version}-recommended") or promos.get(
                 f"{version}-latest"
             )
+        if loader == "neoforge" and not pin:
+            # The pinned provider predates calendar Minecraft IDs (26.x), whose
+            # NeoForge pins encode MC year.release.patch.build rather than 1.X.
+            pin = loader_catalog.latest_neoforge(cache, version)
         pin = _version_id(pin or provider.get_latest_loader_version(version))
         installed = _version_id(provider.get_installed_version(version, pin))
         ready = (
@@ -967,7 +1018,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.4.9",
+        "launcherVersion": "2.4.10",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]

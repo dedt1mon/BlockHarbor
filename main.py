@@ -30,11 +30,14 @@ from launcher import (
     e4steam,
     friends,
     lifecycle,
+    loader_catalog,
     modrinth,
+    preparation,
     room_bridge,
     skin_sync,
     skins,
     steam_network,
+    version_ids,
 )
 from launcher.memory import automatic_heap
 from launcher.sessions import SessionBusy, SessionCoordinator, StartupCancelled, WindowStore
@@ -535,14 +538,30 @@ class App:
         newer = [v for v in cached if v not in FALLBACK_VERSIONS]
         return list(dict.fromkeys(newer + FALLBACK_VERSIONS))
 
+    def version_catalog(self):
+        bundled = json.loads((HERE / "launcher" / "minecraft_versions.json").read_text(encoding="utf-8"))
+        try:
+            cached = json.loads(self.store.get("versionCatalog", "[]"))
+        except ValueError:
+            cached = []
+        if not isinstance(cached, list):
+            cached = []
+        merged = {}
+        for row in cached + bundled:
+            if isinstance(row, dict) and version_ids.valid(row.get("id")) and row.get("type") in {"release", "snapshot", "old_beta", "old_alpha"}:
+                merged.setdefault(row["id"], {"id": row["id"], "type": row["type"]})
+        return list(merged.values())
+
     def refresh_releases(self, *, force=False):
         from launcher import game
 
-        with self.catalog_lock:
+        with self.catalog_lock, lifecycle.bind(self.scope):
+            lifecycle.check()
             updated = float(self.store.get("releaseCatalogUpdated", "0"))
             if not force and 0 <= time.time() - updated < 24 * 3600:
                 return self.release_catalog()
-            releases = game.list_versions()
+            catalog = game.version_catalog()
+            releases = [row["id"] for row in catalog if row["type"] == "release"]
             if not releases:
                 raise ValueError("Каталог Minecraft вернул пустой список.")
             with self.store.connection() as db:
@@ -550,6 +569,7 @@ class App:
                     "REPLACE INTO settings VALUES (?, ?)",
                     [
                         ("versions", json.dumps(releases)),
+                        ("versionCatalog", json.dumps(catalog)),
                         ("releaseCatalogUpdated", str(time.time())),
                     ],
                 )
@@ -970,6 +990,7 @@ class App:
             allow_without_steam = e4steam.notice_permission(p)
             if self.job_snapshot()["busy"]:
                 raise ValueError("Дождись завершения текущей операции.")
+            loader_catalog.require_supported(s.root / "game-cache", version, loader)
             if e4steam.support(version, loader):
 
                 def create_with_steam(status):
@@ -1539,7 +1560,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.app.ui_job_snapshot())
             elif u.path == "/api/releases":
                 force = parse_qs(u.query).get("refresh") == ["1"]
-                self.reply(200, {"versions": self.app.refresh_releases(force=force)})
+                try:
+                    versions = self.app.refresh_releases(force=force)
+                    result = {"versions": versions, "stale": False}
+                except lifecycle.OperationCancelled:
+                    raise
+                except (OSError, ValueError, preparation.DownloadError):
+                    result = {"versions": self.app.release_catalog(), "stale": True, "message": "Не удалось обновить каталог Mojang. Доступны сохранённые версии."}
+                result["allVersions"] = self.app.version_catalog()
+                self.reply(200, result)
+            elif u.path == "/api/loaders":
+                q = parse_qs(u.query, keep_blank_values=True)
+                _, version, _ = input_profile("Сборка", q.get("version", [None])[0], "vanilla")
+                with lifecycle.bind(self.app.scope):
+                    lifecycle.check()
+                    result = loader_catalog.availability(
+                        self.app.store.root / "game-cache", version, refresh=q.get("refresh") == ["1"]
+                    )
+                self.reply(200, result)
             elif u.path == "/api/card":
                 store = self.app.store
                 real = self.app.player_name()

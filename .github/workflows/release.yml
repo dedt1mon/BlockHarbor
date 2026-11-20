@@ -83,6 +83,7 @@ jobs:
           $archive = Join-Path $env:RUNNER_TEMP "nsis-3.13.zip"
           $expected = "ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8"
           $urls = @(
+            "https://github.com/egoist/mygo/releases/download/nsis-3.13/nsis-3.13.zip",
             "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip",
             "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13.zip/download"
           )

@@ -31,6 +31,7 @@ const paths = {
   plug: "M8 3v5m8-5v5 M5 8h14v2a7 7 0 0 1-14 0z M12 17v5",
   sun: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M12 1v3m0 16v3M1 12h3m16 0h3 M4 4l2 2m12 12 2 2M20 4l-2 2M6 18l-2 2",
   texture: "M3 3h18v18H3z M3 9h18M3 15h18M9 3v6m6 0v6m-6 0v6",
+  share: "M8 11l8-5M8 13l8 5 M8 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0 M22 5a3 3 0 1 1-6 0 3 3 0 1 1 6 0 M22 19a3 3 0 1 1-6 0 3 3 0 1 1 6 0",
   copy: "M8 8h12v13H8z M16 8V3H3v13h5",
   down: "m6 9 6 6 6-6",
   check: "m3 12 6 6L21 6",
@@ -456,6 +457,7 @@ function buildRows(profiles) {
         '»">' +
         ic("upload") +
         "<span>Выгрузить</span></button>" +
+        `<button type="button" class="btn build-settings" data-pack-share="${esc(p.id)}" title="Поделиться сборкой" aria-label="Поделиться сборкой «${esc(p.name)}»">${ic("share")}<span>Поделиться</span></button>` +
         '<button type="button" class="build-remove" data-remove-build="' +
         esc(p.id) +
         '" aria-label="Удалить сборку «' +
@@ -1135,6 +1137,7 @@ async function runJob(action, data = {}) {
   if (action === "purgeBuild" || action === "installModrinth") closeDialog();
   notice("Подготовка…", false, true);
   await tick();
+  return j.job;
 }
 function showGameExit(job) {
   const box = $("#gameExit");
@@ -1189,6 +1192,7 @@ async function tick(wake = false) {
     if (typeof j.localGameRunning === "boolean") state.localGameRunning = j.localGameRunning;
     if (typeof j.launcherCount === "number") state.launcherCount = j.launcherCount;
     state.job = j;
+    window.PackHubUI?.observeJob(j);
     const updateNav = document.querySelector('aside [data-view="settings"]');
     if (updateNav) updateNav.classList.toggle("has-update", Boolean(j.updateAvailable));
     updatePlayButtons();

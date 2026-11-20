@@ -1060,10 +1060,10 @@ def _start_java(
         "token": token,
         "gameDirectory": str(instance),
         "nativesDirectory": str(natives),
-        "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
+        "jvmArguments": [f"-Xmx{_memory(memory_mb)}M", "-Dstderr.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.5.1",
+        "launcherVersion": "2.6.0",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]

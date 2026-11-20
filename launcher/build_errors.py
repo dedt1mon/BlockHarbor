@@ -5,7 +5,7 @@ import re
 import stat
 import time
 
-from .diagnostics import RULES, redact
+from .diagnostics import RULES, read_log_chunk, redact
 
 HISTORY_LIMIT = 50
 _GAME_SIGNS = [(key, re.compile(pattern, re.I), title, advice)
@@ -41,9 +41,7 @@ def _recent_lines(folder, relative, started, *, from_start=False):
         with os.fdopen(os.open(path, flags), "rb") as stream:
             if not os.path.samestat(info, os.fstat(stream.fileno())):
                 return []
-            if not from_start:
-                stream.seek(max(0, info.st_size - 65536))
-            lines = stream.read(65536).decode("utf-8", "replace").splitlines()
+            lines = read_log_chunk(stream, 65536, tail=not from_start).splitlines()
         return [line[:1200] for line in (lines[:240] if from_start else lines[-240:])]
     except (OSError, ValueError, RuntimeError):
         return []

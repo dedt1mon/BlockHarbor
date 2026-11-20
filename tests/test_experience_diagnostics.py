@@ -10,7 +10,8 @@ from unittest.mock import patch
 from PIL import Image
 
 from launcher.build_care import BuildCare
-from launcher.diagnostics import MAX_LOG, analyze, capture_stderr, redact, report_text
+from launcher import build_errors
+from launcher.diagnostics import MAX_LOG, analyze, capture_stderr, read_log_chunk, redact, report_text
 from launcher.experience import Experience
 from launcher.performance_profiles import PerformanceProfiles
 from launcher.skins import save_texture
@@ -203,6 +204,39 @@ class ExperienceDiagnosticsTests(unittest.TestCase):
         report = report_text(self.store, data)
         for private in ("abcSECRET", "PrivateName", "192.168.1.5"):
             self.assertNotIn(private, report)
+
+    def test_windows_logs_remain_readable_in_report_and_stored_failure(self):
+        log = self.folder / "logs/latest.log"
+        log.parent.mkdir()
+        expected = "OutOfMemoryError: Не удалось загрузить библиотеку для игры. Ёжик"
+        for encoding in ("utf-8-sig", "utf-16", "cp1251", "cp866"):
+            with self.subTest(encoding=encoding):
+                log.write_bytes(expected.encode(encoding))
+                result = analyze(self.store, self.pid)
+                self.assertIn(expected, report_text(self.store, result))
+                build_errors.record_exit(self.store, self.pid, 1, log.stat().st_mtime)
+                event = build_errors.history(self.store, self.pid)["groups"][0]["events"][0]
+                self.assertIn(expected, event["evidence"])
+
+    def test_mixed_utf8_and_windows_lines_and_bounded_unicode_reads(self):
+        first = "Строка игры"
+        second = "Ошибка инициализации сборки"
+        for encoding in ("cp1251", "cp866"):
+            raw = (first + "\n").encode() + second.encode(encoding)
+            self.assertEqual(read_log_chunk(io.BytesIO(raw), MAX_LOG), first + "\n" + second)
+        self.assertEqual(read_log_chunk(io.BytesIO("ЯЁж".encode()), 5), "Ёж")
+        self.assertEqual(read_log_chunk(io.BytesIO("ЯЁж".encode()), 3, tail=False), "Я")
+        self.assertEqual(read_log_chunk(io.BytesIO("ЯЁж".encode("utf-16")), 5), "Ёж")
+
+    def test_report_distinguishes_unrecoverable_input_from_normal_punctuation(self):
+        log = self.folder / "logs/latest.log"
+        log.parent.mkdir()
+        log.write_text("Почему? Это вопрос!", encoding="utf-8")
+        self.assertFalse(analyze(self.store, self.pid)["warnings"])
+        log.write_text("OutOfMemoryError: ?????? ??????", encoding="ascii")
+        result = analyze(self.store, self.pid)
+        self.assertIn("?????? ??????", result["logs"][0]["excerpt"])
+        self.assertIn("в исходном журнале", result["warnings"][0])
 
     def test_external_log_symlink_is_not_read(self):
         outside = self.root / "private.txt"

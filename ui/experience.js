@@ -9,7 +9,7 @@
   const media = (digest) => /^[a-f0-9]{64}$/.test(digest || "") ? "/api/media/" + digest + ".png" : "";
   const expButton = (action, text, icon = "settings", extra = "") => `<button type="button" class="btn" data-experience="${action}" ${extra}>${ic(icon)}${text}</button>`;
   const download = (text, name, type = "text/plain;charset=utf-8") => {
-    const url = URL.createObjectURL(new Blob([text], {type}));
+    const url = URL.createObjectURL(new Blob(["\uFEFF", text], {type}));
     const a = document.createElement("a"); a.href = url; a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
@@ -120,7 +120,7 @@
         return `<article class="diagnostic-finding"><div class="line"><h3>${esc(group.title)}</h3><small>${esc(date(last.created))}</small></div><p>${esc(group.advice)}</p><details><summary>Подробности (${group.events.length})</summary><ul class="build-error-events">${rows}</ul></details></article>`;
       }).join("");
       list.innerHTML = (groups || '<p class="empty">Пока нет записанных ошибок.</p>') +
-        expButton("diagnostics", "Проверить журнал Minecraft", "search", `data-experience-profile="${esc(profile.id)}"`);
+        expButton("diagnostics", "Проверить сборку", "search", `data-experience-profile="${esc(profile.id)}"`);
     } catch (error) {
       if (list.isConnected) list.textContent = error.message;
     }

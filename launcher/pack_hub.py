@@ -39,6 +39,7 @@ DOWNLOAD_HOSTS = {
     "objects.githubusercontent.com",
 }
 LOADERS = {"fabric-loader": "fabric", "quilt-loader": "quilt", "forge": "forge", "neoforge": "neoforge"}
+CATEGORIES = ("adventure", "challenging", "combat", "kitchen-sink", "lightweight", "magic", "multiplayer", "optimization", "quests", "technology")
 SORTS = {"relevance", "downloads", "follows", "newest", "updated"}
 
 
@@ -293,7 +294,7 @@ class PackHub:
                 raise ValueError("Неизвестный загрузчик модпака.")
             facets.append(["categories:" + loader])
         if category:
-            if category not in {"adventure", "challenging", "combat", "kitchen-sink", "lightweight", "magic", "multiplayer", "optimization", "quests", "technology"}:
+            if category not in CATEGORIES:
                 raise ValueError("Неизвестная категория модпака.")
             facets.append(["categories:" + category])
         raw = modrinth._get("/search", query=query.strip(), facets=json.dumps(facets), limit=12, offset=offset, index=sort)

@@ -109,6 +109,8 @@ class DirectPlayTests(unittest.TestCase):
             self.assertEqual(fetch.call_count, 1)
             argv = run.call_args.args[0]
             self.assertIn("-Xmx3072M", argv)
+            self.assertIn("-Dstderr.encoding=UTF-8", argv)
+            self.assertIn("-Dsun.stderr.encoding=UTF-8", argv)
             self.assertEqual(argv[argv.index("--username") + 1], "DedTimon")
             self.assertEqual(
                 argv[argv.index("--uuid") + 1], game._java_offline_uuid("DedTimon")

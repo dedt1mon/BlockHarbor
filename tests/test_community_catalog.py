@@ -1,0 +1,228 @@
+import hashlib
+import io
+import json
+import tempfile
+import unittest
+import zipfile
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
+
+from launcher import build_archive, community_catalog as catalog
+from launcher.store import Store
+
+
+class Registry:
+    """Simulate the public API independently of both clients' private Stores."""
+    origin = "https://catalog.example"
+    public_id = "BH-A123456789BC"
+
+    def __init__(self):
+        self.uploads = 0
+        self.parts = {}
+        self.meta = self.listing = None
+        self.fail_after_commit = False
+        self.data = b""
+
+    def json(self, method, path, *, token=None, payload=None, block=None):
+        if (method, path) == ("POST", "uploads"):
+            self.uploads += 1
+            self.meta = payload.copy()
+            return {"upload": "a" * 32, "token": "b" * 64, "chunkSize": catalog.CHUNK}
+        if path.startswith("uploads/"):
+            assert token == "b" * 64
+            if method == "PUT":
+                self.parts[int(path.split("/")[-1])] = block
+                return {}
+            if not self.listing:
+                self.data = b"".join(self.parts[n] for n in sorted(self.parts))
+                assert hashlib.sha256(self.data).hexdigest() == self.meta["sha256"]
+                self.listing = {"id": self.public_id, **self.meta}
+            if self.fail_after_commit:
+                self.fail_after_commit = False
+                raise catalog.CatalogError(0, "Потерян ответ")
+            return self.listing.copy()
+        if path.startswith("builds?"):
+            self.filters = parse_qs(urlsplit(path).query)
+            return {"hits": [self.listing] if self.listing else [], "total": int(bool(self.listing))}
+        if path == "builds/" + self.public_id and self.listing:
+            if method == "DELETE":
+                assert token == "b" * 64
+                self.listing = None
+                return {}
+            return self.listing.copy()
+        raise catalog.CatalogError(404, "Нет сборки")
+
+    @contextmanager
+    def request(self, method, path):
+        assert (method, path) == ("GET", "builds/" + self.public_id + "/archive")
+        with io.BytesIO(self.data) as source:
+            source.headers = {"Content-Length": str(len(self.data))}
+            yield source
+
+    def replace_archive(self, path=None, contents=b"", **changes):
+        data = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(self.data)) as old, zipfile.ZipFile(data, "w") as new:
+            for name in old.namelist():
+                value = old.read(name)
+                if name == build_archive.MANIFEST:
+                    value = json.dumps({**json.loads(value), **changes}).encode()
+                new.writestr(name, value)
+            if path:
+                new.writestr(path, contents)
+        self.data = data.getvalue()
+        self.listing.update(size=len(self.data), sha256=hashlib.sha256(self.data).hexdigest())
+
+
+class CommunityCatalogTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.author = Store(Path(tmp.name) / "author")
+        self.friend = Store(Path(tmp.name) / "friend")
+        self.pid = self.author.create("Личное имя", "1.20.1", "fabric")
+        self.folder = self.author.folder(self.pid)
+        self.server = Registry()
+        self.publisher = catalog.CommunityCatalog(self.author, self.server)
+        self.reader = catalog.CommunityCatalog(self.friend, self.server)
+        self.status = lambda message: None
+
+    def publish(self):
+        return self.publisher.publish(self.pid, "Сборка друзей", "adventure", self.status)
+
+    def install(self):
+        return self.reader.install(self.server.public_id.lower(), True, self.status)
+
+    def test_publication_install_separate_devices_privacy_and_retraction(self):
+        files = {
+            "mods/test.jar": b"mod bytes", "mods/off.jar.disabled": b"disabled",
+            "resourcepacks/forest.zip": b"resources", "shaderpacks/sun.zip": b"shader",
+            "resourcepacks/orphan.txt": b"personal note", "saves/home/level.dat": b"world",
+            "logs/latest.log": b"logs", "config/game.json": b"config", "options.txt":
+            b'resourcePacks:["vanilla","file/forest.zip","file/private.zip"]\nfov:80\nlastServer:private\n',
+            build_archive.STAMP: b'{"version":"1.20.1","loader":"fabric","loader_version":"0.16.10"}',
+        }
+        for relative, data in files.items():
+            target = self.folder / relative
+            target.parent.mkdir(exist_ok=True, parents=True)
+            target.write_bytes(data)
+        with patch.object(catalog, "CHUNK", 128):
+            self.publish()
+        self.assertGreater(len(self.server.parts), 1)
+        hit = self.reader.search(dict(q="Сборка", category="adventure", version="1.20.1", loader="fabric"))["hits"][0]
+        self.assertEqual(self.server.filters["q"], ["Сборка"])
+        self.assertEqual(hit["id"], self.server.public_id)
+        self.assertNotIn("token", hit)
+        publication = self.publisher.publications(self.pid)
+        self.assertEqual(publication["publications"][0]["build"], hit["id"])
+        self.assertNotIn("token", str(publication))
+        with zipfile.ZipFile(io.BytesIO(self.server.data)) as archive:
+            self.assertEqual(archive.namelist()[0], build_archive.MANIFEST)
+            self.assertEqual(len(archive.namelist()), 5)
+            self.assertNotIn(b"private", archive.read(build_archive.MANIFEST))
+        self.assertFalse(self.friend.all())
+        result = self.install()
+        dest = self.friend.folder(result["id"])
+        self.assertEqual(result["name"], "Сборка друзей")
+        for path in list(files)[:4]:
+            self.assertEqual((dest / path).read_bytes(), files[path])
+        self.assertEqual(json.loads((dest / build_archive.STAMP).read_bytes())["loader_version"], "0.16.10")
+        self.assertEqual((dest / "options.txt").read_text().strip(),'resourcePacks:["vanilla","file/forest.zip"]')
+        with self.assertRaises(ValueError):
+            self.reader.unpublish(result["id"], hit["id"])
+        self.publisher.unpublish(self.pid, hit["id"])
+        self.assertFalse(self.publisher.publications(self.pid)["publications"])
+        self.assertFalse(self.reader.search({})["hits"])
+        self.assertTrue(dest.exists())
+
+    def test_lost_completion_is_recovered_after_restart(self):
+        self.server.fail_after_commit = True
+        with self.assertRaises(catalog.CatalogError):
+            self.publish()
+        reopened = catalog.CommunityCatalog(self.author, self.server)
+        listing = reopened.publish(self.pid, "Сборка друзей", "adventure", self.status)
+        self.assertEqual(listing["id"], self.server.public_id)
+        self.assertEqual(self.server.uploads, 1)
+        self.assertEqual(reopened.publications(self.pid)["build"], listing["id"])
+        self.assertEqual(reopened.publish(self.pid, "Сборка друзей", "adventure", self.status), listing)
+        self.assertEqual(self.server.uploads, 1)
+
+    def test_real_folder_packs_and_opt_in_configs(self):
+        files = {
+            "resourcepacks/Forest/pack.mcmeta": b'{"pack":{"pack_format":15,"description":"Test"}}',
+            "resourcepacks/Forest/assets/tree.png": b"tree",
+            "shaderpacks/Summer/shaders/program/vectors.glsl": b"shader",
+            "shaderpacks/Summer/description.txt": b"summer",
+            "resourcepacks/notes/private.txt": b"not a pack",
+            "shaderpacks/incomplete/info.txt": b"not a shader",
+            "config/mymod/client.toml": b"quality = 3",
+            "defaultconfigs/server.properties": b"pvp=true",
+            "config/token.json": b"secret",
+            "config/other.toml": b"password = 'secret'",
+            "options.txt": b'resourcePacks:["file/Forest"]\nfov:75\n',
+        }
+        for relative, data in files.items():
+            path = self.folder / relative
+            path.parent.mkdir(exist_ok=True, parents=True)
+            path.write_bytes(data)
+        link = self.folder / "resourcepacks/Forest/linked.txt"
+        try:
+            link.symlink_to(self.folder / "config/token.json")
+        except OSError:
+            pass  # Windows may require a privilege to create symlinks.
+        for enabled in (False, True):
+            with self.subTest(include_configs=enabled):
+                self.publisher.publish(self.pid, "Проверка папок", "magic", self.status, include_configs=enabled)
+                dest = self.friend.folder(self.install()["id"])
+                for relative in list(files)[:4]:
+                    self.assertEqual((dest / relative).read_bytes(), files[relative])
+                self.assertEqual((dest / "options.txt").read_text().strip(), 'resourcePacks:["file/Forest"]')
+                self.assertFalse((dest / "resourcepacks/Forest/linked.txt").exists())
+                for relative in list(files)[4:-1]:
+                    allowed = enabled and relative in ("config/mymod/client.toml", "defaultconfigs/server.properties")
+                    self.assertEqual((dest / relative).exists(), allowed, relative)
+                with zipfile.ZipFile(io.BytesIO(self.server.data)) as z:
+                    self.assertIs(json.loads(z.read(build_archive.MANIFEST)).get("publicConfigs", False), enabled)
+                self.publisher.unpublish(self.pid, self.server.public_id)
+
+    def test_config_publication_import_still_rejects_private_data(self):
+        self.publish()
+        self.server.replace_archive("config/example.cfg", b"api_key = hidden", publicConfigs=True)
+        with self.assertRaisesRegex(ValueError, "личными"):
+            self.install()
+        self.assertFalse(self.friend.all())
+
+    def test_download_integrity_metadata_and_scope_precede_profile_creation(self):
+        self.publish()
+        clean = self.server.data
+        original = self.server.listing.copy()
+        cases = [
+            {"path": "config/anything.toml"}, {"path": "saves/Island/level.dat"},
+            {"path": "shaderpacks/notes.txt"}, {"path": "mods/../x.jar"},
+            {"minecraft": "1.21.1"}, {"loader": "forge"}, {"name": "Чужое имя"}, {"worlds": True},
+        ]
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                self.server.data = clean
+                self.server.listing = original.copy()
+                self.server.replace_archive(**kwargs)
+                with self.assertRaises(ValueError):
+                    self.install()
+                self.assertFalse(self.friend.all())
+                self.assertFalse(list(self.friend.instances.iterdir()))
+        self.server.data = clean
+        self.server.listing = {**original, "sha256": "f" * 64}
+        with self.assertRaisesRegex(ValueError, "контрольная сумма"):
+            self.install()
+        self.assertFalse(self.friend.all())
+
+    def test_install_creates_new_named_profile_and_accepts_steam_notice(self):
+        self.pid = self.author.create("Ваниль", "1.20.1", "vanilla")
+        self.publish()
+        self.friend.create("Сборка друзей", "1.20.1", "vanilla")
+        with self.assertRaisesRegex(ValueError, "Steam"):
+            self.reader.install(self.server.public_id, False, self.status)
+        imported = self.install()
+        self.assertEqual(imported["name"], "Сборка друзей (2)")
+        self.assertEqual(self.friend.get("steamNotice:" + imported["id"]), "1.20.1|vanilla")

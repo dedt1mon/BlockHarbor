@@ -59,6 +59,7 @@ from launcher.performance_profiles import PerformanceProfiles
 from launcher.transfers import TransferManager
 from launcher.updates import UpdateService, version_key
 from launcher.pack_hub import PackHub
+from launcher.community_catalog import CommunityCatalog
 from launcher.shared_builds import SharedBuilds
 
 HERE = Path(__file__).resolve().parent
@@ -163,11 +164,12 @@ class App:
         self.metrics = SessionMetrics(self.store)
         self.performance = PerformanceProfiles(self.store, self.care.before_change, self.metrics)
         self.packs = PackHub(self.store, self.transfers)
+        self.community = CommunityCatalog(self.store)
         self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running)
         self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update,
                                      namespace=self.coordinator.namespace, install_guard=self.coordinator.update_guard, handoff_metadata=self.coordinator.handoff,
                                      cancel_handoff=self.coordinator.cancel_update)
-        self.features = (self.care, self.experience, self.performance, self.packs, self.sharing, self.updates)
+        self.features = (self.care, self.experience, self.performance, self.packs, self.sharing, self.community, self.updates)
         self.initial_recovery = False
         self.coordinator.recover = self._recover_shared_state
 
@@ -444,7 +446,7 @@ class App:
             if service in (self.care, self.performance, self.sharing) and pid and action not in reads | {"careCheckUpdates", "carePin", "careRetention"}:
                 self.require_profile_idle(pid)
             if action in service.JOBS:
-                guarded = pid if service in (self.care, self.performance, self.sharing) and action != "careCheckUpdates" else None
+                guarded = pid if (service in (self.care, self.performance, self.sharing) and action != "careCheckUpdates") or action == "communityPublish" else None
                 return self.start_job(lambda status: service.handle(action, params, status), profile=guarded)
             result = service.handle(action, params)
             if action not in concurrent and not (isinstance(result, dict) and result.get("review")):

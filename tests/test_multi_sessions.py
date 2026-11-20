@@ -536,6 +536,14 @@ class WindowsMutexTests(unittest.TestCase):
             self.assertEqual(self.kernel.UnlockFileEx.call_args.args[:4], (0x123456789, 0, 1, 0))
             self.assertIs(self.kernel.UnlockFileEx.call_args.args[4]._obj, overlap)
 
+    def test_close_uses_the_backend_that_acquired_the_lock(self):
+        mutex = FileMutex(self.root / "backend")
+        self.assertTrue(mutex.acquire())
+        with patch("launcher.sessions.os", SimpleNamespace(name="posix")):
+            mutex.close()
+            mutex.close()
+        self.kernel.UnlockFileEx.assert_called_once()
+
     def test_only_lock_violation_is_contention_and_other_errors_surface(self):
         self.kernel.LockFileEx.return_value = 0
         for code in (33, 5, 32, 158, 87):

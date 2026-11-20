@@ -90,7 +90,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--version", default="2.5.1")
+    parser.add_argument("--version", default="2.6.0")
     parser.add_argument("--makensis", default="makensis", help="NSIS 3.13+ compiler")
     parser.add_argument("--go", default="go", help="Go 1.25+ compiler for the safe data cleanup helper")
     parser.add_argument(
@@ -101,7 +101,7 @@ def main():
     if not re.fullmatch(
         r"(?:0|[1-9][0-9]{0,3})(?:\.(?:0|[1-9][0-9]{0,3})){2}", args.version
     ):
-        parser.error("--version must have three numeric parts, e.g. 2.5.1")
+        parser.error("--version must have three numeric parts, e.g. 2.6.0")
     if args.project_url:
         url = urlsplit(args.project_url)
         if url.scheme != "https" or not url.hostname or url.username or url.password:

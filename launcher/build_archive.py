@@ -114,8 +114,68 @@ def _pack_options(folder):
     return []
 
 
-def _walk(folder, sections, worlds):
-    stack = [(folder / section, (section,)) for section in sections]
+def _catalog_path(parts, directory, folders, configs):
+    if parts[0] in ("config", "defaultconfigs"):
+        return configs
+    if parts[0] not in KINDS:
+        return False
+    if tuple(parts[:2]) in folders:
+        return len(parts) > 2 or directory
+    if directory:
+        return len(parts) == 1
+    ext = KINDS[parts[0]]
+    return len(parts) == 2 and parts[1].lower().endswith((ext, ext + ".disabled"))
+
+
+def _folder_marker(parts):
+    if (len(parts) == 3 and parts[0] == "resourcepacks" and parts[2] == "pack.mcmeta"
+            or len(parts) >= 4 and parts[0] == "shaderpacks" and parts[2] == "shaders"):
+        return tuple(parts[:2])
+    return None
+
+
+def _catalog_folders(root):
+    folders = set()
+    for kind in ("resourcepacks", "shaderpacks"):
+        parent = root / kind
+        if not parent.is_dir() or _reparse(parent.lstat()):
+            continue
+        for candidate in parent.iterdir():
+            if candidate.name.startswith(".") or _reparse(candidate.lstat()) or not candidate.is_dir():
+                continue
+            parts = (kind, candidate.name)
+            marker = "pack.mcmeta" if kind == "resourcepacks" else "shaders"
+            path = candidate / marker
+            if not path.exists() or _reparse(path.lstat()):
+                continue
+            if kind == "resourcepacks" and path.is_file():
+                folders.add(parts)
+            elif kind == "shaderpacks" and path.is_dir() and next(_walk(root, [(*parts, marker)], False), None):
+                folders.add(parts)
+    return folders
+
+
+def _catalog_options(options, pack_names):
+    """Carry only selections referring to shipped packs or the vanilla resources."""
+    # Older Minecraft versions store the bare pack name, newer ones add "file/".
+    names = set(pack_names)
+    permitted = {"vanilla", *names, *("file/" + name for name in names)}
+    selected = []
+    for line in options:
+        key, _, raw = line.partition(":")
+        try:
+            values = json.loads(raw)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(values, list):
+            choices = [item for item in values if isinstance(item, str) and item in permitted]
+            selected.append(key + ":" + json.dumps(choices, ensure_ascii=False, separators=(",", ":")))
+    return selected
+
+
+def _walk(folder, sections, worlds, *, catalog_folders=None, configs=False):
+    roots = [section if isinstance(section, tuple) else (section,) for section in sections]
+    stack = [(folder.joinpath(*parts), parts) for parts in roots]
     while stack:
         lifecycle.check()
         path, parts = stack.pop()
@@ -130,6 +190,8 @@ def _walk(folder, sections, worlds):
         directory = stat.S_ISDIR(st.st_mode)
         if _reparse(st) or not _allowed(parts, worlds, directory):
             continue
+        if catalog_folders is not None and not _catalog_path(parts, directory, catalog_folders, configs):
+            continue
         _name_parts("/".join(parts))
         if directory:
             for child in sorted(path.iterdir(), reverse=True):
@@ -139,14 +201,14 @@ def _walk(folder, sections, worlds):
             yield path, parts, st
 
 
-def export_build(store, pid, file, worlds=False):
+def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes=MAX_ZIP, include_configs=False):
     lifecycle.check()
     profile = store.profile(pid)
     root = store._profile_directory(store.instances, pid)
     meta = {
         "format": "BlockHarbor",
         "formatVersion": 1,
-        "name": profile["name"],
+        "name": profile["name"] if catalog_name is None else catalog_name,
         "minecraft": profile["version"],
         "loader": profile["loader"],
         "worlds": worlds,
@@ -160,7 +222,14 @@ def export_build(store, pid, file, worlds=False):
         ):
             meta["loaderVersion"] = _pin(saved.get("loader_version"))
     meta["packOptions"] = _pack_options(root)
-    sections = [*KINDS, "config", "defaultconfigs"]
+    catalog = catalog_name is not None
+    if catalog and worlds:
+        raise ValueError("В публичную сборку нельзя включать миры.")
+    sections = list(KINDS)
+    if not catalog or include_configs:
+        sections.extend(("config", "defaultconfigs"))
+    if catalog and include_configs:
+        meta["publicConfigs"] = True
     if worlds:
         sections.append("saves")
     seen = set()
@@ -168,14 +237,28 @@ def export_build(store, pid, file, worlds=False):
     with zipfile.ZipFile(
         file, "w", compression=zipfile.ZIP_STORED, allowZip64=True
     ) as z:
-        z.writestr(MANIFEST, json.dumps(meta, ensure_ascii=False).encode())
-        for path, parts, st in _walk(root, sections, worlds):
+        folders = _catalog_folders(root) if catalog else None
+        if catalog:
+            # Discover top-level pack files without traversing folder packs twice.
+            names = [parts[1] for _, parts, _ in _walk(root, ["resourcepacks"], False, catalog_folders=set())]
+            names.extend(name for kind, name in folders if kind == "resourcepacks")
+            meta["packOptions"] = _catalog_options(meta["packOptions"], names)
+        # A stable manifest timestamp lets interrupted publications resume.
+        entry = zipfile.ZipInfo(MANIFEST) if catalog else MANIFEST
+        manifest = json.dumps(meta, ensure_ascii=False).encode()
+        if catalog and len(manifest) > 65536:
+            raise ValueError("Манифест публичной сборки превышает 64 КБ.")
+        z.writestr(entry, manifest)
+        found_markers = set()
+        for path, parts, st in _walk(root, sections, worlds, catalog_folders=folders, configs=include_configs):
             name = "/".join(parts)
             normal = unicodedata.normalize("NFC", name).casefold()
             if normal in seen:
                 raise ValueError(
                     "В сборке есть пути, отличающиеся только регистром или написанием Unicode."
                 )
+            if catalog and file.tell() + st.st_size > max_bytes:
+                raise ValueError("Публичная сборка превышает лимит каталога по размеру.")
             if (
                 st.st_size > MAX_ADDON
                 or len(seen) >= MAX_FILES - 1
@@ -195,7 +278,7 @@ def export_build(store, pid, file, worlds=False):
                         raise ValueError("Файл настроек изменился во время экспорта.")
                     if _private_config(parts, data):
                         continue
-                    z.writestr(name, data)
+                    z.writestr(zipfile.ZipInfo(name) if catalog else name, data)
                 else:
                     with z.open(name, "w") as out:
                         left = st.st_size
@@ -212,8 +295,12 @@ def export_build(store, pid, file, worlds=False):
                             raise ValueError("Файл сборки изменился во время экспорта.")
             seen.add(normal)
             total += st.st_size
-    if file.tell() > MAX_ZIP:
-        raise ValueError("ZIP сборки превышает 8 ГБ.")
+            if catalog and (marker := _folder_marker(parts)):
+                found_markers.add(marker)
+        if catalog and found_markers != folders:
+            raise ValueError("Папки ресурс-паков или шейдеров изменились во время публикации.")
+    if file.tell() > max_bytes:
+        raise ValueError("Публичная сборка превышает лимит каталога по размеру." if catalog else "ZIP сборки превышает 8 ГБ.")
     file.seek(0)
     return (
         re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", profile["name"]).strip(". ")[:48]
@@ -237,12 +324,17 @@ def _directory_limit(file):
     file.seek(0)
 
 
-def _members(archive, worlds):
+def _members(archive, worlds, *, catalog=False, configs=False):
     paths = {}
     dirs = set()
     seen = set()
     rows = []
     size = 0
+    if catalog:
+        folders = {
+            marker for item in archive.infolist() if not item.is_dir()
+            if (marker := _folder_marker(item.orig_filename.split("/")))
+        }
     for item in archive.infolist():
         lifecycle.check()
         name = item.orig_filename
@@ -280,7 +372,7 @@ def _members(archive, worlds):
         seen.add(key)
         if name == MANIFEST:
             continue
-        if not _allowed(parts, worlds, directory):
+        if not _allowed(parts, worlds, directory) or (catalog and not _catalog_path(parts, directory, folders, configs)):
             raise ValueError("В архиве есть путь вне состава сборки: " + norm[:140])
         if directory:
             continue
@@ -301,10 +393,10 @@ def _members(archive, worlds):
     return rows, size
 
 
-def import_build(store, file):
+def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
     lifecycle.check()
     file.seek(0, 2)
-    if not 0 < file.tell() <= MAX_ZIP:
+    if not 0 < file.tell() <= max_bytes:
         raise ValueError("Нужен ZIP сборки размером до 8 ГБ.")
     file.seek(0)
     try:
@@ -336,6 +428,12 @@ def import_build(store, file):
             name, version, loader = input_profile(
                 meta.get("name"), meta.get("minecraft"), meta.get("loader")
             )
+            if catalog_listing is not None and (
+                (name, version, loader) != tuple(catalog_listing[key] for key in ("name", "minecraft", "loader"))
+                or meta.get("worlds") is not False
+                or type(meta.get("publicConfigs", False)) is not bool
+            ):
+                raise ValueError("Описание публичной сборки расходится с её архивом.")
             pin = _pin(meta.get("loaderVersion"))
             options = meta.get("packOptions", [])
             if (
@@ -352,7 +450,11 @@ def import_build(store, file):
                 )
             ):
                 raise ValueError("Неверные параметры ресурс-паков в манифесте.")
-            rows, size = _members(archive, meta.get("worlds") is True)
+            rows, size = _members(archive, meta.get("worlds") is True, catalog=catalog_listing is not None, configs=meta.get("publicConfigs") is True)
+            if catalog_listing is not None:
+                if size > max_bytes:
+                    raise ValueError("Распакованная сборка превышает лимит каталога по размеру.")
+                options = _catalog_options(options, (parts[1] for _, parts in rows if parts[0] == "resourcepacks"))
             if size > shutil.disk_usage(store.instances).free:
                 raise ValueError("Недостаточно места на диске для распаковки.")
             existing = {p["name"].casefold() for p in store.all()}

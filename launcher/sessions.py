@@ -105,6 +105,7 @@ class FileMutex:
     def __init__(self, path, *, shared=False):
         self.path, self.shared = Path(path), shared
         self.handle = None
+        self._windows = None
 
     def _lock_windows(self, fd):
         import ctypes
@@ -169,10 +170,11 @@ class FileMutex:
     def close(self):
         if self.handle is not None:
             handle, self.handle = self.handle, None
+            windows, self._windows = self._windows, None
             try:
-                if os.name == "nt":
+                if windows is not None:
                     import ctypes
-                    kernel, native, overlapped = self._windows
+                    kernel, native, overlapped = windows
                     if not kernel.UnlockFileEx(native, 0, 1, 0, ctypes.byref(overlapped)):
                         raise ctypes.WinError(ctypes.get_last_error())
             finally:

@@ -77,11 +77,39 @@ jobs:
           python tools/build_windows.py --output "$env:RUNNER_TEMP\blockharbor-portable"
           if ($LASTEXITCODE -ne 0) { throw "Portable Windows build failed" }
 
-      - name: Install NSIS
+      - name: Download and verify official NSIS 3.13 compiler
         shell: pwsh
         run: |
-          choco install nsis --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed" }
+          $archive = Join-Path $env:RUNNER_TEMP "nsis-3.13.zip"
+          $expected = "ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8"
+          $urls = @(
+            "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip",
+            "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13.zip/download"
+          )
+          $verified = $false
+          foreach ($url in $urls) {
+            for ($attempt = 1; $attempt -le 3 -and -not $verified; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRedirection 10 -TimeoutSec 90
+                $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actual -ne $expected) { throw "NSIS ZIP failed the official SHA-256 check" }
+                $verified = $true
+              } catch {
+                Write-Warning "NSIS download attempt $attempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds (3 * $attempt)
+              }
+            }
+            if ($verified) { break }
+          }
+          if (-not $verified) { throw "Could not download verified NSIS 3.13 from official mirrors" }
+          $directory = Join-Path $env:RUNNER_TEMP "nsis-3.13"
+          Expand-Archive -Path $archive -DestinationPath $directory -Force
+          $compiler = Get-ChildItem -Path $directory -Filter "makensis.exe" -Recurse -File | Select-Object -First 1
+          if (-not $compiler) { throw "Official NSIS archive does not include makensis.exe" }
+          & $compiler.FullName /VERSION
+          if ($LASTEXITCODE -ne 0) { throw "NSIS compiler cannot start" }
+          "NSIS_COMPILER=$($compiler.FullName)" >> $env:GITHUB_ENV
+          "NSIS_HOME=$($compiler.DirectoryName)" >> $env:GITHUB_ENV
 
       - name: Build installer and verified update manifest
         shell: pwsh
@@ -90,14 +118,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $release | Out-Null
           $portable = Join-Path $env:RUNNER_TEMP "blockharbor-portable\BlockHarbor.exe"
           $setup = Join-Path $release "BlockHarbor-Setup-$env:RELEASE_VERSION.exe"
-          $candidates = @(
-            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
-            "$env:ProgramFiles\NSIS\makensis.exe",
-            "C:\ProgramData\chocolatey\bin\makensis.exe"
-          )
-          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $makensis) { throw "makensis.exe not found" }
-          python tools/build_installer.py --launcher $portable --output $setup --version $env:RELEASE_VERSION --makensis $makensis --go go --project-url "https://github.com/dedt1mon/BlockHarbor"
+          if (-not (Test-Path $env:NSIS_COMPILER)) { throw "Verified NSIS compiler not found" }
+          python tools/build_installer.py --launcher $portable --output $setup --version $env:RELEASE_VERSION --makensis $env:NSIS_COMPILER --nsisdir $env:NSIS_HOME --go go --project-url "https://github.com/dedt1mon/BlockHarbor"
           if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
           Copy-Item $portable (Join-Path $release "BlockHarbor.exe")
           python tools/release_update_manifest.py --version $env:RELEASE_VERSION --installer $setup --output (Join-Path $release "BlockHarbor-update.json")

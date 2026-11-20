@@ -5,10 +5,11 @@ import json
 import re
 import shutil
 import tempfile
+import time
 import unicodedata
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import build_archive, e4steam, lifecycle, version_ids
@@ -21,6 +22,12 @@ CHUNK = 8 * 1024**2
 MAX_ARCHIVE = 2 * 1024**3
 PAGE = 20
 MAX_JSON = 128 * 1024
+MIRROR_INDEX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-index/index.json"
+MIRROR_PREFIX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-"
+MIRROR_JSON_LIMIT = 8 * 1024**2
+MIRROR_MAX_AGE = 2 * 3600
+MIRROR_SHARDS = 32
+FALLBACK_HTTP = frozenset((0, 403, 408, 429, 500, 502, 503, 504, 521, 522, 523, 524))
 ID = re.compile(r"BH-[A-F0-9]{12}\Z")
 
 
@@ -75,7 +82,9 @@ class CatalogAPI:
             headers["Content-Type"] = "application/octet-stream"
         request = Request(self.origin + "/v1/" + path, data=block, headers=headers, method=method)
         # The registry streams and hashes the entire archive before acknowledging completion.
-        timeout = 300 if path.endswith("/complete") else 60
+        timeout = (300 if path.endswith("/complete") else
+                   12 if method == "GET" and not path.endswith("/archive") else
+                   45 if method == "GET" else 60)
         try:
             return lifecycle.response(self.opener.open(request, timeout=timeout))
         except HTTPError as exc:
@@ -107,14 +116,102 @@ class CatalogAPI:
         return value
 
 
+
+class GitHubMirror:
+    """Read-only copy of opt-in public builds, synced by GitHub Actions.
+
+    Archive URLs are constructed from validated IDs rather than server data;
+    redirects carry no publisher authorization and are TLS/host constrained.
+    """
+
+    def __init__(self, opener=None):
+        self.opener = opener or build_opener()
+        self._cache = None
+
+    @staticmethod
+    def archive_url(public_id):
+        public_id = _build_id(public_id)
+        shard = int(public_id[3:5], 16) % MIRROR_SHARDS
+        return f"{MIRROR_PREFIX}{shard:02x}/{public_id}.zip"
+
+    def _open(self, url, timeout):
+        lifecycle.check()
+        request = Request(url, headers={
+            "User-Agent": f"BlockHarbor/{VERSION}",
+            "Accept-Encoding": "identity",
+        })
+        try:
+            opened = self.opener.open(request, timeout=timeout)
+            final = urlsplit(opened.geturl())
+            hostname = (final.hostname or "").lower()
+            if final.scheme != "https" or not (hostname == "github.com" or hostname.endswith(".githubusercontent.com")):
+                opened.close()
+                raise CatalogError(0, "Резервный каталог вернул небезопасный адрес загрузки.")
+            return lifecycle.response(opened)
+        except (HTTPError, URLError, OSError, HTTPException) as exc:
+            lifecycle.check()
+            raise CatalogError(0, "Резервный каталог GitHub недоступен. Проверь подключение к GitHub.") from exc
+
+    def _listings(self):
+        cached = self._cache
+        if cached and time.monotonic() - cached[0] < 60:
+            return cached[1]
+        with self._open(MIRROR_INDEX, 15) as response:
+            payload = response.read(MIRROR_JSON_LIMIT + 1)
+        if len(payload) > MIRROR_JSON_LIMIT:
+            raise CatalogError(0, "Резервный каталог вернул слишком большой список.")
+        try:
+            data = json.loads(payload)
+        except (ValueError, TypeError) as exc:
+            raise CatalogError(0, "Не удалось прочитать резервный каталог GitHub.") from exc
+        if not isinstance(data, dict) or data.get("format") != 1 or type(data.get("generated")) is not int:
+            raise CatalogError(0, "Резервный каталог имеет неизвестный формат.")
+        age = time.time() - data["generated"]
+        if not -300 <= age <= MIRROR_MAX_AGE:
+            raise CatalogError(0, "Резервный каталог давно не обновлялся. Попробуй позже.")
+        rows = data.get("items")
+        if (not isinstance(rows, list) or len(rows) > 20000
+                or type(data.get("total")) is not int or data["total"] != len(rows)):
+            raise CatalogError(0, "Резервный каталог вернул неполные сведения.")
+        items = [_listing(row) for row in rows]
+        if len({item["id"] for item in items}) != len(items):
+            raise CatalogError(0, "Резервный каталог содержит повторяющиеся сборки.")
+        self._cache = (time.monotonic(), items)
+        return items
+
+    def search(self, filters):
+        needle = filters["q"].strip().casefold()
+        matching = [
+            item for item in self._listings()
+            if (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
+            and (not filters["category"] or item["category"] == filters["category"])
+            and (not filters["version"] or item["minecraft"] == filters["version"])
+            and (not filters["loader"] or item["loader"] == filters["loader"])
+        ]
+        offset = filters["offset"]
+        return {"hits": matching[offset:offset + PAGE], "total": len(matching),
+                "limit": PAGE, "offset": offset, "source": "github"}
+
+    def listing(self, public_id):
+        public_id = _build_id(public_id)
+        for item in self._listings():
+            if item["id"] == public_id:
+                return item
+        raise CatalogError(404, "Сборка не найдена в резервном каталоге.")
+
+    def request_archive(self, public_id):
+        return self._open(self.archive_url(public_id), 45)
+
+
 class CommunityCatalog:
     READ_ACTIONS = {"communitySearch", "communityPublication"}
     JOBS = {"communityInstall", "communityPublish", "communityUnpublish"}
     ACTIONS = READ_ACTIONS | JOBS
 
-    def __init__(self, store, api=None):
+    def __init__(self, store, api=None, mirror=None):
         self.store = store
         self.api = api or CatalogAPI()
+        self.mirror = mirror if mirror is not None else GitHubMirror()
         with self.store.connection() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS community_uploads (
                 origin TEXT NOT NULL, pid TEXT NOT NULL, fingerprint TEXT NOT NULL, upload TEXT NOT NULL,
@@ -137,11 +234,19 @@ class CommunityCatalog:
             raise ValueError("Неизвестный загрузчик сборки.")
         filters = {"q": query.strip(), "offset": offset, "category": _category(params.get("category", ""), True),
                    "version": version, "loader": loader}
-        page = self.api.json("GET", "builds?" + urlencode(filters))
+        try:
+            page = self.api.json("GET", "builds?" + urlencode(filters))
+        except CatalogError as error:
+            if error.code not in FALLBACK_HTTP:
+                raise
+            try:
+                return self.mirror.search(filters)
+            except (CatalogError, ValueError, OSError) as backup:
+                raise CatalogError(0, "Каталог игроков недоступен через основной сервер и зеркало GitHub.") from backup
         hits, total = page.get("hits"), page.get("total")
         if not isinstance(hits, list) or len(hits) > PAGE or type(total) is not int or total < len(hits):
             raise ValueError("Каталог вернул неверный список сборок.")
-        return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset}
+        return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
     def _new_upload(self, pid, key, metadata):
         session = self.api.json("POST", "uploads", payload=metadata)
@@ -239,7 +344,14 @@ class CommunityCatalog:
 
     def install(self, public_id, allow_without_steam, status):
         public_id = _build_id(public_id)
-        listing = _listing(self.api.json("GET", "builds/" + public_id))
+        from_mirror = False
+        try:
+            listing = _listing(self.api.json("GET", "builds/" + public_id))
+        except CatalogError as error:
+            if error.code not in FALLBACK_HTTP:
+                raise
+            listing = self.mirror.listing(public_id)
+            from_mirror = True
         if listing["id"] != public_id:
             raise ValueError("Каталог вернул другую сборку.")
         if not allow_without_steam and not e4steam.support(listing["minecraft"], listing["loader"]):
@@ -249,7 +361,19 @@ class CommunityCatalog:
             raise ValueError("Недостаточно места на диске для архива сборки.")
         with tempfile.TemporaryFile(dir=self.store.root) as stream:
             digest = hashlib.sha256()
-            with self.api.request("GET", "builds/" + public_id + "/archive") as response:
+            if from_mirror:
+                source = self.mirror.request_archive(public_id)
+            else:
+                try:
+                    source = self.api.request("GET", "builds/" + public_id + "/archive")
+                except CatalogError as error:
+                    if error.code not in FALLBACK_HTTP:
+                        raise
+                    mirror_listing = self.mirror.listing(public_id)
+                    if any(listing[k] != mirror_listing[k] for k in ("id", "size", "sha256")):
+                        raise ValueError("Резервный архив не совпадает с записью основного каталога.")
+                    source = self.mirror.request_archive(public_id)
+            with source as response:
                 length = response.headers.get("Content-Length")
                 if length is not None and length != str(size):
                     raise ValueError("Размер архива не совпадает с записью каталога.")

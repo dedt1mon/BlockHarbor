@@ -226,3 +226,87 @@ class CommunityCatalogTests(unittest.TestCase):
         imported = self.install()
         self.assertEqual(imported["name"], "Сборка друзей (2)")
         self.assertEqual(self.friend.get("steamNotice:" + imported["id"]), "1.20.1|vanilla")
+
+
+    def test_unreachable_primary_uses_verified_public_mirror_for_search_and_install(self):
+        listing = self.publish()
+        archive = self.server.data
+
+        class BlockedPrimary:
+            origin = "https://catalog.blocked.example"
+
+            def json(self, method, path, **kwargs):
+                raise catalog.CatalogError(403, "Site unavailable without VPN")
+
+            def request(self, method, path):
+                raise catalog.CatalogError(0, "Network blocked")
+
+        class PublicMirror:
+            def search(self, filters):
+                return {"hits": [listing], "total": 1, "limit": catalog.PAGE,
+                        "offset": filters["offset"], "source": "github"}
+
+            def listing(self, public_id):
+                assert public_id == listing["id"]
+                return listing.copy()
+
+            @contextmanager
+            def request_archive(self, public_id):
+                assert public_id == listing["id"]
+                with io.BytesIO(archive) as response:
+                    response.headers = {"Content-Length": str(len(archive))}
+                    yield response
+
+        reader = catalog.CommunityCatalog(self.friend, BlockedPrimary(), PublicMirror())
+        page = reader.search({"q": "Сборка", "category": "adventure"})
+        self.assertEqual(page["source"], "github")
+        self.assertEqual(page["hits"][0]["id"], listing["id"])
+        installed = reader.install(listing["id"], True, self.status)
+        self.assertEqual(installed["name"], "Сборка друзей")
+        self.assertTrue(self.friend.folder(installed["id"]).is_dir())
+
+    def test_mirror_archive_fallback_verifies_same_primary_digest(self):
+        listing = self.publish()
+        archive = self.server.data
+
+        class Primary:
+            origin = "https://catalog.example"
+
+            def json(self, method, path, **kwargs):
+                return listing.copy()
+
+            def request(self, method, path):
+                raise catalog.CatalogError(0, "Origin archive blocked")
+
+        class Mirror:
+            def listing(self, public_id):
+                return listing.copy()
+
+            @contextmanager
+            def request_archive(self, public_id):
+                with io.BytesIO(archive) as response:
+                    response.headers = {"Content-Length": str(len(archive))}
+                    yield response
+
+        reader = catalog.CommunityCatalog(self.friend, Primary(), Mirror())
+        installed = reader.install(listing["id"], True, self.status)
+        self.assertEqual(installed["name"], listing["name"])
+
+    def test_origin_404_is_not_overridden_by_stale_mirror(self):
+        self.publish()
+
+        class MissingPrimary:
+            origin = "https://catalog.example"
+
+            def json(self, method, path, **kwargs):
+                raise catalog.CatalogError(404, "Publication has been removed")
+
+        class UnwantedMirror:
+            def search(self, filters):
+                raise AssertionError("A removed build must not be restored from stale mirror")
+
+        reader = catalog.CommunityCatalog(self.friend, MissingPrimary(), UnwantedMirror())
+        with self.assertRaises(catalog.CatalogError) as caught:
+            reader.search({})
+        self.assertEqual(caught.exception.code, 404)
+

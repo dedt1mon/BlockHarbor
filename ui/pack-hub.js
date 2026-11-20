@@ -90,6 +90,7 @@
     if (community.error) status = `<p class="pack-status pack-error" role="status">${esc(community.error)} ${button("data-pack-community-retry", "Повторить")}</p>`;
     else if (community.busy) status = '<p class="pack-status" role="status">Ищем сборки игроков…</p>';
     else if (page && !page.hits.length) status = '<p class="pack-status" role="status">Сборок игроков по этому запросу пока нет.</p>';
+    else if (page?.source === "github") status = '<p class="pack-status" role="status">Показан резервный каталог GitHub. Новые публикации появляются после синхронизации.</p>';
     const cards = (page?.hits || []).map(item => `<article class="pack-card"><h4>${esc(item.name)}</h4>
       <p>Minecraft ${esc(item.minecraft)} · ${esc(loaders[item.loader] || item.loader)} · ${esc(categories[item.category] || item.category)}</p>
       <div class="pack-card-footer"><span class="meta">${esc(item.id)} · ${fmt(item.size)}</span>${button(`data-pack-community="${esc(item.id)}"`, "Скачать", "download")}</div></article>`).join("");
@@ -314,7 +315,7 @@
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", ...categories}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
       <label>Сортировка<select class="field" data-pack-filter="sort">${Object.entries({relevance: "По релевантности", downloads: "По загрузкам", follows: "По подписчикам", newest: "Сначала новые", updated: "Недавно обновлённые"}).map(([v, label]) => option(v, label, catalog.sort)).join("")}</select></label></div>
       <div class="pack-results"><section class="community-results" aria-label="Сборки игроков BlockHarbor">${communityResults()}</section>
-      <section class="pack-modrinth" aria-label="Модпаки Modrinth"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки Modrinth</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div><div class="pack-page-host">${pager()}</div></section></div></section>`;
+      <section class="pack-modrinth" aria-label="Модпаки"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div><div class="pack-page-host">${pager()}</div></section></div></section>`;
   }
 
   function loadArt() {

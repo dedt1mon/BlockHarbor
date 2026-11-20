@@ -9,3 +9,45 @@
 .build-error-events small { display: block; margin-top: 4px; color: var(--muted); }
 #buildErrorsPanel [data-error-list] > .empty { margin-bottom: 12px; }
 #buildErrorsPanel summary { cursor: pointer; }
+
+/* Match the unobtrusive scroll treatment used by the Mods → Download catalog. */
+#buildErrorsPanel > h2 { margin: 0 0 18px; }
+.diagnostic-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 18px;
+}
+.diagnostic-actions > .btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.report-text {
+  display: block;
+  height: min(360px, 44dvh);
+  min-height: 170px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #59695d transparent;
+  margin-bottom: 0;
+}
+.report-text::-webkit-scrollbar { width: 9px; }
+.report-text::-webkit-scrollbar-track { background: transparent; }
+.report-text::-webkit-scrollbar-thumb {
+  background: #59695d;
+  border-radius: 999px;
+  border: 2px solid #101717;
+}
+.report-text::-webkit-scrollbar-thumb:hover { background: #759376; }
+@media (max-width: 480px) {
+  .diagnostic-actions { grid-template-columns: minmax(0, 1fr); }
+}

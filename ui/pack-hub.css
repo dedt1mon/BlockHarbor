@@ -14,16 +14,10 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: #90b96b transparent;
+  scrollbar-color: #59695d transparent;
   margin-top: 16px;
-  padding: 14px 16px 18px 1px;
-  border-top: 2px solid #85b65a;
-  border-radius: 12px 12px 8px 8px;
+  padding: 0 4px 12px 0;
 }
-.pack-dialog .pack-results::-webkit-scrollbar { width: 9px; }
-.pack-dialog .pack-results::-webkit-scrollbar-track { background: transparent; border-radius: 999px; }
-.pack-dialog .pack-results::-webkit-scrollbar-thumb { background: #72975b; border-radius: 999px; border: 2px solid #192021; }
-.pack-dialog .pack-results::-webkit-scrollbar-thumb:hover { background: #a9d57e; }
 .pack-dialog .pack-filters,.pack-dialog .pack-search,.pack-dialog .pack-status,.pack-dialog .pack-page-host { flex: none; }
 .pack-dialog .pack-release,.pack-dialog .pack-preview { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .pack-dialog .pack-back { flex: none; align-self: flex-start; margin: 0 0 15px; }

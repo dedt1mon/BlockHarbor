@@ -2,6 +2,7 @@
 (() => {
   let buildQuery = "", onlyFavorites = false;
   let report = "";
+  let diagnosticSession = null;
   const galleries = new Map();
   let galleryRequest = 0;
   const query = (action, p = {}) => api("/api/feature?" + new URLSearchParams({action, ...p}));
@@ -125,13 +126,19 @@
       if (list.isConnected) list.textContent = error.message;
     }
   }
+  function showDiagnosticResults(p, data) {
+    modal("Диагностика · " + p.name, `<p class="note">${esc(data.notice)}</p>${data.findings.length ? data.findings.map(f=>`<section class="diagnostic-finding"><div class="line"><h3>${esc(f.title)}</h3><span class="pill">${f.confidence==="high"?"Конкретный признак":"Возможная причина"}</span></div><p>${esc(f.advice)}</p><small>${esc(f.source)}</small><pre>${esc(f.evidence.join("\n"))}</pre></section>`).join("") : `<div class="empty">${data.empty?"Журнал ещё не создан. Сначала запусти сборку.":"Известных признаков ошибки не найдено. Это не гарантирует совместимость всех модов."}</div>`}<div class="actions diagnostic-actions" role="group" aria-label="Действия проверки сборки">${expButton("report","Посмотреть отчёт","folder")}<button class="btn" data-experience="manageDiagnosticBuild" data-experience-profile="${p.id}">${ic("layers")}Управлять содержимым</button></div>`);
+  }
   async function diagnosticsBox(pid) {
-    const p = pid ? state.profiles.find(x=>x.id===pid) : active(); if (!p) return notice("Сборка для диагностики не найдена.", true);
+    const p = pid ? state.profiles.find(x => x.id === pid) : active();
+    if (!p) return notice("Сборка для диагностики не найдена.", true);
     modal("Диагностика · " + p.name, '<p id="diagnosticLoading">Читаем журнал и метаданные установленных модов…</p>');
     const el = $("#diagnosticLoading");
-    const data = await query("diagnostics", {id:p.id}); if (!el.isConnected) return;
+    const data = await query("diagnostics", {id: p.id});
+    if (!el.isConnected) return;
     report = data.report;
-    $("#dialogBody").innerHTML = `<p class="note">${esc(data.notice)}</p>${data.findings.length ? data.findings.map(f=>`<section class="diagnostic-finding"><div class="line"><h3>${esc(f.title)}</h3><span class="pill">${f.confidence==="high"?"Конкретный признак":"Возможная причина"}</span></div><p>${esc(f.advice)}</p><small>${esc(f.source)}</small><pre>${esc(f.evidence.join("\n"))}</pre></section>`).join("") : `<div class="empty">${data.empty?"Журнал ещё не создан. Сначала запусти сборку.":"Известных признаков ошибки не найдено. Это не гарантирует совместимость всех модов."}</div>`}<div class="actions">${expButton("report","Посмотреть отчёт","folder")}<button class="btn" data-experience="manageDiagnosticBuild" data-experience-profile="${p.id}">${ic("layers")}Управлять содержимым</button></div>`;
+    diagnosticSession = {profileId: p.id, data};
+    showDiagnosticResults(p, data);
   }
   async function handle(action, el) {
     const p = active();
@@ -190,7 +197,14 @@
       modal("Убрать скин из гардероба?", '<p>Текущий скин персонажа останется выбранным.</p><button class="btn danger" id="confirmWardrobeDelete">Убрать</button>');
       $("#confirmWardrobeDelete").onclick=async()=>{try{await act("experienceDeleteSkin",{skin:id});closeDialog();await loadWardrobe();notice("Скин убран из гардероба.");}catch(e){notice(e.message,true);}};return;
     }
-    if (action === "report") return modal("Отчёт для проверки", `<p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea>${expButton("saveReport","Сохранить проверенный отчёт","download")}`);
+    if (action === "report") return modal("Отчёт для проверки", `<p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea><div class="actions diagnostic-actions diagnostic-report-actions" role="group" aria-label="Действия с отчётом">${expButton("saveReport","Сохранить проверенный отчёт","download")}${expButton("backToDiagnostics","Вернуться обратно","back")}</div>`);
+    if (action === "backToDiagnostics") {
+      const previous = diagnosticSession;
+      const profile = state.profiles.find(item => item.id === previous?.profileId);
+      if (!profile) return notice("Результат предыдущей проверки недоступен.", true);
+      report = $("#diagnosticReport")?.value ?? report;
+      return showDiagnosticResults(profile, previous.data);
+    }
     if (action === "saveReport") return download($("#diagnosticReport").value, "BlockHarbor-diagnostics.txt");
   }
   document.addEventListener("click",e=>{const el=e.target.closest("[data-experience]");if(!el)return;e.preventDefault();handle(el.dataset.experience,el).catch(e=>notice(e.message,true));});

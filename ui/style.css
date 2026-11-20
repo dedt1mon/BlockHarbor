@@ -1452,7 +1452,7 @@ dialog:has(.catalog) #dialogBody {
   gap: 3px;
 }
 .catalog-choice .catalog-result { min-width: 0; flex: 1; }
-.catalog-mark { flex: 0 0 32px; height: 32px; padding: 6px; }
+.catalog-mark { flex: 0 0 32px; height: 32px; min-height: 0; padding: 6px; }
 .catalog-mark[aria-pressed="true"] { color: var(--lime); border-color: #839e70; }
 .catalog-cart-items { padding: 0; list-style: none; }
 .catalog-cart-items li, .catalog-cart-footer {

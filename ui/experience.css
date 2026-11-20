@@ -7,4 +7,5 @@
 .build-error-events { list-style: none; padding: 0; }
 .build-error-events li + li { border-top: 1px solid var(--line); padding-top: 12px; }
 .build-error-events small { display: block; margin-top: 4px; color: var(--muted); }
+#buildErrorsPanel [data-error-list] > .empty { margin-bottom: 12px; }
 #buildErrorsPanel summary { cursor: pointer; }

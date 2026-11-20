@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - launcher/version.py
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -12,10 +13,37 @@ permissions:
 
 concurrency:
   group: blockharbor-stable-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
+  tests:
+    if: github.repository == 'dedt1mon/BlockHarbor' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact release sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run full Python suite
+        run: python -m unittest discover -s tests -q
+      - name: Validate JavaScript syntax
+        shell: bash
+        run: |
+          for file in ui/*.js; do node --check "$file"; done
+
   release:
+    needs: tests
     if: github.repository == 'dedt1mon/BlockHarbor' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 45
@@ -36,32 +64,12 @@ jobs:
           go-version: '1.27.4'
           cache: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Determine stable version
         shell: pwsh
         run: |
           $version = (python -c "from launcher.version import VERSION; print(VERSION)").Trim()
           if ($version -notmatch '^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$') { throw "Invalid stable version: $version" }
           "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
-
-      - name: Install test dependencies
-        shell: pwsh
-        run: |
-          python -m pip install -r requirements.txt
-
-      - name: Test source code and JavaScript
-        shell: pwsh
-        run: |
-          python -m unittest discover -s tests -q
-          if ($LASTEXITCODE -ne 0) { throw "Python regression suite failed" }
-          Get-ChildItem "ui" -Filter "*.js" | ForEach-Object {
-            node --check $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "JavaScript validation failed: $($_.Name)" }
-          }
 
       - name: Build portable Windows x64 launcher
         shell: pwsh

@@ -12,7 +12,7 @@ def css_rule(css: str, selector: str) -> str:
     matches = pattern.findall(css)
     if not matches:
         raise AssertionError(f"Missing CSS rule: {selector}")
-    return matches[-1]
+    return "\n".join(matches)
 
 
 class CatalogDiagnosticsLayoutTests(unittest.TestCase):

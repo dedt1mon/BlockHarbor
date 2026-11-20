@@ -31,3 +31,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/sync_community_mirror.py
+
+      - name: Public mirror download and checksum smoke test
+        if: github.event_name != 'schedule'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, time
+          from urllib.request import Request, urlopen
+          base = 'https://github.com/dedt1mon/BlockHarbor/releases/download/'
+          def get(url):
+              return urlopen(Request(url, headers={'User-Agent': 'BlockHarbor-Mirror-Smoke/1'}), timeout=45)
+          with get(base + 'community-mirror-index/index.json') as response:
+              manifest = json.load(response)
+          assert manifest['format'] == 1 and manifest['total'] == len(manifest['items'])
+          assert time.time() - manifest['generated'] < 300
+          for row in manifest['items'][:1]:
+              tag = 'community-mirror-' + format(int(row['id'][3:5], 16) % 32, '02x')
+              name = row['id'] + '.zip'
+              digest, count = hashlib.sha256(), 0
+              with get(base + tag + '/' + name) as response:
+                  while chunk := response.read(1024 * 1024):
+                      digest.update(chunk)
+                      count += len(chunk)
+              assert count == row['size']
+              assert digest.hexdigest() == row['sha256']
+              print('Mirror archive fetched without authentication and verified:', name, count)
+          print('Public mirror index OK:', manifest['total'], 'active builds')
+          PY

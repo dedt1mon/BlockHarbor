@@ -120,8 +120,7 @@
         ).join("");
         return `<article class="diagnostic-finding"><div class="line"><h3>${esc(group.title)}</h3><small>${esc(date(last.created))}</small></div><p>${esc(group.advice)}</p><details><summary>Подробности (${group.events.length})</summary><ul class="build-error-events">${rows}</ul></details></article>`;
       }).join("");
-      list.innerHTML = (groups || '<p class="empty">Пока нет записанных ошибок.</p>') +
-        expButton("diagnostics", "Проверить сборку", "search", `data-experience-profile="${esc(profile.id)}"`);
+      list.innerHTML = groups || '<p class="empty">Пока нет записанных ошибок.</p>';
     } catch (error) {
       if (list.isConnected) list.textContent = error.message;
     }
@@ -197,7 +196,7 @@
       modal("Убрать скин из гардероба?", '<p>Текущий скин персонажа останется выбранным.</p><button class="btn danger" id="confirmWardrobeDelete">Убрать</button>');
       $("#confirmWardrobeDelete").onclick=async()=>{try{await act("experienceDeleteSkin",{skin:id});closeDialog();await loadWardrobe();notice("Скин убран из гардероба.");}catch(e){notice(e.message,true);}};return;
     }
-    if (action === "report") return modal("Отчёт для проверки", `<p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea><div class="actions diagnostic-actions diagnostic-report-actions" role="group" aria-label="Действия с отчётом">${expButton("saveReport","Сохранить проверенный отчёт","download")}${expButton("backToDiagnostics","Вернуться обратно","back")}</div>`);
+    if (action === "report") return modal("Отчёт для проверки", `<p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea><div class="actions diagnostic-actions diagnostic-report-actions" role="group" aria-label="Действия с отчётом">${expButton("backToDiagnostics","Вернуться обратно","back")}${expButton("saveReport","Сохранить отчёт","download")}</div>`);
     if (action === "backToDiagnostics") {
       const previous = diagnosticSession;
       const profile = state.profiles.find(item => item.id === previous?.profileId);

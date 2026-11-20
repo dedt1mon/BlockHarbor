@@ -595,7 +595,10 @@ function addons() {
   return head(p.name, "", esc(p.description || "")) +
     '<div class="build-settings-bar"><div class="tags build-settings-info">' + selectInfo(p) +
     '</div><div class="build-settings-actions" role="group" aria-label="Действия сборки">' +
-    btn("folder", "Папка сборки", "folder") + "</div></div>" +
+    btn("folder", "Папка сборки", "folder") +
+    (kind === "errors"
+      ? '<button type="button" class="btn" data-experience="diagnostics" data-experience-profile="' + esc(p.id) + '">' + ic("search") + 'Проверить сборку</button>'
+      : "") + "</div></div>" +
     '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button><button class="' + (kind === "errors" ? "on" : "") + '" data-kind="errors">Ошибки сборки</button></div>' +
     (kind === "errors"
       ? '<section class="panel" id="buildErrorsPanel"><h2>Ошибки сборки</h2><div data-error-list aria-live="polite">Загружаем записи…</div></section>'

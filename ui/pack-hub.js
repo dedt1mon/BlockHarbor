@@ -175,57 +175,85 @@
     }
   }
 
-  function publicationRows(list, expanded = false) {
+
+  function publicationRows(list) {
     if (!list.length) return "";
-    return `<details class="community-published"${expanded ? " open" : ""}><summary>Опубликованные сборки · ${list.length}</summary>
-      ${list.map(row => `<section class="community-receipt"><strong>${esc(row.name)}</strong><div class="community-id"><input class="field" readonly aria-label="ID сборки ${esc(row.name)}" value="${esc(row.build)}">
+    return `<div class="community-publications">${list.map(row => `<section class="community-receipt">
+      ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
+      <label class="community-code-label">Код сборки</label>
+      <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
-        ${button(`data-pack-withdraw="${esc(row.build)}"`, "Удалить публикацию", "trash")}
-        <div class="community-confirm" hidden><p>Убрать эту сборку из общего каталога? Её ID перестанет работать. Скачанные копии останутся у игроков.</p>
-        ${button("data-pack-keep", "Отмена")}${button(`data-pack-withdraw-confirm="${esc(row.build)}"`, "Удалить публикацию", "", "remove-confirm")}</div></section>`).join("")}</details>`;
+      <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">
+        ${button(`data-pack-withdraw="${esc(row.build)}"`, "Удалить публикацию", "trash", "danger")}
+        ${button('data-act="close"', "Закрыть")}
+      </div>
+      <div class="community-confirm" hidden>
+        <p>Удалить публикацию из общего каталога? Её ID перестанет работать. Уже скачанные копии останутся у игроков.</p>
+        <div class="community-confirm-actions" role="group" aria-label="Подтверждение удаления">
+          ${button("data-pack-keep", "Отмена")}
+          ${button(`data-pack-withdraw-confirm="${esc(row.build)}"`, "Подтвердить удаление", "trash", "danger")}
+        </div>
+      </div>
+    </section>`).join("")}</div>`;
   }
 
-  async function readPublications(form, expanded) {
+  async function readPublications(form) {
     const host = form.querySelector(".community-receipts");
     const revision = String(Number(host.dataset.revision || 0) + 1);
     host.dataset.revision = revision;
     try {
       const publications = await fetchPublications(form.dataset.packPublish, true);
-      if (form.isConnected && host.dataset.revision === revision) {
-        host.innerHTML = publicationRows(publications, expanded || publications.length > 0);
-        form.classList.toggle("is-published", publications.length > 0);
-        form.querySelector(".community-publication-status").textContent = publications.length
-          ? "Статус: опубликовано. Сборку можно найти в общем каталоге."
-          : "Статус: не опубликовано.";
-        form.querySelector('[type="submit"]').hidden = publications.length > 0;
+      if (!form.isConnected || host.dataset.revision !== revision) return;
+      host.innerHTML = publicationRows(publications);
+      form.classList.remove("is-checking");
+      form.classList.toggle("is-published", publications.length > 0);
+      form.querySelector(".community-publication-status").textContent = publications.length
+        ? "Статус: опубликовано. Сборку можно найти в общем каталоге."
+        : "Статус: не опубликовано.";
+      if (pendingPublication?.id === form.dataset.packPublish) {
+        setPublicationBusy(form, true, pendingPublication.progress);
       }
     } catch (error) {
-      if (form.isConnected && host.dataset.revision === revision) host.textContent = error.message;
+      if (!form.isConnected || host.dataset.revision !== revision) return;
+      form.classList.add("is-checking");
+      form.querySelector(".community-publication-status").textContent = "Не удалось проверить статус публикации.";
+      host.innerHTML = `<p class="pack-error" role="alert">${esc(error.message)}</p>
+        <div class="community-retry-actions" role="group">
+          ${button("data-pack-publication-retry", "Повторить проверку")}
+          ${button('data-act="close"', "Закрыть")}
+        </div>`;
     }
   }
 
   function showPublish(id) {
     const profile = state.profiles.find(p => p.id === id);
     if (!profile) return;
-    modal("Поделиться сборкой", `<form class="community-publish" data-pack-publish="${esc(id)}">
+    const previous = publicationCache.get(id)?.publications;
+    const knownPublished = Boolean(previous?.length);
+    modal("Поделиться сборкой", `<form class="community-publish ${knownPublished ? "is-published" : "is-checking"}" data-pack-publish="${esc(id)}">
       <label>Название в каталоге<input class="field" name="name" value="${esc(profile.name)}" required maxlength="48"></label>
       <div class="field-group"><label>Версия Minecraft<input class="field" readonly value="${esc(profile.version)}"></label>
       <label>Загрузчик<input class="field" readonly value="${esc(loaders[profile.loader] || profile.loader)}"></label></div>
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note">Сборка станет общедоступной. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Выбор ресурс-паков сохранится в сборке. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
-      <p role="status" class="community-publication-status">Проверяем статус публикации…</p>
-      <p role="status" class="community-feedback"></p><div class="dialog-actions">${button('data-act="close"', "Закрыть")}<button class="btn main" type="submit">${ic("share")}Опубликовать</button></div>
-      <div class="community-receipts"></div></form>`);
+      <p class="note community-publish-description">Сборка станет общедоступной. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
+      <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
+      <p role="status" class="community-feedback"></p>
+      <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
+      <div class="dialog-actions community-publish-actions" role="group" aria-label="Действия публикации">
+        ${button('data-act="close"', "Закрыть")}
+        <button class="btn main" type="submit">${ic("share")}Опубликовать</button>
+      </div>
+    </form>`);
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
-    readPublications(form, false);
+    readPublications(form);
   }
 
   function setPublicationBusy(form, busy, message) {
     form.setAttribute("aria-busy", String(busy));
-    for (const control of form.querySelectorAll('input[name], select, [type="submit"], [data-pack-withdraw-confirm]')) control.disabled = busy;
+    for (const control of form.querySelectorAll('input[name], select, [type="submit"], [data-pack-withdraw], [data-pack-withdraw-confirm], [data-pack-keep]')) control.disabled = busy;
     form.querySelector(".community-feedback").textContent = message;
   }
 
@@ -243,7 +271,7 @@
     const form = document.querySelector("[data-pack-publish]");
     if (form?.dataset.packPublish !== request.id) return;
     setPublicationBusy(form, false, job.ok ? request.done : job.message);
-    if (job.ok) readPublications(form, true);
+    if (job.ok) readPublications(form);
   }
 
   async function publicationAction(form, action, params) {
@@ -403,6 +431,7 @@
     const form = event.target;
     if (form.matches("[data-pack-publish]")) {
       event.preventDefault();
+      if (form.classList.contains("is-checking") || form.classList.contains("is-published")) return;
       const data = new FormData(form);
       const name = data.get("name").trim();
       if (!name) {form.elements.name.focus(); return notice("Введи название сборки.", true);}
@@ -444,11 +473,12 @@
       if (d.packWithdraw || "packKeep" in d) {
         const row = target.closest(".community-receipt");
         row.querySelector(".community-confirm").hidden = !d.packWithdraw;
-        row.querySelector("[data-pack-withdraw]").hidden = !!d.packWithdraw;
+        row.querySelector(".community-published-actions").hidden = !!d.packWithdraw;
         row.querySelector(d.packWithdraw ? "[data-pack-keep]" : "[data-pack-withdraw]").focus();
         return;
       }
       if (d.packWithdrawConfirm) return await publicationAction(target.closest("form"), "communityUnpublish", {build: d.packWithdrawConfirm});
+      if ("packPublicationRetry" in d) return await readPublications(target.closest("form"));
       if (d.packCommunity) return showCommunityBuild(d.packCommunity);
       if (d.packCommunityInstall) {
         const item = community.page?.hits.find(hit => hit.id === d.packCommunityInstall);

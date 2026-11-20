@@ -54,26 +54,88 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .pack-modrinth { margin-top: 20px; border-top: 1px solid var(--line); }
 .pack-status:empty,.community-feedback:empty { display: none; }
 .pack-card h4 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.community-publish > label,.community-publish .field-group label { display: grid; gap: 7px; margin: 0 0 14px; }
+/* A compact, full-width publishing form and publication management view. */
+.community-publish > label,
+.community-publish .field-group label {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+}
 .community-publish .field-group { margin: 0; }
 .community-publish input[readonly] { color: var(--muted); }
-.community-feedback,.community-receipt strong { overflow-wrap: anywhere; }
-.community-feedback { font-size: 13px; }
-.community-published { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
-.community-published summary { cursor: pointer; }
-.community-receipt { display: grid; gap: 10px; margin-top: 14px; }
-.community-receipt > .btn { justify-self: start; }
-.community-receipt [hidden] { display: none; }
-.community-id { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.community-id input { flex: 1 1 14ch; width: 16ch; margin: 0; font-family: Consolas, monospace; }
-.community-confirm p { margin: 0 0 10px; }
 .community-publish > .community-config-toggle { display: flex; align-items: center; gap: 9px; }
 .community-config-toggle input { accent-color: var(--lime); }
+.community-publication-status { color: var(--lime); font-size: 13px; margin: 14px 0 10px; }
+.community-publish:not(.is-published) .community-publication-status { color: var(--muted); }
+.community-feedback,
+.community-receipt strong { overflow-wrap: anywhere; }
+.community-feedback { font-size: 13px; }
+.community-feedback:empty { display: none; }
 
-.community-publication-status { color: var(--lime); font-size: 13px; margin: 3px 0 12px; }
-.community-publish.is-published > label:not(.community-config-toggle),
-.community-publish.is-published > .field-group,
-.community-publish.is-published > .community-config-toggle,
-.community-publish.is-published > #communityConfigHelp { display: none; }
-.community-publish.is-published [type="submit"] { display: none; }
+.community-publish .community-publish-actions,
+.community-published-actions,
+.community-confirm-actions,
+.community-retry-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+}
+.community-publish-actions > .btn,
+.community-published-actions > .btn,
+.community-confirm-actions > .btn,
+.community-retry-actions > .btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  white-space: normal;
+  text-align: center;
+}
+.community-publish:is(.is-published, .is-checking) > label,
+.community-publish:is(.is-published, .is-checking) > .field-group,
+.community-publish:is(.is-published, .is-checking) > #communityConfigHelp,
+.community-publish:is(.is-published, .is-checking) > .community-publish-description,
+.community-publish:is(.is-published, .is-checking) > .community-publish-actions {
+  display: none;
+}
+.community-receipt {
+  display: grid;
+  gap: 11px;
+  margin: 6px 0 0;
+  min-width: 0;
+}
+.community-receipt + .community-receipt {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin-top: 18px;
+}
+.community-receipt [hidden] { display: none; }
+.community-receipt-name { margin: 0; color: var(--muted); font-size: 12px; }
+.community-code-label { margin: 0; font-size: 13px; font-weight: 650; }
+.community-id {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(142px, .8fr);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+.community-id input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  font-family: Consolas, monospace;
+}
+.community-id > .btn { width: 100%; min-width: 0; }
+.community-confirm { margin-top: 3px; }
+.community-confirm p { margin: 0; font-size: 13px; line-height: 1.5; }
+.community-retry-actions { margin-top: 12px; }
 .build-settings.is-published { color: var(--lime); border-color: #799c57; }
+
+@media (max-width: 520px) {
+  .community-id,
+  .community-publish .community-publish-actions,
+  .community-published-actions,
+  .community-confirm-actions,
+  .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
+}

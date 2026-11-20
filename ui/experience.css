@@ -7,7 +7,14 @@
 .build-error-events { list-style: none; padding: 0; }
 .build-error-events li + li { border-top: 1px solid var(--line); padding-top: 12px; }
 .build-error-events small { display: block; margin-top: 4px; color: var(--muted); }
-#buildErrorsPanel [data-error-list] > .empty { margin-bottom: 12px; }
+#buildErrorsPanel [data-error-list] { width: 100%; min-width: 0; }
+#buildErrorsPanel [data-error-list] > .empty {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
 #buildErrorsPanel summary { cursor: pointer; }
 
 /* Match the unobtrusive scroll treatment used by the Mods → Download catalog. */

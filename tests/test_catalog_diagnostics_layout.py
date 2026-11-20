@@ -21,6 +21,8 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         cls.packs = (UI / "pack-hub.css").read_text(encoding="utf-8")
         cls.experience = (UI / "experience.css").read_text(encoding="utf-8")
         cls.script = (UI / "experience.js").read_text(encoding="utf-8")
+        cls.app = (UI / "app.js").read_text(encoding="utf-8")
+        cls.pack_ui = (UI / "pack-hub.js").read_text(encoding="utf-8")
         cls.catalog = (UI / "style.css").read_text(encoding="utf-8")
 
     def test_catalog_scroll_matches_mods_without_extra_green_border(self):
@@ -38,7 +40,7 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         rule = css_rule(self.experience, "#buildErrorsPanel > h2")
         self.assertIn("margin: 0 0 18px;", rule)
         self.assertIn('Пока нет записанных ошибок.', self.script)
-        self.assertIn('Проверить сборку', self.script)
+        self.assertIn('Проверить сборку', self.app)
 
     def test_diagnostic_buttons_fill_two_equal_columns(self):
         grid = css_rule(self.experience, ".diagnostic-actions")
@@ -63,6 +65,62 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertIn('report = $("#diagnosticReport")?.value ?? report;', self.script)
         self.assertIn('return showDiagnosticResults(profile, previous.data);', self.script)
         self.assertIn('class="actions diagnostic-actions diagnostic-report-actions"', self.script)
+
+
+    def test_diagnostic_action_moves_from_error_list_to_header(self):
+        header = self.app.split('function addons()', 1)[1].split('async function showSteamCheck()', 1)[0]
+        self.assertIn('btn("folder", "Папка сборки", "folder")', header)
+        self.assertIn('kind === "errors"', header)
+        self.assertIn('data-experience="diagnostics"', header)
+        self.assertLess(header.index('btn("folder", "Папка сборки", "folder")'),
+                        header.index('data-experience="diagnostics"'))
+        listing = self.script.split('async function loadBuildErrors()', 1)[1].split('function showDiagnosticResults', 1)[0]
+        self.assertNotIn('expButton("diagnostics"', listing)
+        self.assertIn('Пока нет записанных ошибок.', listing)
+
+    def test_empty_error_state_fills_full_container_width(self):
+        box = css_rule(self.experience, "#buildErrorsPanel [data-error-list] > .empty")
+        self.assertIn('width: 100%;', box)
+        self.assertIn('max-width: none;', box)
+        self.assertIn('margin: 0;', box)
+
+    def test_report_buttons_have_requested_order_and_short_label(self):
+        report = self.script.split('if (action === "report")', 1)[1].split('if (action === "backToDiagnostics")', 1)[0]
+        self.assertIn('expButton("backToDiagnostics","Вернуться обратно","back")', report)
+        self.assertIn('expButton("saveReport","Сохранить отчёт","download")', report)
+        self.assertLess(report.index('expButton("backToDiagnostics"'), report.index('expButton("saveReport"'))
+        self.assertNotIn('Сохранить проверенный отчёт', report)
+
+    def test_share_dialog_primary_buttons_fill_two_columns(self):
+        self.assertIn('class="dialog-actions community-publish-actions"', self.pack_ui)
+        self.assertIn('button(\'data-act="close"\', "Закрыть")', self.pack_ui)
+        self.assertIn('Опубликовать</button>', self.pack_ui)
+        layout = self.packs.split(".community-publish .community-publish-actions,", 1)[1].split("}", 1)[0]
+        self.assertIn('grid-template-columns: repeat(2, minmax(0, 1fr));', layout)
+        self.assertIn('width: 100%;', layout)
+
+    def test_published_dialog_uses_visible_code_without_dropdown(self):
+        details = self.pack_ui.split('function publicationRows(', 1)[1].split('async function readPublications(', 1)[0]
+        self.assertNotIn('<details', details)
+        self.assertNotIn('<summary', details)
+        self.assertIn('class="community-code-label">Код сборки</label>', details)
+        self.assertIn('data-pack-copy-id', details)
+        self.assertIn('Удалить публикацию', details)
+        self.assertIn('Закрыть', details)
+        self.assertLess(details.index('Код сборки</label>'), details.index('Скопировать ID'))
+        self.assertLess(details.index('Скопировать ID'), details.index('Удалить публикацию'))
+        self.assertLess(details.index('Удалить публикацию'), details.index('Закрыть'))
+        self.assertIn('data-pack-withdraw-confirm', details)
+
+    def test_publication_fetch_error_and_confirmation_are_handled(self):
+        self.assertIn('form.classList.remove("is-checking")', self.pack_ui)
+        self.assertIn('form.classList.toggle("is-published", publications.length > 0)', self.pack_ui)
+        self.assertIn('packPublicationRetry', self.pack_ui)
+        self.assertIn('row.querySelector(".community-published-actions").hidden', self.pack_ui)
+        self.assertIn('communityUnpublish', self.pack_ui)
+        self.assertIn('data-pack-keep', self.pack_ui)
+        self.assertIn('data-pack-withdraw-confirm', self.pack_ui)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) minmax(142px, .8fr);', self.packs)
 
 
 if __name__ == "__main__":

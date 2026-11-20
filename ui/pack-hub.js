@@ -6,6 +6,8 @@
   const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const categories = {adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"};
   const community = {page: null, busy: false, error: "", needsSearch: true, controller: null};
+  const publicationCache = new Map();
+  let publicationRequest = 0;
   let pendingPublication = null, selectedCommunity = null;
   const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim());
   const choices = new Map();
@@ -131,14 +133,56 @@
     search();
   }
 
+  function updateShareButtons(id) {
+    const published = (publicationCache.get(id)?.publications || []).length > 0;
+    for (const control of document.querySelectorAll('[data-pack-share]')) {
+      if (control.dataset.packShare !== id) continue;
+      const name = state.profiles.find(p => p.id === id)?.name || "";
+      control.classList.toggle("is-published", published);
+      control.title = published ? "Управление публикацией" : "Поделиться сборкой";
+      control.setAttribute("aria-label", (published ? "Опубликовано: " : "Поделиться сборкой: ") + name);
+      const label = control.querySelector("span");
+      if (label) label.textContent = published ? "Опубликовано" : "Поделиться";
+    }
+  }
+
+  function savePublications(id, data) {
+    const publications = Array.isArray(data.publications) ? data.publications : [];
+    publicationCache.set(id, {publications, fetched: Date.now()});
+    updateShareButtons(id);
+    return publications;
+  }
+
+  async function fetchPublications(id, force = false) {
+    const cached = publicationCache.get(id);
+    if (!force && cached && Date.now() - cached.fetched < 15000) return cached.publications;
+    const data = await feature("communityPublication", {id});
+    return savePublications(id, data);
+  }
+
+  function refreshShareButtons() {
+    if (!state?.profiles?.length || !document.querySelector("[data-pack-share]")) return;
+    const current = ++publicationRequest;
+    const ids = state.profiles.map(p => p.id);
+    for (const id of ids) updateShareButtons(id);
+    // Query only uncached/expired profiles. Do not block the build list on network access.
+    for (const id of ids) {
+      fetchPublications(id).then(() => {
+        if (current === publicationRequest) updateShareButtons(id);
+      }).catch(() => {
+        // Offline mode retains a previously known status instead of showing a false "Поделиться".
+      });
+    }
+  }
+
   function publicationRows(list, expanded = false) {
     if (!list.length) return "";
     return `<details class="community-published"${expanded ? " open" : ""}><summary>Опубликованные сборки · ${list.length}</summary>
       ${list.map(row => `<section class="community-receipt"><strong>${esc(row.name)}</strong><div class="community-id"><input class="field" readonly aria-label="ID сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
-        ${button(`data-pack-withdraw="${esc(row.build)}"`, "Снять с публикации", "trash")}
+        ${button(`data-pack-withdraw="${esc(row.build)}"`, "Удалить публикацию", "trash")}
         <div class="community-confirm" hidden><p>Убрать эту сборку из общего каталога? Её ID перестанет работать. Скачанные копии останутся у игроков.</p>
-        ${button("data-pack-keep", "Отмена")}${button(`data-pack-withdraw-confirm="${esc(row.build)}"`, "Снять с публикации", "", "remove-confirm")}</div></section>`).join("")}</details>`;
+        ${button("data-pack-keep", "Отмена")}${button(`data-pack-withdraw-confirm="${esc(row.build)}"`, "Удалить публикацию", "", "remove-confirm")}</div></section>`).join("")}</details>`;
   }
 
   async function readPublications(form, expanded) {
@@ -146,8 +190,15 @@
     const revision = String(Number(host.dataset.revision || 0) + 1);
     host.dataset.revision = revision;
     try {
-      const data = await feature("communityPublication", {id: form.dataset.packPublish});
-      if (form.isConnected && host.dataset.revision === revision) host.innerHTML = publicationRows(data.publications, expanded);
+      const publications = await fetchPublications(form.dataset.packPublish, true);
+      if (form.isConnected && host.dataset.revision === revision) {
+        host.innerHTML = publicationRows(publications, expanded || publications.length > 0);
+        form.classList.toggle("is-published", publications.length > 0);
+        form.querySelector(".community-publication-status").textContent = publications.length
+          ? "Статус: опубликовано. Сборку можно найти в общем каталоге."
+          : "Статус: не опубликовано.";
+        form.querySelector('[type="submit"]').hidden = publications.length > 0;
+      }
     } catch (error) {
       if (form.isConnected && host.dataset.revision === revision) host.textContent = error.message;
     }
@@ -164,6 +215,7 @@
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
       <p class="note">Сборка станет общедоступной. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Выбор ресурс-паков сохранится в сборке. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
+      <p role="status" class="community-publication-status">Проверяем статус публикации…</p>
       <p role="status" class="community-feedback"></p><div class="dialog-actions">${button('data-act="close"', "Закрыть")}<button class="btn main" type="submit">${ic("share")}Опубликовать</button></div>
       <div class="community-receipts"></div></form>`);
     const form = document.querySelector("[data-pack-publish]");
@@ -182,6 +234,9 @@
     if (!request || !request.job || job.id !== request.job || job.busy) return;
     pendingPublication = null;
     if (job.ok) {
+      publicationCache.delete(request.id);
+      // Refresh the listing button even if the management dialog has been closed.
+      fetchPublications(request.id, true).catch(() => {});
       community.needsSearch = true;
       if (document.querySelector(".community-results")) searchCommunity();
     }
@@ -229,7 +284,7 @@
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
       <label>Загрузчик<select class="field" data-pack-filter="loader">${option("", "Любой", catalog.loader)}${Object.entries(loaders).map(([v, label]) => option(v, label, catalog.loader)).join("")}</select></label>
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", ...categories}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
-      <label>Сортировка Modrinth<select class="field" data-pack-filter="sort">${Object.entries({relevance: "По релевантности", downloads: "По загрузкам", follows: "По подписчикам", newest: "Сначала новые", updated: "Недавно обновлённые"}).map(([v, label]) => option(v, label, catalog.sort)).join("")}</select></label></div>
+      <label>Сортировка<select class="field" data-pack-filter="sort">${Object.entries({relevance: "По релевантности", downloads: "По загрузкам", follows: "По подписчикам", newest: "Сначала новые", updated: "Недавно обновлённые"}).map(([v, label]) => option(v, label, catalog.sort)).join("")}</select></label></div>
       <div class="pack-results"><section class="community-results" aria-label="Сборки игроков BlockHarbor">${communityResults()}</section>
       <section class="pack-modrinth" aria-label="Модпаки Modrinth"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки Modrinth</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div><div class="pack-page-host">${pager()}</div></section></div></section>`;
   }
@@ -478,8 +533,11 @@
   window.PackHubUI = {
     render: renderPacks,
     openCatalog,
+    isPublished(id) {return (publicationCache.get(id)?.publications || []).length > 0;},
+    refreshShareButtons,
     observeJob,
     mount() {
+      refreshShareButtons();
       loadArt();
       if (!document.querySelector(".pack-hub")) return;
       if (!catalog.page && !catalog.busy && !catalog.error) search();

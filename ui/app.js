@@ -457,7 +457,7 @@ function buildRows(profiles) {
         '»">' +
         ic("upload") +
         "<span>Выгрузить</span></button>" +
-        `<button type="button" class="btn build-settings" data-pack-share="${esc(p.id)}" title="Поделиться сборкой" aria-label="Поделиться сборкой «${esc(p.name)}»">${ic("share")}<span>Поделиться</span></button>` +
+        `<button type="button" class="btn build-settings${window.PackHubUI?.isPublished(p.id) ? " is-published" : ""}" data-pack-share="${esc(p.id)}" title="${window.PackHubUI?.isPublished(p.id) ? "Управление публикацией" : "Поделиться сборкой"}" aria-label="${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться сборкой"} «${esc(p.name)}»">${ic(window.PackHubUI?.isPublished(p.id) ? "check" : "share")}<span>${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться"}</span></button>` +
         '<button type="button" class="build-remove" data-remove-build="' +
         esc(p.id) +
         '" aria-label="Удалить сборку «' +

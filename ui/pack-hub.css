@@ -6,7 +6,24 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .pack-dialog .pack-hub { display: flex; flex-direction: column; flex: 1; padding: 0; min-height: 0; }
 .pack-intro { display: flex; gap: 18px; justify-content: space-between; align-items: center; margin: 0 0 16px; flex: none; }
 .pack-intro p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0; }
-.pack-dialog .pack-results { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 5px; }
+.pack-dialog .pack-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #90b96b transparent;
+  margin-top: 16px;
+  padding: 14px 16px 18px 1px;
+  border-top: 2px solid #85b65a;
+  border-radius: 12px 12px 8px 8px;
+}
+.pack-dialog .pack-results::-webkit-scrollbar { width: 9px; }
+.pack-dialog .pack-results::-webkit-scrollbar-track { background: transparent; border-radius: 999px; }
+.pack-dialog .pack-results::-webkit-scrollbar-thumb { background: #72975b; border-radius: 999px; border: 2px solid #192021; }
+.pack-dialog .pack-results::-webkit-scrollbar-thumb:hover { background: #a9d57e; }
 .pack-dialog .pack-filters,.pack-dialog .pack-search,.pack-dialog .pack-status,.pack-dialog .pack-page-host { flex: none; }
 .pack-dialog .pack-release,.pack-dialog .pack-preview { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .pack-dialog .pack-back { flex: none; align-self: flex-start; margin: 0 0 15px; }
@@ -58,3 +75,11 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .community-confirm p { margin: 0 0 10px; }
 .community-publish > .community-config-toggle { display: flex; align-items: center; gap: 9px; }
 .community-config-toggle input { accent-color: var(--lime); }
+
+.community-publication-status { color: var(--lime); font-size: 13px; margin: 3px 0 12px; }
+.community-publish.is-published > label:not(.community-config-toggle),
+.community-publish.is-published > .field-group,
+.community-publish.is-published > .community-config-toggle,
+.community-publish.is-published > #communityConfigHelp { display: none; }
+.community-publish.is-published [type="submit"] { display: none; }
+.build-settings.is-published { color: var(--lime); border-color: #799c57; }

@@ -1,0 +1,122 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - launcher/version.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: blockharbor-stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'dedt1mon/BlockHarbor' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact release sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.4'
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Determine stable version
+        shell: pwsh
+        run: |
+          $version = (python -c "from launcher.version import VERSION; print(VERSION)").Trim()
+          if ($version -notmatch '^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$') { throw "Invalid stable version: $version" }
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt
+
+      - name: Test source code and JavaScript
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -q
+          if ($LASTEXITCODE -ne 0) { throw "Python regression suite failed" }
+          Get-ChildItem "ui" -Filter "*.js" | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript validation failed: $($_.Name)" }
+          }
+
+      - name: Build portable Windows x64 launcher
+        shell: pwsh
+        run: |
+          python tools/build_windows.py --output "$env:RUNNER_TEMP\blockharbor-portable"
+          if ($LASTEXITCODE -ne 0) { throw "Portable Windows build failed" }
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed" }
+
+      - name: Build installer and verified update manifest
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:RUNNER_TEMP "blockharbor-release"
+          New-Item -ItemType Directory -Force -Path $release | Out-Null
+          $portable = Join-Path $env:RUNNER_TEMP "blockharbor-portable\BlockHarbor.exe"
+          $setup = Join-Path $release "BlockHarbor-Setup-$env:RELEASE_VERSION.exe"
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "C:\ProgramData\chocolatey\bin\makensis.exe"
+          )
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) { throw "makensis.exe not found" }
+          python tools/build_installer.py --launcher $portable --output $setup --version $env:RELEASE_VERSION --makensis $makensis --go go --project-url "https://github.com/dedt1mon/BlockHarbor"
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
+          Copy-Item $portable (Join-Path $release "BlockHarbor.exe")
+          python tools/release_update_manifest.py --version $env:RELEASE_VERSION --installer $setup --output (Join-Path $release "BlockHarbor-update.json")
+          if ($LASTEXITCODE -ne 0) { throw "Update manifest generation failed" }
+          $meta = Get-Content (Join-Path $release "BlockHarbor-update.json") -Raw | ConvertFrom-Json
+          if ($meta.version -ne $env:RELEASE_VERSION -or $meta.installer.size -ne (Get-Item $setup).Length -or $meta.installer.sha256 -ne (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Release metadata does not match installer" }
+          $names = @("BlockHarbor-Setup-$env:RELEASE_VERSION.exe", "BlockHarbor.exe", "BlockHarbor-update.json")
+          $sums = foreach ($name in $names) {
+            $hash = (Get-FileHash (Join-Path $release $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          [System.IO.File]::WriteAllLines((Join-Path $release "SHA256SUMS.txt"), $sums, [System.Text.UTF8Encoding]::new($false))
+
+      - name: Publish stable GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = Join-Path $env:RUNNER_TEMP "blockharbor-release"
+          $name = "BlockHarbor-Setup-$env:RELEASE_VERSION.exe"
+          $files = @(
+            (Join-Path $release $name),
+            (Join-Path $release "BlockHarbor.exe"),
+            (Join-Path $release "BlockHarbor-update.json"),
+            (Join-Path $release "SHA256SUMS.txt")
+          )
+          $notes = "docs/releases/v$env:RELEASE_VERSION.md"
+          if (!(Test-Path $notes)) { throw "Missing release notes: $notes" }
+          gh release create "v$env:RELEASE_VERSION" $files --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "BlockHarbor $env:RELEASE_VERSION — каталог и публикации" --notes-file $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed" }

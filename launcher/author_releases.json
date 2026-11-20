@@ -1,0 +1,1147 @@
+{
+  "format": 1,
+  "projects": [
+    {
+      "id": "gvQqBUqZ",
+      "title": "Lithium",
+      "slug": "lithium",
+      "description": "No-compromises game logic optimization mod, useful for both single-player games and multi-player servers.",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/gvQqBUqZ/bcc8686c13af0143adf4285d741256af824f70b7_96.webp",
+      "published": "2021-01-03T00:56:52.292581Z",
+      "updated": "2026-11-19T17:19:43.055881Z",
+      "followers": 24395,
+      "environment": [
+        "client_or_server_prefers_both"
+      ],
+      "repo": "CaffeineMC/lithium",
+      "author": "CaffeineMC",
+      "categories": [
+        "optimization"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "mc26.3-0.26.4-fabric",
+          "name": "Lithium 0.26.4 for Fabric",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "fabric",
+            "quilt"
+          ],
+          "dependencies": [],
+          "date_published": "2026-11-19T17:19:43.055881Z",
+          "id": "BHghV768571582",
+          "community_version": "Lal8mJGR",
+          "file": {
+            "filename": "lithium-fabric-0.26.4+mc26.3.jar",
+            "size": 921530,
+            "sha512": "033f85813b0bcafe848a55dd741b9b1a30685dcdf774a922507bf63716b16bfd0fc12856ffc4ca3c76a36f6dc73310a7dfdc4b6dc9e35c21a4482627b1d30b85",
+            "url": "https://github.com/CaffeineMC/lithium/releases/download/mc26.3-0.26.4/lithium-fabric-0.26.4%2Bmc26.3.jar"
+          },
+          "downloads": 11
+        },
+        {
+          "version_number": "mc26.3-0.26.4-neoforge",
+          "name": "Lithium 0.26.4 for Neoforge",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [],
+          "date_published": "2026-11-19T17:19:43.049873Z",
+          "id": "BHghV768571583",
+          "community_version": "KDYrDhS5",
+          "file": {
+            "filename": "lithium-neoforge-0.26.4+mc26.3.jar",
+            "size": 910143,
+            "sha512": "e79dc1c2ab30b968aaad323a92c93151759c5dcb4c78da57c1abf967245980a5885e8d3b8500e8403ad066a560892571044525a0d701b4b71f8586b3df9a9d6f",
+            "url": "https://github.com/CaffeineMC/lithium/releases/download/mc26.3-0.26.4/lithium-neoforge-0.26.4%2Bmc26.3.jar"
+          },
+          "downloads": 6
+        },
+        {
+          "version_number": "mc1.20.1-0.11.4-fabric",
+          "name": "Lithium 0.11.4 for Fabric",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "fabric",
+            "quilt"
+          ],
+          "dependencies": [],
+          "date_published": "2025-11-27T15:24:22.341495Z",
+          "id": "BHghV321527129",
+          "community_version": "iEcXOkz4",
+          "file": {
+            "filename": "lithium-fabric-mc1.20.1-0.11.4.jar",
+            "size": 691483,
+            "sha512": "31938b7e849609892ffa1710e41f2e163d11876f824452540658c4b53cd13c666dbdad8d200989461932bd9952814c5943e64252530c72bdd5d8641775151500",
+            "url": "https://github.com/CaffeineMC/lithium/releases/download/mc1.20.1-0.11.4/lithium-fabric-mc1.20.1-0.11.4.jar"
+          },
+          "downloads": 140
+        }
+      ]
+    },
+    {
+      "id": "P7dR8mSH",
+      "title": "Fabric API",
+      "slug": "fabric-api",
+      "description": "Lightweight and modular API providing common hooks and intercompatibility measures utilized by mods using the Fabric toolchain.",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/P7dR8mSH/icon.png",
+      "published": "2021-01-22T11:04:41.419169Z",
+      "updated": "2026-11-17T17:35:27.995852Z",
+      "followers": 37959,
+      "environment": [
+        "client_or_server_prefers_both"
+      ],
+      "repo": "FabricMC/fabric-api",
+      "author": "FabricMC",
+      "categories": [
+        "library"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "0.166.2+26.3",
+          "name": "[26.3] Fabric API 0.166.2+26.3",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [],
+          "date_published": "2026-11-11T13:38:52.250683Z",
+          "id": "BHghV735659187",
+          "community_version": "Zns5SSRA",
+          "file": {
+            "filename": "fabric-api-0.166.2+26.3.jar",
+            "size": 1797523,
+            "sha512": "fb686a9fa923248328107a12498229d6951e316257f18b7d0e4cbd6885ba447ed50a44076a8a5ba47cfe2043b329db3587ab000aeab1face26b2587a5d4ba6b5",
+            "url": "https://github.com/FabricMC/fabric-api/releases/download/0.166.2%2B26.3/fabric-api-0.166.2%2B26.3.jar"
+          },
+          "downloads": 1629
+        },
+        {
+          "version_number": "0.116.18+1.21.1",
+          "name": "[1.21.1] Fabric API 0.116.18+1.21.1",
+          "version_type": "release",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [],
+          "date_published": "2026-11-09T15:02:24.365327Z",
+          "id": "BHghV727887463",
+          "community_version": "5SwzqWUu",
+          "file": {
+            "filename": "fabric-api-0.116.18+1.21.1.jar",
+            "size": 2453884,
+            "sha512": "9f721c253ae2e9823cb548e8ec132c9928f80a65184e9b8dcfc489a8d632df20cbfea1e65ff8a4333bdb295c41fbe2228b43e4d41c7355d42ed4637a785840a1",
+            "url": "https://github.com/FabricMC/fabric-api/releases/download/0.116.18%2B1.21.1/fabric-api-0.116.18%2B1.21.1.jar"
+          },
+          "downloads": 71
+        },
+        {
+          "version_number": "0.92.6+1.20.1",
+          "name": "[1.20.1] Fabric API 0.92.6+1.20.1",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [],
+          "date_published": "2025-05-31T13:33:53.630099Z",
+          "id": "BHghV259712618",
+          "community_version": "UapVHwiP",
+          "file": {
+            "filename": "fabric-api-0.92.6+1.20.1.jar",
+            "size": 2107873,
+            "sha512": "2bd2ed0cee22305b7ff49597c103a57c8fbe5f64be54a906796d48b589862626c951ff4cbf5cb1ed764a4d6479d69c3077594e693b7a291240eeea2bb3132b0c",
+            "url": "https://github.com/FabricMC/fabric-api/releases/download/0.92.6%2B1.20.1/fabric-api-0.92.6%2B1.20.1.jar"
+          },
+          "downloads": 124710
+        }
+      ]
+    },
+    {
+      "id": "1IjD5062",
+      "title": "Continuity",
+      "slug": "continuity",
+      "description": "A Minecraft mod that allows for efficient connected textures",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/1IjD5062/icon.png",
+      "published": "2021-09-25T20:27:10.714654Z",
+      "updated": "2026-09-16T03:20:55.014943Z",
+      "followers": 17130,
+      "environment": [
+        "client_only"
+      ],
+      "repo": "PepperCode1/Continuity",
+      "author": "PepperCode1",
+      "categories": [
+        "decoration",
+        "utility"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "3.0.0+1.21.4",
+          "name": "3.0.0+1.21.4",
+          "version_type": "release",
+          "game_versions": [
+            "1.21.4"
+          ],
+          "loaders": [
+            "fabric",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "P7dR8mSH",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2024-12-27T18:52:13.088538Z",
+          "id": "BHghV216228068",
+          "community_version": "esC1Vejm",
+          "file": {
+            "filename": "continuity-3.0.0+1.21.4.jar",
+            "size": 1001061,
+            "sha512": "1f8102be0e545b3a19aba8b63942a2e98ccce7b714d40f33471da77633015491b7cc7e86d2d5adc7a361f7586f1e30e7e5e591deca2d7ebacd9e7e97055c8cca",
+            "url": "https://github.com/PepperCode1/Continuity/releases/download/v3.0.0%2B1.21.4/continuity-3.0.0%2B1.21.4.jar"
+          },
+          "downloads": 843
+        },
+        {
+          "version_number": "3.0.0+1.20.1",
+          "name": "3.0.0+1.20.1",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "fabric",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "P7dR8mSH",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2024-12-04T18:26:19.547830Z",
+          "id": "BHghV211075520",
+          "community_version": "qGTDcjHM",
+          "file": {
+            "filename": "continuity-3.0.0+1.20.1.jar",
+            "size": 1016063,
+            "sha512": "7205cae3c534fd5d5328a9659146911381c06e54da995aabd11745ad72def5bd5120b7cb792fab2e8dcaa4670c23bdba21079b8f6da94152cfc6ea4b415edcbf",
+            "url": "https://github.com/PepperCode1/Continuity/releases/download/v3.0.0%2B1.20.1/continuity-3.0.0%2B1.20.1.jar"
+          },
+          "downloads": 174
+        }
+      ]
+    },
+    {
+      "id": "H5XMjpHi",
+      "title": "First-person Model",
+      "slug": "first-person-model",
+      "description": "Enables the third-person Model in first-person",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/H5XMjpHi/1f3b44a945f8f0f1b5afc4ff46e4f8a8bda86e95_96.webp",
+      "published": "2022-08-25T19:14:18.014994Z",
+      "updated": "2026-09-27T13:38:56.907135Z",
+      "followers": 4009,
+      "environment": [
+        "client_only"
+      ],
+      "repo": "tr7zw/FirstPersonModel",
+      "author": "tr7zw",
+      "categories": [
+        "decoration",
+        "equipment",
+        "social"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-26.3 - Fabric",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            },
+            {
+              "version_id": null,
+              "project_id": "P7dR8mSH",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:56.907135Z",
+          "id": "BHghV593002648",
+          "community_version": "Z05WZTy2",
+          "file": {
+            "filename": "firstperson-fabric-2.7.3-mc26.3.jar",
+            "size": 1526741,
+            "sha512": "769b045e5ecc5a002ced00e60989ee4bf34dc54d44598c70ff10508bb4b56b0830495af40213c05486eebd4aa1e45de1e293fbedf270f22363b1a519d1d4e6a8",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-fabric-2.7.3-mc26.3.jar"
+          },
+          "downloads": 13
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-26.3 - NeoForge",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:56.809188Z",
+          "id": "BHghV593002651",
+          "community_version": "fhSP8fWj",
+          "file": {
+            "filename": "firstperson-neoforge-2.7.3-mc26.3.jar",
+            "size": 1517792,
+            "sha512": "b1aebec69ac3e01c26cf34420863f633082e80a8f78d3f3b2792fdffb0bc6b0d5ee9b6ed29f1389aaf9aa972fe195004d03249f273a246f90f9a98096bc5154f",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-neoforge-2.7.3-mc26.3.jar"
+          },
+          "downloads": 8
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-1.21.1 - NeoForge",
+          "version_type": "release",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:34.638226Z",
+          "id": "BHghV593002629",
+          "community_version": "eaj8cYpD",
+          "file": {
+            "filename": "firstperson-neoforge-2.7.3-mc1.21.1.jar",
+            "size": 1537453,
+            "sha512": "979a3c50048042e1bcb623d89c04c7fe7048e173d7f77305edc7adc5b5580040439a7c5e001a55eab2d7cc6e2e0d13e75d8be165da13dea61ee126a794101763",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-neoforge-2.7.3-mc1.21.1.jar"
+          },
+          "downloads": 8
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-1.21.1 - Forge",
+          "version_type": "release",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "forge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:34.503868Z",
+          "id": "BHghV593002642",
+          "community_version": "VOhG3rdX",
+          "file": {
+            "filename": "firstperson-forge-2.7.3-mc1.21.1.jar",
+            "size": 1721723,
+            "sha512": "d69f7d9c5b5020cbcae1981a2d72386140b4d0b71b41a6ad11d69f9ac7b9ac34cce3009427db81e22deed843eb54a81350541d45ec5382ed38f603317ab57b69",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-forge-2.7.3-mc1.21.1.jar"
+          },
+          "downloads": 5
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-1.21.1 - Fabric",
+          "version_type": "release",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "P7dR8mSH",
+              "file_name": null,
+              "dependency_type": "required"
+            },
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:33.949958Z",
+          "id": "BHghV593002644",
+          "community_version": "UowdyPMu",
+          "file": {
+            "filename": "firstperson-fabric-2.7.3-mc1.21.1.jar",
+            "size": 1546239,
+            "sha512": "b1e035d282ea4f1a2e1accb2bb4a45ab6ea0369b58b9536da5c7de0c533db0b295b95f140104c77c110eb2a4abf220ac95c1313a508e7930b82ec482ac16f9b5",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-fabric-2.7.3-mc1.21.1.jar"
+          },
+          "downloads": 13
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-1.20.1 - Forge",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "forge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:23.631004Z",
+          "id": "BHghV593002613",
+          "community_version": "kxFDUOmS",
+          "file": {
+            "filename": "firstperson-forge-2.7.3-mc1.20.1.jar",
+            "size": 1726107,
+            "sha512": "ffa51fac726c907ff70f77ce3abdeee3cd5b5e6110a89013ec0d4c4749fa73183c06f5828f159ae4dfa6252bb0d52ab2d6c6ad0941e996823b2795de4229e4ad",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-forge-2.7.3-mc1.20.1.jar"
+          },
+          "downloads": 11
+        },
+        {
+          "version_number": "2.7.3",
+          "name": "2.7.3-1.20.1 - Fabric",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "fabric"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "MPCX6s5C",
+              "file_name": null,
+              "dependency_type": "required"
+            },
+            {
+              "version_id": null,
+              "project_id": "P7dR8mSH",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-27T13:38:21.780849Z",
+          "id": "BHghV593002609",
+          "community_version": "vSfLd8fO",
+          "file": {
+            "filename": "firstperson-fabric-2.7.3-mc1.20.1.jar",
+            "size": 1543580,
+            "sha512": "47fe21330b39df901967bcd1f5a21ff5ffb7bb711b0757ce97fa6de9e9fc121a63da1681e0d796225397cca3fcc07fffcf1386c55648e38f917a5ffaf8a1c37a",
+            "url": "https://github.com/tr7zw/FirstPersonModel/releases/download/2.7.3/firstperson-fabric-2.7.3-mc1.20.1.jar"
+          },
+          "downloads": 18
+        }
+      ]
+    },
+    {
+      "id": "rxIIYO6c",
+      "title": "Tinkers' Construct",
+      "slug": "tinkers-construct",
+      "description": "Tinker a little, modify all the tools, build a smeltery, then tinker a little more. The classic modular tool mod.",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/rxIIYO6c/4c1b02748edd2def6a2427f494735641570c34ec_96.webp",
+      "published": "2022-12-28T01:42:54.536335Z",
+      "updated": "2026-09-22T01:08:58.297772Z",
+      "followers": 1267,
+      "environment": [
+        "client_and_server"
+      ],
+      "repo": "SlimeKnights/TinkersConstruct",
+      "author": "SlimeKnights",
+      "categories": [
+        "equipment",
+        "magic",
+        "technology"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "3.12.1.231",
+          "name": "Just Enough Update for 1.20.1",
+          "version_type": "beta",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "forge",
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "u6dRKJwZ",
+              "file_name": null,
+              "dependency_type": "optional"
+            },
+            {
+              "version_id": null,
+              "project_id": "Cg6Uc79H",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ],
+          "date_published": "2026-09-22T01:08:58.297772Z",
+          "id": "BHghV580228057",
+          "community_version": "Fv0zTUuh",
+          "file": {
+            "filename": "TConstruct-1.20.1-3.12.1.231.jar",
+            "size": 23870231,
+            "sha512": "e8b78225f379249b0edf0ddcb2b84aed4bf8712e1fb1a5faae9a17c0ac6ff2c697a684c0dd9b5ea4af1e0e2bfb3eeb206e1c16f4900a38d270592ced6115adea",
+            "url": "https://github.com/SlimeKnights/TinkersConstruct/releases/download/v3.12.1.231/TConstruct-1.20.1-3.12.1.231.jar"
+          },
+          "downloads": 56
+        }
+      ]
+    },
+    {
+      "id": "Cg6Uc79H",
+      "title": "Mantle",
+      "slug": "mantle",
+      "description": "Base library required for SlimeKnights mods, including Tinkers' Construct, Natura, Inspirations, and Cermaics",
+      "project_type": "mod",
+      "icon_url": "https://cdn.modrinth.com/data/Cg6Uc79H/77b9acc494b0d91e218939a1c14e37ae3c1b4db9.png",
+      "published": "2022-12-28T01:46:53.642331Z",
+      "updated": "2026-11-05T01:00:32.586685Z",
+      "followers": 102,
+      "environment": [
+        "client_and_server"
+      ],
+      "repo": "SlimeKnights/Mantle",
+      "author": "SlimeKnights",
+      "categories": [
+        "library",
+        "utility"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "version_number": "1.12.35",
+          "name": "1.12.35 for 1.21.1",
+          "version_type": "alpha",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "u6dRKJwZ",
+              "file_name": null,
+              "dependency_type": "optional"
+            }
+          ],
+          "date_published": "2026-11-05T01:00:32.586685Z",
+          "id": "BHghV711516152",
+          "community_version": "KmCa1VWK",
+          "file": {
+            "filename": "Mantle-1.21.1-1.12.35.jar",
+            "size": 1811498,
+            "sha512": "c1f7410e5ad75ff215ca08dec7d623c028575bd93f469d25b2101c511382ed86792a2461cf60ada5c0b7f8376d452a409fdf9aca42faff5eb51ea97aa95ffc91",
+            "url": "https://github.com/SlimeKnights/Mantle/releases/download/v1.12.35/Mantle-1.21.1-1.12.35.jar"
+          },
+          "downloads": 7
+        },
+        {
+          "version_number": "1.11.128",
+          "name": "1.11.128 for 1.20.1",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.1"
+          ],
+          "loaders": [
+            "forge",
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "u6dRKJwZ",
+              "file_name": null,
+              "dependency_type": "optional"
+            }
+          ],
+          "date_published": "2026-11-05T00:57:54.320467Z",
+          "id": "BHghV711515440",
+          "community_version": "WWRIIbP8",
+          "file": {
+            "filename": "Mantle-1.20.1-1.11.128.jar",
+            "size": 1668148,
+            "sha512": "cf28e764f786b4ae5ad579e069848a5ef465f27d6bab013ea81cb663b18f2d8b6f7f80e5c663c3631b5513b81a4ad24e390aec8cb52eb89dfb2630f6259b0a6d",
+            "url": "https://github.com/SlimeKnights/Mantle/releases/download/v1.11.128/Mantle-1.20.1-1.11.128.jar"
+          },
+          "downloads": 7
+        }
+      ]
+    },
+    {
+      "id": "w0TnApzs",
+      "title": "Faithful 32x",
+      "slug": "faithful-32x",
+      "description": "The original Minecraft texture feel, with double the resolution and double the fun!",
+      "project_type": "resourcepack",
+      "icon_url": "https://cdn.modrinth.com/data/w0TnApzs/e8403d1fb2f55321ae74402c1e8c90a3a5670856.png",
+      "published": "2022-08-14T20:26:13.341670Z",
+      "updated": "2026-09-15T17:41:09.127491Z",
+      "followers": 1507,
+      "environment": [
+        "unknown"
+      ],
+      "repo": "Faithful-Resource-Pack/Faithful-32x-Java",
+      "author": "Faithful-Resource-Pack",
+      "categories": [
+        "32x",
+        "blocks",
+        "entities",
+        "environment",
+        "equipment",
+        "fonts",
+        "gui",
+        "items",
+        "vanilla-like"
+      ],
+      "open_source": false,
+      "releases": [
+        {
+          "version_number": "26.3-september-2026",
+          "name": "[26.3] Faithful 32x – September 2026 Release",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2026-09-15T17:41:09.127491Z",
+          "id": "BHghV566199232",
+          "community_version": "lDYpMiqk",
+          "file": {
+            "filename": "Faithful.32x.-.26.3.zip",
+            "size": 13116019,
+            "sha512": "e90ec63af7f239dbb99aa20c98b23d830e76898f65d3e31b7f0b53bb36db12dcd8c38d6930c743237c9c3db7bf708423fa1d1b2fd497dd6c281dbe216b779db9",
+            "url": "https://github.com/Faithful-Resource-Pack/Faithful-32x-Java/releases/download/september-2026-release/Faithful.32x.-.26.3.zip"
+          },
+          "downloads": 516
+        },
+        {
+          "version_number": "1.21.1-june-2026",
+          "name": "[1.21.1] Faithful 32x – June 2026 Release",
+          "version_type": "release",
+          "game_versions": [
+            "1.21",
+            "1.21.1"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2026-06-19T17:18:46.209639Z",
+          "id": "BHghV452422756",
+          "community_version": "ruZOIEZE",
+          "file": {
+            "filename": "Faithful.32x.-.1.21.1.zip",
+            "size": 11030261,
+            "sha512": "5ceaff9539f1440434a7255a5ede1118b00491f85db5c414fb4463872bd041a590e84275daa3bfaecd52772967f114d09c53dc97070e6d3959752f31d4a63885",
+            "url": "https://github.com/Faithful-Resource-Pack/Faithful-32x-Java/releases/download/june-2026-release/Faithful.32x.-.1.21.1.zip"
+          },
+          "downloads": 64
+        },
+        {
+          "version_number": "1.20.1-june-2026",
+          "name": "[1.20.1] Faithful 32x – June 2026 Release",
+          "version_type": "release",
+          "game_versions": [
+            "1.20",
+            "1.20.1"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2026-06-19T17:16:05.903153Z",
+          "id": "BHghV452422712",
+          "community_version": "VgTWEXF2",
+          "file": {
+            "filename": "Faithful.32x.-.1.20.1.zip",
+            "size": 11088963,
+            "sha512": "924fa489a4e5877541e28bd51ef1839fca887e7deab5857ca3d6c18dd831b684918556b28072516f29f22039374043e6de4eefa697bc3979d3c568d090fd5862",
+            "url": "https://github.com/Faithful-Resource-Pack/Faithful-32x-Java/releases/download/june-2026-release/Faithful.32x.-.1.20.1.zip"
+          },
+          "downloads": 45
+        }
+      ]
+    },
+    {
+      "id": "6SLU7tS5",
+      "title": "Default Dark Mode",
+      "slug": "default-dark-mode",
+      "description": "🌙 The Dark Mode Resource Pack for Minecraft: Java Edition",
+      "project_type": "resourcepack",
+      "icon_url": "https://cdn.modrinth.com/data/6SLU7tS5/f90001e4ebed860e7ae913f34c85d745f516a89b.png",
+      "published": "2022-08-16T19:07:49.372897Z",
+      "updated": "2026-09-19T15:06:28.578184Z",
+      "followers": 4187,
+      "environment": [
+        "unknown"
+      ],
+      "repo": "nebuIr/Default-Dark-Mode",
+      "author": "nebuIr",
+      "categories": [
+        "16x",
+        "core-shaders",
+        "gui",
+        "modded",
+        "simplistic",
+        "themed",
+        "tweaks",
+        "utility",
+        "vanilla-like"
+      ],
+      "open_source": false,
+      "releases": [
+        {
+          "version_number": "2026.9.0-26.3",
+          "name": "Default Dark Mode 26.3 (2026.9.0)",
+          "version_type": "release",
+          "game_versions": [
+            "26.3"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2026-09-19T15:06:28.578184Z",
+          "id": "BHghV574963817",
+          "community_version": "1x3lSLAL",
+          "file": {
+            "filename": "Default-Dark-Mode-26.3-2026.9.0.zip",
+            "size": 761869,
+            "sha512": "85ce27a77eda65a84b17a0495def5f6b72c405f7cbe82d17939a98134319a5baa1ce7f18179c9c67fd444d5798ce4f3822d982fed590399a2aefd4ebcc73751f",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2026.9.0/Default-Dark-Mode-26.3-2026.9.0.zip"
+          },
+          "downloads": 72
+        },
+        {
+          "version_number": "2024.6.0-1.21",
+          "name": "Default Dark Mode 1.20.2+ (2024.6.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.20.2",
+            "1.20.3",
+            "1.20.4",
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2024-06-13T22:30:21.472886Z",
+          "id": "BHghV173665326",
+          "community_version": "KW0bu9nm",
+          "file": {
+            "filename": "Default-Dark-Mode-1.20.2+-2024.6.0.zip",
+            "size": 750624,
+            "sha512": "51a0e39094ef650e29cd17b58b2c215e72f794ec479ec92ce49883c67a6b0d070df5aebb24070fb99c3ab7ea86bb650ecd0f586b32834e7f9b0efe90d5faca39",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2024.6.0/Default-Dark-Mode-1.20.2%2B-2024.6.0.zip"
+          },
+          "downloads": 1132
+        },
+        {
+          "version_number": "2023.7.0-1.20",
+          "name": "Default Dark Mode 1.20.1 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.20",
+            "1.20.1"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:33:29.613313Z",
+          "id": "BHghV116252466",
+          "community_version": "SEAHWiIS",
+          "file": {
+            "filename": "Default-Dark-Mode-1.20-2023.7.0.zip",
+            "size": 664752,
+            "sha512": "52012b320a1d6e7c5c1e391cd475cc8d733b954a99f227131c2a7271198b403c3e2ce06cbfacb61328936c7618792a6a6a6ce557a1f82bbf95232e19dec1306e",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.20-2023.7.0.zip"
+          },
+          "downloads": 271
+        },
+        {
+          "version_number": "2023.7.0-1.19",
+          "name": "Default Dark Mode 1.19.4 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.19.4"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:33:23.393719Z",
+          "id": "BHghV116252459",
+          "community_version": "QOmdq5V8",
+          "file": {
+            "filename": "Default-Dark-Mode-1.19-2023.7.0.zip",
+            "size": 694240,
+            "sha512": "1c3061fe6e14443204a64d11e4cd9df6424f7167ece2b15c485146603a9df9c4c146c6741834ab667a4bd6706b4451230aa30bdb9c572f722d4944a354635f2f",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.19-2023.7.0.zip"
+          },
+          "downloads": 55
+        },
+        {
+          "version_number": "2023.7.0-1.18",
+          "name": "Default Dark Mode 1.18.2 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.18",
+            "1.18.1",
+            "1.18.2"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:33:19.782114Z",
+          "id": "BHghV116252456",
+          "community_version": "n4pD2iAz",
+          "file": {
+            "filename": "Default-Dark-Mode-1.18-2023.7.0.zip",
+            "size": 634489,
+            "sha512": "a642df8374ec55fb7c9af610bd16f533a1d9bbeb841b721e3a663cfa4a4063b94299ab42d3ee50111a7edde2bd2f2a247f240d49d1d9d7be217175c9382b1843",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.18-2023.7.0.zip"
+          },
+          "downloads": 26
+        },
+        {
+          "version_number": "2023.7.0-1.17",
+          "name": "Default Dark Mode 1.17.1 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.17",
+            "1.17.1"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:33:15.438019Z",
+          "id": "BHghV116252455",
+          "community_version": "e1aVbPcn",
+          "file": {
+            "filename": "Default-Dark-Mode-1.17-2023.7.0.zip",
+            "size": 202204,
+            "sha512": "bc0aca2c20b49435e599822fc4287adc8749060126f898caef15633240596298fda04c8ff6dd24027f5ea14a0c32eacd76178aea52add7421c2d7ba57f15f9ee",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.17-2023.7.0.zip"
+          },
+          "downloads": 16
+        },
+        {
+          "version_number": "2023.7.0-1.16",
+          "name": "Default Dark Mode 1.16.5 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.16",
+            "1.16.1",
+            "1.16.2",
+            "1.16.3",
+            "1.16.4",
+            "1.16.5"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:33:03.630722Z",
+          "id": "BHghV116252454",
+          "community_version": "btCO1p4j",
+          "file": {
+            "filename": "Default-Dark-Mode-1.16-2023.7.0.zip",
+            "size": 361614,
+            "sha512": "5db32574f77f9fce6a0eaedacfaa08a9c2064f5915967059795e4c9a8abd92526b8b708b64c975765059a4a75b242072b9a133ac05288935479f854e11bb2f6e",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.16-2023.7.0.zip"
+          },
+          "downloads": 42
+        },
+        {
+          "version_number": "2023.7.0-1.15",
+          "name": "Default Dark Mode 1.15.2 (2023.7.0)",
+          "version_type": "release",
+          "game_versions": [
+            "1.15",
+            "1.15.1",
+            "1.15.2"
+          ],
+          "loaders": [
+            "minecraft"
+          ],
+          "dependencies": [],
+          "date_published": "2023-07-09T19:32:59.720408Z",
+          "id": "BHghV116252453",
+          "community_version": "ae3K3UTr",
+          "file": {
+            "filename": "Default-Dark-Mode-1.15-2023.7.0.zip",
+            "size": 293102,
+            "sha512": "c4fd49d3d8bada8d08c35986eaf244eeeda1a7898aa2f3c3e9c485df3987d4bfa4e38ec7ad77da4ff4a0ab96818802d9ff13da12b257421cc9e7b57fef6356d8",
+            "url": "https://github.com/nebuIr/Default-Dark-Mode/releases/download/2023.7.0/Default-Dark-Mode-1.15-2023.7.0.zip"
+          },
+          "downloads": 61
+        }
+      ]
+    },
+    {
+      "id": "ZvMtQlho",
+      "title": "Bliss Shaders",
+      "slug": "bliss-shader",
+      "description": "A well performing fantasy styled shaderpack with emphasis on scene variation and customization.",
+      "project_type": "shader",
+      "icon_url": "https://cdn.modrinth.com/data/ZvMtQlho/90145c971ea24387775108fc86c89bed9bd2c8f1_96.webp",
+      "published": "2023-06-06T16:34:34.049180Z",
+      "updated": "2025-11-23T03:14:46.231498Z",
+      "followers": 3035,
+      "environment": [
+        "unknown"
+      ],
+      "repo": "X0nk/Bliss-Shader",
+      "author": "X0nk",
+      "categories": [
+        "atmosphere",
+        "bloom",
+        "colored-lighting",
+        "fantasy",
+        "foliage",
+        "high",
+        "low",
+        "medium",
+        "pbr",
+        "reflections",
+        "screenshot",
+        "semi-realistic",
+        "shadows"
+      ],
+      "open_source": false,
+      "releases": [
+        {
+          "version_number": "2.1.2",
+          "name": "Bliss v2.1.2",
+          "version_type": "release",
+          "game_versions": [
+            "1.17",
+            "1.17.1",
+            "1.18",
+            "1.18.1",
+            "1.18.2",
+            "1.19",
+            "1.19.1",
+            "1.19.2",
+            "1.19.3",
+            "1.19.4",
+            "1.20",
+            "1.20.1",
+            "1.20.2",
+            "1.20.3",
+            "1.20.4",
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.10",
+            "1.21.11",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9",
+            "26.1",
+            "26.1.1",
+            "26.1.2",
+            "26.2",
+            "26.3"
+          ],
+          "loaders": [
+            "iris",
+            "optifine"
+          ],
+          "dependencies": [],
+          "date_published": "2025-11-23T03:14:46.231498Z",
+          "id": "BHghV319804835",
+          "community_version": "kC2Y8q1P",
+          "file": {
+            "filename": "Bliss_v2.1.2_.Chocapic13_Shaders_edit.zip",
+            "size": 1791406,
+            "sha512": "dafc60be4980ec40f40edc0f2625cb0976f3c9ce5ed86383146a120480826bb1de70ef5e38b7f1437294ed4d38c6ef3c82ebef0ae4e00b8cee165788c9c18280",
+            "url": "https://github.com/X0nk/Bliss-Shader/releases/download/release11/Bliss_v2.1.2_.Chocapic13_Shaders_edit.zip"
+          },
+          "downloads": 22702
+        },
+        {
+          "version_number": "2.1.1",
+          "name": "Bliss v2.1.1",
+          "version_type": "release",
+          "game_versions": [
+            "1.19.4",
+            "1.20",
+            "1.20.1",
+            "1.20.2",
+            "1.20.3",
+            "1.20.4",
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.10",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9"
+          ],
+          "loaders": [
+            "iris",
+            "optifine"
+          ],
+          "dependencies": [],
+          "date_published": "2025-09-05T02:11:39.106040Z",
+          "id": "BHghV289855170",
+          "community_version": "VObMy7ML",
+          "file": {
+            "filename": "Bliss_v2.1.1_Chocapic13_Shaders_edit.zip",
+            "size": 1801687,
+            "sha512": "17eaf20f8d09a83cc4cd81eb52f463a04dcd73b73e7ecf09fdc9f4933eacfe3497161b1734f255e4be2f5589d8aa16142465cdc2c75a2d8f6e9d2d833032d9ff",
+            "url": "https://github.com/X0nk/Bliss-Shader/releases/download/release10/Bliss_v2.1.1_Chocapic13_Shaders_edit.zip"
+          },
+          "downloads": 5763
+        }
+      ]
+    },
+    {
+      "id": "BHghPMouseTweaksGTNH",
+      "title": "Mouse Tweaks (GTNH)",
+      "slug": "mouse-tweaks-gtnh",
+      "description": "Версия Mouse Tweaks от GT New Horizons для Forge 1.7.10. Добавляет перетаскивание стопок мышью и быстрое перемещение предметов в инвентаре.",
+      "project_type": "mod",
+      "icon_url": "",
+      "published": "2024-01-12T23:02:58Z",
+      "environment": [
+        "client_only"
+      ],
+      "repo": "GTNewHorizons/MouseTweaks",
+      "author": "GT New Horizons / YaLTeR",
+      "categories": [
+        "management",
+        "utility"
+      ],
+      "open_source": true,
+      "releases": [
+        {
+          "id": "BHghV145329872",
+          "name": "Mouse Tweaks 2.4.11-GTNH",
+          "version_number": "2.4.11-GTNH",
+          "version_type": "release",
+          "date_published": "2024-01-12T23:02:58Z",
+          "game_versions": [
+            "1.7.10"
+          ],
+          "loaders": [
+            "forge"
+          ],
+          "dependencies": [],
+          "file": {
+            "filename": "MouseTweaks-2.4.11-GTNH.jar",
+            "size": 44647,
+            "sha512": "93ad4e5a8d7b111ab19ae4c84d8ac747d4fb51fc0f7f5803f9d6ee778c706fe560a4d75357df0ebcae4dc33f6af94bee17f6336d3560609d0e7e6f65fd768b46",
+            "url": "https://github.com/GTNewHorizons/MouseTweaks/releases/download/2.4.11-GTNH/MouseTweaks-2.4.11-GTNH.jar"
+          },
+          "downloads": 82
+        }
+      ]
+    }
+  ]
+}

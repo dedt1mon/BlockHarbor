@@ -148,6 +148,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, loader TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS deleted_profiles(id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, loader TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS build_errors(id INTEGER PRIMARY KEY, pid TEXT NOT NULL, created REAL NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL, advice TEXT NOT NULL, stage TEXT NOT NULL, evidence TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS build_errors_by_profile ON build_errors(pid,id);
             CREATE TABLE IF NOT EXISTS build_purges(id TEXT PRIMARY KEY, completed INTEGER NOT NULL DEFAULT 0);
             """)
             db.execute("BEGIN IMMEDIATE")
@@ -334,6 +336,7 @@ class Store:
                 "Часть файлов не удалось удалить. Закрой приложения, использующие сборку, проверь права и повтори удаление."
             ) from exc
         with self.connection() as db:
+            db.execute("DELETE FROM build_errors WHERE pid=?", (pid,))
             db.execute("DELETE FROM deleted_profiles WHERE id=?", (pid,))
             db.execute("UPDATE build_purges SET completed=1 WHERE id=?", (pid,))
 

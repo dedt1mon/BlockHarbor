@@ -1,10 +1,10 @@
 # Компоненты BlockHarbor
 
-BlockHarbor 2.4.11 для Windows x64. Имена файлов, адреса загрузки и контрольные суммы SHA-256 зафиксированы в `tools/windows-lock.json`. Исходники оболочки `BlockHarbor.exe` находятся в `tools/bootstrap_windows.go` и `tools/bootstrap_payload.go`, компонента удаления данных — в `tools/data_cleanup`. Сборка приложения и установщика из исходников выполняется командами ниже.
+BlockHarbor 2.5.0 для Windows x64. Имена файлов, адреса загрузки и контрольные суммы SHA-256 зафиксированы в `tools/windows-lock.json`. Исходники оболочки `BlockHarbor.exe` находятся в `tools/bootstrap_windows.go` и `tools/bootstrap_payload.go`, компонента удаления данных — в `tools/data_cleanup`. Сборка приложения и установщика из исходников выполняется командами ниже.
 
 ```powershell
 python tools/build_windows.py --output ..\BlockHarbor-Windows-x64
-python tools/build_installer.py --launcher ..\BlockHarbor-Windows-x64\BlockHarbor.exe --output ..\BlockHarbor-Setup-2.4.11.exe --version 2.4.11
+python tools/build_installer.py --launcher ..\BlockHarbor-Windows-x64\BlockHarbor.exe --output ..\BlockHarbor-Setup-2.5.0.exe --version 2.5.0
 ```
 
 Для сборки приложения и компонента удаления нужны Python 3.10 или новее, компилятор Go 1.25 или новее и интернет для первой загрузки. Для установщика нужен NSIS 3.13 или новее. Поставляемая оболочка и компонент удаления собраны с Go 1.27.4. Каталог назначения должен быть новым или пустым. Команда сохраняет проверенные архивы во временном каталоге пользователя и использует их при повторной сборке. Результат сборки — один `BlockHarbor.exe` со встроенным ZIP, Python и приложением. При первом запуске пакет проверяется по SHA-256 и распаковывается в пользовательский каталог. Файлы лицензий и исходники доступны внутри распакованной версии в `%LOCALAPPDATA%\BlockHarbor\app`.
@@ -45,7 +45,7 @@ BlockHarbor при первом запуске сетевой сборки ав�
 
 ## Каталоги Minecraft и загрузчиков
 
-`launcher/minecraft_versions.json` и `launcher/minecraft_releases.json` содержат снимок официального каталога версий Mojang. `launcher/loader_catalog.json` хранит сведения о поддерживаемых версиях и, для NeoForge, опубликованных выпусках загрузчика. Это метаданные для выбора компонентов; исполняемые файлы игры и загрузчиков скачиваются отдельно при подготовке сборки. Лаунчер обновляет каталоги по запросу формы создания сборки с учётом локального кэша.
+`launcher/minecraft_versions.json` и `launcher/minecraft_releases.json` содержат снимок официального каталога версий Mojang. `launcher/loader_catalog.json` хранит сведения о поддерживаемых версиях и, для Forge и NeoForge, опубликованных выпусках загрузчика. Это метаданные для выбора компонентов; исполняемые файлы игры и загрузчиков скачиваются отдельно при подготовке сборки. Лаунчер обновляет каталоги по запросу формы создания сборки с учётом локального кэша.
 
 | Каталог | Источник |
 | --- | --- |
@@ -53,8 +53,13 @@ BlockHarbor при первом запуске сетевой сборки ав�
 | Fabric | [Fabric Meta: версии игры](https://meta.fabricmc.net/v2/versions/game) |
 | Quilt | [Quilt Meta: версии игры](https://meta.quiltmc.org/v3/versions/game) |
 | Forge | [Официальные Maven metadata](https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml) |
+| Исторические выпуски Forge | [Индекс версий Prism Launcher](https://meta.prismlauncher.org/v1/net.minecraftforge/index.json) |
 | NeoForge | [Официальные Maven metadata](https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml) |
 
 ## Каталог дополнений
 
-Для поиска модов, шейдеров и ресурс-паков BlockHarbor обращается к публичному Modrinth API v2. Выбранный выпуск и доступные обязательные зависимости загружаются с CDN Modrinth в момент установки. Лаунчер сверяет размеры и SHA-512 с метаданными выпуска. Права и условия распространения каждого проекта указаны в его карточке на Modrinth. [Документация Modrinth API](https://docs.modrinth.com/api/)
+Основной поиск использует публичный API v2 и CDN сообщества. Лаунчер сверяет размер и SHA-512 каждого файла с метаданными выпуска. Условия распространения задаёт автор проекта. [Документация API](https://docs.modrinth.com/api/)
+
+Дополнительный источник использует выпуски в официальных репозиториях авторов на GitHub. В `launcher/author_releases.json` перечислены репозитории, совместимые версии, прямые ссылки на опубликованные файлы, их размеры и SHA-512. Сами дополнения загружаются при установке. При обновлении списка сохраняются сведения о том, к какому проекту относится файл, включая проекты, опубликованные на обеих площадках.
+
+Среди авторских проектов есть мод Lithium, шейдер Bliss и ресурс-пак Faithful 32x. [Lithium](https://github.com/CaffeineMC/lithium/releases) · [Bliss](https://github.com/X0nk/Bliss-Shader/releases) · [Faithful 32x](https://github.com/Faithful-Resource-Pack/Faithful-32x-Java/releases)

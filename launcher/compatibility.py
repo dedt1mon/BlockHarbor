@@ -13,7 +13,7 @@ from .modfiles import DESCRIPTORS, file_stamp, metadata_zip, read_archive_entry,
 _LABELS = {
     "fabric": DESCRIPTORS[:1],
     "quilt": (DESCRIPTORS[1], DESCRIPTORS[0]),
-    "forge": DESCRIPTORS[2:3],
+    "forge": (DESCRIPTORS[2], "mcmod.info"),
     "neoforge": (DESCRIPTORS[3], DESCRIPTORS[2]),
 }
 _PLATFORM = {
@@ -97,6 +97,15 @@ def _read(jar, loader):
             info.nested = [
                 x.get("file") for x in _entries(data.get("jars")) if isinstance(x, dict)
             ]
+        elif label == "mcmod.info":
+            for mod in data["modList"]:
+                _add(info, mod.get("modid"), mod.get("name"), mod.get("version"))
+                if mod.get("useDependencyInformation") is True:
+                    # In FML the other lists specify load order only.
+                    for dependency in _entries(mod.get("requiredMods")):
+                        if isinstance(dependency, str):
+                            key, _, bounds = dependency.partition("@")
+                            _rule(info, "required", key, bounds or "*")
         elif label == "quilt.mod.json":
             q = data.get("quilt_loader", {})
             if not isinstance(q, dict):
@@ -120,13 +129,21 @@ def _read(jar, loader):
                         _rule(info, relation, item.get("id"), item.get("versions", "*"))
             info.nested = _entries(q.get("jars"))
         else:
-            for mod in _entries(data.get("mods")):
+            manifest_version = ""
+            mods = _entries(data.get("mods"))
+            if any(isinstance(mod, dict) and mod.get("version") == "${file.jarVersion}" for mod in mods):
+                manifest = read_archive_entry(jar, "META-INF/MANIFEST.MF", 128 * 1024) or b""
+                main = manifest.replace(b"\r\n", b"\n").partition(b"\n\n")[0].replace(b"\n ", b"")
+                field = re.search(rb"(?im)^Implementation-Version:[ ]*([^\r\n]+)", main)
+                if field:
+                    manifest_version = field[1].decode("utf-8", "replace").strip()
+            for mod in mods:
                 if isinstance(mod, dict):
                     _add(
                         info,
                         mod.get("modId"),
                         mod.get("displayName"),
-                        mod.get("version"),
+                        manifest_version if mod.get("version") == "${file.jarVersion}" else mod.get("version"),
                     )
             for owner, deps in _pairs(data.get("dependencies")):
                 if owner.lower() not in info.provided:
@@ -183,13 +200,9 @@ def _metadata(path, stamp, loader):
                     if raw is None:
                         continue
                     with metadata_zip(io.BytesIO(raw)) as inner:
-                        result.provided.update(
-                            {
-                                k: v
-                                for k, v in _read(inner, loader).provided.items()
-                                if k not in result.provided
-                            }
-                        )
+                        child = _read(inner, loader)
+                        result.provided.update({k: v for k, v in child.provided.items() if k not in result.provided})
+                        result.rules.extend(child.rules)
                 except (ValueError, RuntimeError, OSError, zipfile.BadZipFile):
                     continue
     except (
@@ -236,7 +249,7 @@ def _matches(version, expr):
     if " " in expr:
         outcomes = [_matches(version, part) for part in expr.split()]
         return False if False in outcomes else None if None in outcomes else True
-    match = re.fullmatch(r"(<=|>=|=|<|>)?([0-9]+(?:\.[0-9]+)*(?:\.[xX*])?)", expr)
+    match = re.fullmatch(r"(<=|>=|=|<|>|~|\^)?([0-9]+(?:\.[0-9]+)*(?:\.[xX*])?)", expr)
     if not match or actual is None:
         return None
     op, target = match.groups()
@@ -250,6 +263,9 @@ def _matches(version, expr):
     expected = _numeric(target)
     if expected is None:
         return None
+    if op in ("^", "~"):
+        width = 1 if op == "^" else 2
+        return actual >= expected and actual[:width] == expected[:width]
     return {
         None: actual == expected,
         "=": actual == expected,
@@ -319,6 +335,10 @@ def local_report(profile, existing, additions):
                         )
                 continue
             found = [f for f, _, v in matches if _any_match(v, bounds) is not False]
+            if relation == "required" and found and not any(_any_match(v, bounds) is True for _, _, v in matches):
+                result["warnings"].append(
+                    f"{name} требует {key} {expr}. Не удалось подтвердить соответствие версии по описанию файла."
+                )
             if incoming and key != "minecraft":
                 group = "required" if relation == "required" else "optional"
                 result[group].append(

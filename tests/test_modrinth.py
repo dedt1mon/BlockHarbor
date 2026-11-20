@@ -379,6 +379,7 @@ class ModrinthTests(unittest.TestCase):
                 ),
             )
         (self.mods / "manual.jar").write_bytes(raw.getvalue())
+        self.add("missing", "1", "missing.jar")
         self.assertFalse(self.check()["reviewToken"])
         with self.assertRaises(modrinth.NeedsReview) as first:
             self.install()
@@ -397,7 +398,79 @@ class ModrinthTests(unittest.TestCase):
         new = stale.exception.review
         self.assertNotEqual(new["token"], review["token"])
         self.assertEqual(len(new["warnings"]), 3)
-        self.assertIn("2", self.install(new["token"]))
+        self.assertIn("3", self.install(new["token"]))
+        self.assertTrue((self.mods / "missing.jar").is_file())
+
+    def test_basket_deduplicates_transitive_version_only_dep_and_keeps_pins(self):
+        leaf = self.add("leaf", "leaf1", "leaf.jar")
+        self.dep["dependencies"] = [{"dependency_type":"required", "version_id":leaf["id"]}]
+        self.add("another", "next1", "next.jar", deps=[("required", "dep", "dep1")])
+        (self.mods / "renamed-leaf.jar").write_bytes(self.data[leaf["files"][0]["url"]])
+        items = [{"kind":"mods", "project":p} for p in ("root", "another")]
+        info = modrinth.check_selection(self.store, self.pid, items)
+        self.assertEqual([r["project"] for r in info["selected"]], ["root", "another"])
+        self.assertEqual({r["filename"]:r["installed"] for r in info["required"]},
+                         {"dep.jar":False, "renamed-leaf.jar":True})
+        self.assertEqual([r["version"] for r in info["items"]], ["root1", "next1"])
+        self.request.assert_not_called()
+        self.assertIn("3", modrinth.install_selection(self.store, self.pid, info["items"], lambda _:None))
+        self.assertEqual(self.request.call_count, 3)
+        self.assertEqual({p.name for p in self.mods.iterdir()}, {"root.jar","dep.jar","next.jar","renamed-leaf.jar"})
+
+    def test_basket_conflicting_pins_and_partial_download_failure_publish_nothing(self):
+        other = self.add("other", "other1", "other.jar", deps=[("required","dep","dep2")])
+        self.add("dep","dep2","dep2.jar")
+        items = [{"kind":"mods","project":p,"version":v} for p,v in (("dep","dep1"),("other","other1"))]
+        self.assertTrue(modrinth.check_selection(self.store,self.pid,items)["blocked"])
+        self.request.assert_not_called()
+        other["dependencies"] = []
+        other["files"][0]["hashes"]["sha512"] = "0"*128
+        with self.assertRaisesRegex(ValueError, "Контрольная"):
+            modrinth.install_selection(self.store,self.pid,items,lambda _:None)
+        self.assertEqual(list(self.mods.iterdir()), [])
+
+    def test_manual_jar_only_dependency_is_verified_before_publishing(self):
+        upload = self.store.root / "upload"
+        with zipfile.ZipFile(upload, "w") as jarfile:
+            jarfile.writestr("fabric.mod.json", json.dumps({"id":"manual","version":"1","depends":{"helper":">=2"}}))
+        helper = self.add("helper","2","helper.jar")
+        summary, request = modrinth.manual_plan(self.store, self.pid,"manual.jar",upload)
+        self.assertEqual([(r["filename"],r["installed"]) for r in summary["required"]], [("helper.jar",False)])
+        self.request.assert_not_called()
+        wrong = jar("unrelated","2")
+        f = helper["files"][0]
+        f.update(size=len(wrong), hashes={"sha512":hashlib.sha512(wrong).hexdigest()})
+        self.data[f["url"]] = wrong
+        with self.assertRaisesRegex(modrinth.PlanConflict, "manual.jar требует helper"):
+            modrinth.install_selection(self.store,self.pid,request["items"],lambda _:None,
+                                      request=request,local_mod=("manual.jar",upload))
+        self.assertEqual(list(self.mods.iterdir()), [])
+        correct = jar("helper","2")
+        f.update(size=len(correct), hashes={"sha512":hashlib.sha512(correct).hexdigest()})
+        self.data[f["url"]] = correct
+        modrinth.install_selection(self.store,self.pid,request["items"],lambda _:None,
+                                  request=request,local_mod=("manual.jar",upload))
+        self.assertEqual({p.name for p in self.mods.iterdir()}, {"manual.jar","helper.jar"})
+
+    def test_unavailable_archive_dependency_never_publishes(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("fabric.mod.json", json.dumps({"id": "root", "version": "1", "depends": {"absent": ">=2"}}))
+        artifact = self.root["files"][0]
+        body = payload.getvalue()
+        artifact.update(size=len(body), hashes={"sha512": hashlib.sha512(body).hexdigest()})
+        self.data[artifact["url"]] = body
+        get = self.api.side_effect
+
+        def missing_project(path, **params):
+            if path == "/project/absent":
+                raise modrinth.CatalogNotFound("Файл отсутствует.")
+            return get(path, **params)
+
+        self.api.side_effect = missing_project
+        with self.assertRaisesRegex(modrinth.PlanConflict, "root.jar требует absent >=2"):
+            self.install()
+        self.assertEqual(list(self.mods.iterdir()), [])
 
     def test_job_returns_review_request_and_resets_on_next_new_job(self):
         import time

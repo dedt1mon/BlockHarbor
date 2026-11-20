@@ -129,11 +129,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
     button.disabled = true;
     delete button.dataset.acknowledgement;
     area.removeAttribute("aria-busy");
-    if (version.installed) {
-      area.replaceChildren();
-      button.textContent = "Уже установлено";
-      return;
-    }
+
     const current = new AbortController();
     request = current;
     button.textContent = "Установить в сборку";
@@ -147,7 +143,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
     });
     const active = () => request === current && dialog.open && area.isConnected;
     try {
-      const info = await api("/api/modrinth/check?" + params, {
+      const info = await api("/api/catalog/check?" + params, {
         signal: current.signal,
       });
       if (!active()) return;
@@ -162,7 +158,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
           ? "Установить с предупреждением"
           : info.required.some((row) => !row.installed)
             ? "Установить с зависимостями"
-            : "Установить в сборку";
+            : version.installed ? "Проверить и восстановить зависимости" : "Установить в сборку";
     } catch (error) {
       if (!active()) return;
       area.innerHTML =
@@ -191,32 +187,57 @@ async function confirmManualMod(file, target) {
     info.optional.some((row) => row.recommended && !row.installed);
   if (!needsAttention) return true;
   const dialog = $("#dialog");
+  const missing = info.required.some(row => !row.installed);
   modal(
     "Проверка мода",
-    '<p class="manual-mod-name">' +
-      esc(file.name) +
-      "</p>" +
-      '<div class="compatibility-report">' +
-      compatibilitySummary(info, true) +
-      '</div><div class="dialog-actions">' +
-      '<button type="button" class="btn" data-skip-mod>' +
-      (info.blocked ? "Закрыть" : "Пропустить") +
-      "</button>" +
-      (info.blocked
-        ? ""
-        : '<button type="button" class="btn main" data-accept-mod>Добавить файл</button>') +
-      "</div>",
+    `<p class="manual-mod-name">${esc(file.name)}</p>
+     <div class="compatibility-report">${compatibilitySummary(info, true)}</div>
+     <div class="dialog-actions"><button type="button" class="btn" data-skip-mod>${info.blocked ? "Закрыть" : "Пропустить"}</button>
+     ${info.blocked ? "" : `<button type="button" class="btn main" data-accept-mod>${missing ? "Подобрать зависимости" : "Добавить файл"}</button>`}</div>`,
   );
   return new Promise((resolve) => {
-    let accepted = false;
+    let accepted = false, planned = false, token = "";
     dialog.addEventListener("close", () => resolve(accepted), { once: true });
     dialog.querySelector("[data-skip-mod]").onclick = closeDialog;
-    const install = dialog.querySelector("[data-accept-mod]");
-    if (install)
-      install.onclick = () => {
+    const button = dialog.querySelector("[data-accept-mod]");
+    if (!button) return;
+    const area = dialog.querySelector(".compatibility-report");
+    button.onclick = async () => {
+      if (!missing) {
         accepted = true;
         closeDialog();
-      };
+        return;
+      }
+      button.disabled = true;
+      const stage = planned ? "install" : "plan";
+      area.textContent = planned ? "Загружаем зависимости и проверяем мод…" : "Подбираем совместимые зависимости…";
+      try {
+        const result = await putFile(file, "mods", target, false, stage, token);
+        if (!dialog.open || !button.isConnected) return;
+        if (stage === "plan") {
+          planned = !result.blocked;
+          token = result.reviewToken || "";
+          area.innerHTML = compatibilitySummary(result);
+          button.textContent = planned ? "Установить мод с зависимостями" : "Повторить подбор";
+        } else if (result.review) {
+          token = result.review.token;
+          area.innerHTML = compatibilitySummary({warnings:result.review.warnings});
+          button.textContent = "Подтвердить установку";
+        } else {
+          accepted = "installed";
+          closeDialog();
+        }
+      } catch (error) {
+        if (button.isConnected) {
+          planned = false;
+          token = "";
+          area.textContent = error.message;
+          button.textContent = "Повторить подбор";
+        }
+      } finally {
+        button.disabled = false;
+      }
+    };
   });
 }
 
@@ -245,7 +266,7 @@ function showStagedReview(job) {
       compatibilitySummary({ warnings: review.warnings }) +
       "</div>" +
       '<div class="dialog-actions"><button type="button" class="btn" data-review-cancel>Отмена</button>' +
-      '<button type="button" class="btn main" data-review-continue>Всё равно установить</button></div>',
+      '<button type="button" class="btn main" data-review-continue>Подтвердить установку</button></div>',
   );
   dialog.querySelector("[data-review-cancel]").onclick = closeDialog;
   const proceed = dialog.querySelector("[data-review-continue]");

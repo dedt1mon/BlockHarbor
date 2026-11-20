@@ -121,6 +121,29 @@ class ManualChecks(unittest.TestCase):
             ]
         )
 
+    def test_nested_requirements_use_fabric_caret_and_tilde(self):
+        (self.folder / "lib.jar").write_bytes(fabric({"id": "lib", "version": "0.4.2"}))
+        nested = fabric({"id": "bridge", "version": "1", "depends": {"lib": "^0.3", "other": "~2.1"}})
+        result = self.check(fabric({"id": "outer", "version": "1", "jars": [{"file": "lib/io.jar"}]}, nested))
+        self.assertEqual({row["id"]: row["installed"] for row in result["required"]}, {"lib": True, "other": False})
+        (self.folder / "other.jar").write_bytes(fabric({"id": "other", "version": "2.2"}))
+        result = self.check(fabric({"id": "outer", "version": "1", "jars": [{"file": "lib/io.jar"}]}, nested))
+        self.assertFalse(next(row["installed"] for row in result["required"] if row["id"] == "other"))
+
+    def test_forge_manifest_version_used_instead_of_placeholder(self):
+        pid = self.store.create("Forge", "1.20.1", "forge")
+        dep = self.store.content_folder(pid, "mods") / "library.jar"
+        with zipfile.ZipFile(dep, "w") as jar:
+            jar.writestr("META-INF/mods.toml", '[[mods]]\nmodId="library"\nversion="${file.jarVersion}"\n')
+            jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Version: 1.4\r\n\r\n")
+        incoming = io.BytesIO()
+        with zipfile.ZipFile(incoming, "w") as jar:
+            jar.writestr("META-INF/mods.toml", '[[mods]]\nmodId="incoming"\nversion="1"\n'
+                         '[[dependencies.incoming]]\nmodId="library"\nmandatory=true\nversionRange="[2,)"\n')
+        result = self.check(incoming.getvalue(), pid)
+        self.assertFalse(result["required"][0]["installed"])
+        self.assertIn("другая версия", result["warnings"][0])
+
     def test_large_descriptor_and_duplicate_root_ids(self):
         (self.folder / "renamed.jar").write_bytes(
             fabric({"id": "existing", "version": "1"})

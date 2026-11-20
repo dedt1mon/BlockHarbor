@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from . import skins
+from . import build_errors, skins
 from .diagnostics import redact
 from .store import clean_filename, input_profile
 
@@ -27,7 +27,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 
 class Experience:
-    READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications"}
+    READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
     ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
     JOBS = set()
 
@@ -483,6 +483,8 @@ class Experience:
         return {"ok": True, "message": "Ярлык сборки добавлен на рабочий стол."}
 
     def handle(self, action, p, status=lambda _: None):
+        if action == "buildErrors":
+            return build_errors.history(self.store, p["id"])
         if action == "experienceState":
             data = self.state(p.get("id"))
             for skin in data["wardrobe"]:

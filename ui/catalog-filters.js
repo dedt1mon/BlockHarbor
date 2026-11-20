@@ -10,7 +10,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
   const panel = catalog.querySelector(".catalog-filter-panel");
   const toolbar = catalog.querySelector(".catalog-toolbar");
   const toggle = toolbar.querySelector("button");
-  const sort = toolbar.querySelector("select");
+  const sort = toolbar.querySelector('select[aria-label="Сортировка результатов"]');
   const dialog = catalog.closest("dialog");
   const empty = { sort: "relevance", filters: "{}" };
   const saved = catalogPreferences.get(scope) || {
@@ -19,7 +19,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
   };
   catalogPreferences.set(scope, saved);
   const find = (selector) => panel.querySelector(selector);
-  const url = "/api/modrinth/filters?kind=" + encodeURIComponent(category);
+  const url = "/api/catalog/filters?kind=" + encodeURIComponent(category);
   let schema, schemaRequest, draft, suggestions, timer;
 
   function restore(preset) {
@@ -135,7 +135,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
         <div class="catalog-filter-groups"></div>
         <fieldset class="catalog-dep-group"><legend>Зависит от проекта</legend>
           <div class="catalog-dependencies"></div>
-          <input type="text" class="field" data-dep-query autocomplete="off" aria-label="Название проекта-зависимости" maxlength="120" placeholder="Найти проект на Modrinth">
+          <input type="text" class="field" data-dep-query autocomplete="off" aria-label="Название проекта-зависимости" maxlength="120" placeholder="Найти проект в каталоге">
           <div class="catalog-dep-options" role="group" aria-label="Найденные проекты"></div>
           <span class="catalog-dep-status" role="status"></span>
         </fieldset>

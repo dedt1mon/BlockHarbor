@@ -594,10 +594,12 @@ function addons() {
     '<div class="build-settings-bar"><div class="tags build-settings-info">' + selectInfo(p) +
     '</div><div class="build-settings-actions" role="group" aria-label="Действия сборки">' +
     btn("folder", "Папка сборки", "folder") + "</div></div>" +
-    '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button></div>' +
-    (kind === "worlds"
+    '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button><button class="' + (kind === "errors" ? "on" : "") + '" data-kind="errors">Ошибки сборки</button></div>' +
+    (kind === "errors"
+      ? '<section class="panel" id="buildErrorsPanel"><h2>Ошибки сборки</h2><div data-error-list aria-live="polite">Загружаем записи…</div></section>'
+      : kind === "worlds"
       ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')
-      : '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать с Modrinth", "download", "main") + '</div></div>' +
+      : '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать", "download", "main") + '</div></div>' +
         (window.BuildCareUI?.content(p, kind, state.contents[kind]) || '<div class="empty">Подготавливаем управление содержимым…</div>'));
 }
 async function showSteamCheck() {
@@ -999,7 +1001,7 @@ function updateBuildLoaderUI(form) {
     const row = rows.find(item => item.id === option.value);
     option.disabled = row?.supported === false;
     option.textContent = loaders[option.value] + (option.value === "vanilla" ? " · без модов" : "") +
-      (option.disabled ? " · недоступен" : "");
+      (row?.manual ? " · требуется ручная установка" : option.disabled ? " · недоступен" : "");
   }
   select.value = selected;
   const row = rows.find(item => item.id === selected);
@@ -1023,12 +1025,12 @@ function loadBuildLoaders(form, force = false) {
   if (!data || !currentBuildForm(form)) return Promise.resolve(null);
   const version = form.querySelector("#version").value;
   if (!force && data.version === version && (data.promise || data.report || data.error))
-    return data.promise || Promise.resolve(data.report);
+    return data.report ? Promise.resolve(data.report) : data.promise || Promise.resolve(null);
   const ticket = ++data.request;
+  if (data.version !== version) data.report = null;
   data.version = version;
-  data.report = null;
   data.error = "";
-  data.loading = true;
+  data.loading = !data.report;
   updateBuildLoaderUI(form);
   const isCurrent = () => currentBuildForm(form) && data.request === ticket && form.querySelector("#version").value === version;
   data.promise = (async () => {
@@ -1060,8 +1062,9 @@ async function loadReleases(force = false) {
   const form = select.closest("#newForm"), data = newBuildForms.get(form);
   const ticket = String(Number(select.dataset.request || 0) + 1);
   select.dataset.request = ticket;
+  const refreshLoaders = force ? loadBuildLoaders(form, true) : null;
   try {
-    const result = await api("/api/releases" + (force ? "?refresh=1" : ""));
+    const result = await api("/api/releases" + (force ? "?refresh=1" : "?cached=1"));
     if (!currentBuildForm(form) || select.dataset.request !== ticket) return;
     state.versions = result.versions;
     data.releases = result.versions;
@@ -1081,7 +1084,8 @@ async function loadReleases(force = false) {
       "Не удалось обновить каталог Mojang. Доступны сохранённые версии.";
     if (force) notice(status.textContent, true);
   } finally {
-    if (force && currentBuildForm(form) && select.dataset.request === ticket) await loadBuildLoaders(form, true);
+    if (refreshLoaders) await refreshLoaders;
+    if (force && currentBuildForm(form) && select.dataset.request === ticket) await loadBuildLoaders(form);
   }
 }
 let pendingBuild = null;
@@ -1154,7 +1158,7 @@ function showGameExit(job) {
     notice("");
   shownExit = failure.id;
   box.hidden = false;
-  const diagnosticsButton = box.querySelector('[data-experience="diagnostics"]');
+  const diagnosticsButton = box.querySelector('[data-experience="showBuildErrors"]');
   if (diagnosticsButton) diagnosticsButton.dataset.experienceProfile = failure.profile || state.active;
   $("#gameExitMessage").textContent =
     failure.message ||
@@ -1239,9 +1243,11 @@ async function tick(wake = false) {
     schedulePoll();
   }
 }
-async function putFile(file, type, id, check = false) {
+async function putFile(file, type, id, check = false, dependencies = "", acknowledgement = "") {
   const q = new URLSearchParams({ kind: type, id, name: file.name });
   if (check) q.set("check", "1");
+  if (dependencies) q.set("dependencies", dependencies);
+  if (acknowledgement) q.set("acknowledgement", acknowledgement);
   return api("/api/file?" + q, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -1731,7 +1737,12 @@ $("#filePick").addEventListener("change", async (e) => {
     try {
       if (t.kind === "mods") {
         notice("Проверяем " + f.name + "…", false, true);
-        if (!(await confirmManualMod(f, t.id))) {
+        const decision = await confirmManualMod(f, t.id);
+        if (decision === "installed") {
+          count++;
+          continue;
+        }
+        if (!decision) {
           skipped++;
           continue;
         }

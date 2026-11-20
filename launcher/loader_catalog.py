@@ -54,7 +54,11 @@ def _read_snapshot(cache: Path) -> dict:
                 and all(version_ids.valid(v) for v in entry["versions"])
                 and _timestamp(entry.get("fetchedAt")) >= _timestamp(bundled["providers"][loader]["fetchedAt"])
             ):
-                bundled["providers"][loader] = {**entry, "origin": "cache"}
+                base = bundled["providers"][loader]
+                if loader == "forge" and "catalogRevision" not in entry:
+                    # Clients before 2.5 discarded Forge's historical _pre4 ID.
+                    entry["versions"] = list(dict.fromkeys([*entry["versions"], "1.7.10-pre4"]))
+                bundled["providers"][loader] = {**base, **entry, "origin": "cache"}
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return bundled
@@ -100,24 +104,27 @@ def _pin_key(pin):
     return (bool(re.fullmatch(r"\d+(?:\.\d+)+", pin)), numbers, pin)
 
 
+def _forge_game(coordinate: str) -> str | None:
+    slug, separator, _build = coordinate.partition("-")
+    if separator and re.fullmatch(r"\d+(?:\.\d+)+(?:_pre\d+)?", slug):
+        return slug.replace("_pre", "-pre")
+    return None
+
+
 def _fetch_provider(loader: str) -> dict:
     url = SOURCES[loader]
     releases = {}
     if loader in {"fabric", "quilt"}:
-        rows = preparation.json_document(url)
+        rows = preparation.json_document(url, quick_catalog=True)
         versions = [version_ids.validate(row["version"]) for row in rows]
     else:
-        body = preparation.metadata_response(url).text
+        body = preparation.metadata_response(url, quick_catalog=True).text
         root = ET.fromstring(body)
         pins = [row.text for row in root.findall("./versioning/versions/version") if row.text]
         for pin in pins:
             if loader == "forge":
-                version, separator, _build = pin.partition("-")
-                if not separator or not re.fullmatch(r"\d+(?:\.\d+)+", version):
-                    continue
-                # Earlier Forge artifacts are manual jar patches, not installers
-                # supported by the pinned installation provider.
-                if tuple(map(int, version.split("."))) < (1, 5, 2):
+                version = _forge_game(pin)
+                if not version or tuple(map(int, version.split("-")[0].split("."))) < (1, 5, 2):
                     continue
             else:
                 version = _neo_minecraft(pin)
@@ -129,6 +136,17 @@ def _fetch_provider(loader: str) -> dict:
     if not versions:
         raise ValueError(f"Каталог {NAMES[loader]} вернул пустой список.")
     result = {"source": url, "versions": list(dict.fromkeys(versions)), "fetchedAt": datetime.now(timezone.utc).isoformat(), "origin": "live"}
+    if loader in {"fabric", "quilt"}:
+        try:
+            builds = preparation.json_document(url.rsplit("/", 1)[0] + "/loader", quick_catalog=True)
+        except preparation.DownloadError:
+            # A usable game compatibility list does not require a new preferred build.
+            builds = []
+        stable = [row["version"] for row in builds if row.get("stable", True) and re.fullmatch(r"\d+(?:\.\d+)+", row["version"])]
+        if stable:
+            result["stablePin"] = max(stable, key=_pin_key)
+    if loader == "forge":
+        result["catalogRevision"] = 2
     if releases:
         result["releases"] = releases
     return result
@@ -149,7 +167,9 @@ def refresh_catalog(cache: Path, *, force=False) -> dict:
             for loader, request in requests.items():
                 try:
                     lifecycle.check()
-                    snapshot["providers"][loader] = request.result()
+                    previous = snapshot["providers"][loader]
+                    snapshot["providers"][loader] = {**previous, **request.result()}
+                    snapshot["providers"][loader].pop("refreshFailed", None)
                     changed = True
                 except lifecycle.OperationCancelled:
                     raise
@@ -179,15 +199,20 @@ def _availability(snapshot: dict, version: str) -> dict:
             "Совместимость пока не подтверждена. Проверим её при подготовке игры."
             if supported is None else "Доступен для этой версии Minecraft."
         )
+        archived = loader == "forge" and version in entry.get("manualVersions", ())
+        if archived:
+            message = f"Архивный Forge для Minecraft {version} существует. Эта версия требует ручной установки патча в игровой JAR."
+            supported = False
         if stale:
             message += " Используются сохранённые данные совместимости."
-        rows.append({"id": loader, "name": NAMES[loader], "supported": supported, "message": message, "source": entry.get("origin", "bundled"), "stale": stale})
+        rows.append({"id": loader, "name": NAMES[loader], "manual": archived, "supported": supported, "message": message, "source": entry.get("origin", "bundled"), "stale": stale})
     return {"version": version, "loaders": rows, "checkedAt": max((p.get("fetchedAt", "") for p in snapshot["providers"].values()), default=snapshot.get("fetchedAt", ""))}
 
 
 def availability(cache: Path, version: str, *, refresh=False) -> dict:
     version_ids.validate(version)
-    return _availability(refresh_catalog(cache, force=refresh), version)
+    snapshot = refresh_catalog(cache, force=True) if refresh else _read_snapshot(cache)
+    return _availability(snapshot, version)
 
 
 def require_supported(cache: Path, version: str, loader: str) -> None:
@@ -206,8 +231,42 @@ def latest_neoforge(cache: Path, version: str) -> str:
     snapshot = _read_snapshot(cache)
     pins = snapshot["providers"]["neoforge"].get("releases", {}).get(version, [])
     if not pins:
-        snapshot = refresh_catalog(cache, force=True)
-        pins = snapshot["providers"]["neoforge"].get("releases", {}).get(version, [])
+        pins = _fetch_provider("neoforge").get("releases", {}).get(version, [])
     if not pins:
         raise ValueError(unsupported_message(version, "neoforge"))
     return version_ids.validate(sorted(pins, key=_pin_key, reverse=True)[0])
+
+
+def meta_pin(cache: Path, version: str, loader: str) -> str | None:
+    entry = _read_snapshot(cache)["providers"][loader]
+    pin = entry.get("stablePin")
+    return pin if version in entry["versions"] and isinstance(pin, str) and re.fullmatch(r"\d+(?:\.\d+)+", pin) else None
+
+
+def forge_coordinate(cache: Path, version: str, requested: str | None = None) -> str:
+    """Resolve a short marketing version to the actual (sometimes branch-suffixed) artifact."""
+    version_ids.validate(version)
+    if requested:
+        version_ids.validate(requested)
+    entry = _read_snapshot(cache)["providers"]["forge"]
+
+    def choose(source):
+        pins = source.get("releases", {}).get(version, [])
+        preferred = source.get("preferred", {}).get(version)
+        candidates = [preferred] if preferred and (not pins or preferred in pins) else []
+        for candidate in [*candidates, *pins]:
+            if not version_ids.valid(candidate) or _forge_game(candidate) != version:
+                continue
+            build = candidate.partition("-")[2]
+            if requested is None or requested in (candidate, build, build.partition("-")[0]):
+                return candidate
+        return None
+
+    coordinate = choose(entry)
+    if not coordinate:
+        coordinate = choose(_fetch_provider("forge"))
+    if not coordinate:
+        if requested:
+            raise ValueError(f"Forge {requested} отсутствует в каталоге Minecraft {version}.")
+        raise ValueError(unsupported_message(version, "forge"))
+    return coordinate

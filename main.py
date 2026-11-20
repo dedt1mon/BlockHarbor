@@ -52,6 +52,7 @@ from launcher.store import (
 from launcher.window import DesktopWindow
 from launcher.version import VERSION
 from launcher.build_care import BuildCare
+from launcher import build_errors
 from launcher.diagnostics import SessionMetrics, analyze, report_text
 from launcher.experience import Experience
 from launcher.performance_profiles import PerformanceProfiles
@@ -145,6 +146,7 @@ class App:
         self.last_seen = time.monotonic()
         self.child = None
         self.games = {}
+        self.game_started_at = {}
         self.process_lock = threading.Lock()
         self.game_exit = None
         self.playing_id = ""
@@ -590,6 +592,7 @@ class App:
                 self.games[profile["id"]] = (process, profile["name"])
             self.coordinator.attach(profile["id"], process)
             self.game_exit = None
+            self.game_started_at[profile["id"]] = time.time()
             if self.closing.is_set():
                 return
             if type(getattr(process, "pid", None)) is int:
@@ -614,6 +617,12 @@ class App:
 
     def _game_finished(self, code, name, pid=""):
         if pid:
+            started = self.game_started_at.pop(pid, None)
+            if code and not self.closing.is_set():
+                try:
+                    build_errors.record_exit(self.store, pid, code, started)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass  # Always finish process cleanup even if the journal is unavailable.
             self.coordinator.release(pid)
             self.metrics.finish(pid, code)
             if self.store.get("careAutoWorldBackup:" + pid) == "1":
@@ -623,7 +632,7 @@ class App:
                 "id": secrets.token_hex(6),
                 "code": code,
                 "profile": pid,
-                "message": f"Сборка «{name}» завершилась с кодом {code}. В диагностике можно проверить журнал и последние изменения.",
+                "message": f"Сборка «{name}» завершилась с кодом {code}. Подробности в разделе «Ошибки сборки».",
             }
             self.experience.notify(self.game_exit["message"], "error")
 
@@ -771,6 +780,11 @@ class App:
                     "review": exc.review,
                 }
             except Exception as exc:
+                if profile and not self.closing.is_set():
+                    try:
+                        build_errors.record_operation(self.store, profile, self.job["message"], exc)
+                    except (OSError, ValueError, sqlite3.Error):
+                        pass  # Preserve the operation error if its history cannot be written.
                 final = {
                     "message": str(exc)[:1000] or "Операция не удалась.",
                     "ok": False,
@@ -957,30 +971,22 @@ class App:
                 distances.apply(folder, profile["version"], p["expected"])
             return distances.preview(folder, profile["version"])
         if action == "installModrinth":
-            pid, kind, project, version = (
-                p[k] for k in ("id", "kind", "project", "version")
-            )
+            pid = p["id"]
             s.profile(pid)
-            prism = self.prism_launches.get(pid)
-            if self.profile_running(pid) or (
-                prism is not None and prism.poll() is None
-            ):
-                raise ValueError(
-                    "Закрой эту сборку в Minecraft или Prism перед установкой дополнений."
-                )
+            self.require_profile_idle(pid)
+            if "items" in p:
+                selected = modrinth._selections(p["items"])
+                request = {"id": pid, "items": selected}
+            else:
+                request = {key: p[key] for key in ("id", "kind", "project", "version")}
+                selected = [request]
             return self.start_job(
-                lambda status: modrinth.install(
-                    s,
-                    pid,
-                    kind,
-                    project,
-                    version,
-                    status,
-                    self.lock,
-                    p.get("acknowledgement", ""),
-                    before_publish=lambda: self.care.before_change(pid, "Установка дополнений из Modrinth"),
+                lambda status: modrinth.install_selection(
+                    s, pid, selected, status, self.lock, p.get("acknowledgement", ""),
+                    before_publish=lambda: self.care.before_change(pid, "Установка дополнений"),
                     transfer=self.transfers,
                     after_publish=lambda releases: [self.care.remember_project(pid, release, {"title": release.title, "description": release.description}) for release in releases],
+                    request=request,
                 ), profile=pid
             )
         if action == "create":
@@ -1510,7 +1516,7 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.lock:
                     state = self.app.state()
                 self.reply(200, state)
-            elif u.path == "/api/modrinth/filters":
+            elif u.path in ("/api/modrinth/filters", "/api/catalog/filters"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 options = modrinth.catalog_filters.schema(q["kind"])
                 self.reply(
@@ -1535,13 +1541,13 @@ class Handler(BaseHTTPRequestHandler):
                 if pid is not None:
                     result["id"] = pid
                 self.reply(200, result)
-            elif u.path == "/api/modrinth/check":
+            elif u.path in ("/api/modrinth/check", "/api/catalog/check"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 result = modrinth.check(
                     self.app.store, q["id"], q["kind"], q["project"], q["version"]
                 )
                 self.reply(200, result)
-            elif u.path in ("/api/modrinth/search", "/api/modrinth/versions"):
+            elif u.path in ("/api/modrinth/search", "/api/modrinth/versions", "/api/catalog/search", "/api/catalog/versions"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 store = self.app.store
                 if u.path.endswith("/search"):
@@ -1552,16 +1558,21 @@ class Handler(BaseHTTPRequestHandler):
                         q.get("offset", 0),
                         json.loads(q.get("filters", "{}")),
                         q.get("sort", "relevance"),
+                        source=q.get("source", "all"),
                     )
                 else:
-                    result = modrinth.versions(store, q["id"], q["kind"], q["project"])
+                    result = modrinth.versions(store, q["id"], q["kind"], q["project"], source=q.get("source", "all"))
                 self.reply(200, result)
             elif u.path == "/api/job":
                 self.reply(200, self.app.ui_job_snapshot())
             elif u.path == "/api/releases":
-                force = parse_qs(u.query).get("refresh") == ["1"]
+                query = parse_qs(u.query)
+                force = query.get("refresh") == ["1"]
                 try:
-                    versions = self.app.refresh_releases(force=force)
+                    if not force and query.get("cached") == ["1"]:
+                        versions = self.app.release_catalog()
+                    else:
+                        versions = self.app.refresh_releases(force=force)
                     result = {"versions": versions, "stale": False}
                 except lifecycle.OperationCancelled:
                     raise
@@ -1628,9 +1639,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "Некорректное событие окна."})
         if not self.trusted(True):
             return
+        error_target = None
         try:
             u = urlsplit(self.path)
             length = int(self.headers.get("Content-Length", "-1"))
+            if u.path == "/api/catalog/check":
+                if not 1 <= length <= 32 * 1024:
+                    raise ValueError("Выбранный список дополнений слишком большой.")
+                data = json.loads(self.rfile.read(length))
+                with lifecycle.bind(self.app.scope):
+                    result = modrinth.check_selection(self.app.store, data["id"], data["items"])
+                return self.reply(200, result)
             if u.path in ("/api/build-export", "/api/mrpack-export"):
                 if not 0 < length <= 1024:
                     raise ValueError("Некорректный запрос выгрузки.")
@@ -1739,6 +1758,32 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError("Передача файла прервана.")
                             out.write(part)
                             left -= len(part)
+                    operation = q.get("dependencies")
+                    if operation in ("plan", "install"):
+                        if q["kind"] != "mods":
+                            raise ValueError("Зависимости доступны только для модов.")
+                        pid, name = q["id"], q["name"]
+                        with lifecycle.bind(self.app.scope), self.app.coordinator.operation():
+                            self.app.require_mutations_allowed()
+                            self.app.require_profile_idle(pid)
+                            if self.app.job_snapshot()["busy"]:
+                                raise ValueError("Дождись завершения текущей операции.")
+                            if operation == "install":
+                                error_target = (pid, "Установка " + name + " с зависимостями")
+                            report, request = modrinth.manual_plan(self.app.store, pid, name, tmp)
+                            if operation == "plan":
+                                return self.reply(200, report)
+                            try:
+                                message = modrinth.install_selection(
+                                    self.app.store, pid, request["items"], lambda _: None, self.app.lock,
+                                    q.get("acknowledgement", ""), local_mod=(name, tmp), request=request,
+                                    transfer=self.app.transfers,
+                                    before_publish=lambda: self.app.care.before_change(pid, "Добавление мода с зависимостями"),
+                                    after_publish=lambda releases: [self.app.care.remember_project(pid, r) for r in releases],
+                                )
+                            except modrinth.NeedsReview as exc:
+                                return self.reply(200, {"review": exc.review})
+                            return self.reply(200, {"ok": True, "message": message})
                     with self.app.lock, self.app.coordinator.operation():
                         self.app.require_mutations_allowed()
                         if card:
@@ -1751,6 +1796,8 @@ class Handler(BaseHTTPRequestHandler):
                             if self.app.job_snapshot()["busy"]:
                                 raise ValueError("Дождись завершения текущей операции.")
                             self.app.require_profile_idle(q["id"])
+                            if q.get("check") != "1":
+                                error_target = (q["id"], "Добавление файла " + q["name"])
                             inspection = modrinth.manual_check(
                                 self.app.store, q["id"], q["kind"], q["name"], tmp
                             )
@@ -1758,6 +1805,8 @@ class Handler(BaseHTTPRequestHandler):
                                 return self.reply(200, inspection)
                             if inspection["blocked"]:
                                 raise ValueError(" ".join(inspection["conflicts"][:3]))
+                            if any(not row["installed"] for row in inspection["required"]):
+                                raise ValueError("Моду нужны дополнительные файлы. Добавь его через подбор зависимостей.")
                             self.app.care.before_change(q["id"], "Добавление файла " + q["name"])
                             self.app.store.import_file(
                                 q["id"], q["kind"], q["name"], tmp
@@ -1783,6 +1832,11 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as exc:
+            if error_target and not self.app.closing.is_set():
+                try:
+                    build_errors.record_operation(self.app.store, *error_target, exc)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass
             self.reply(400, {"error": str(exc) or "Операция не удалась."})
 
 

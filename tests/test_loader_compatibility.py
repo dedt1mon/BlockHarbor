@@ -369,11 +369,11 @@ class LoaderCatalogTests(unittest.TestCase):
         self.assertEqual(reopened["fabric"]["source"], "cache")
 
     def test_forge_catalog_retains_calendar_releases_but_excludes_manual_patch_versions(self):
-        pins = ("1.4.7-6.6.2.534", "1.5.2-7.8.1.738", "1.7.10-10.13.4.1614-1.7.10", "1.21.1-52.1.0", "26.3-66.0.0")
+        pins = ("1.4.7-6.6.2.534", "1.5.2-7.8.1.738", "1.7.10-10.13.4.1614-1.7.10", "1.7.10_pre4-10.12.2.1149-prerelease", "1.21.1-52.1.0", "26.3-66.0.0")
         xml = "<metadata><versioning><versions>" + "".join(f"<version>{pin}</version>" for pin in pins) + "</versions></versioning></metadata>"
         with patch.object(preparation, "metadata_response", return_value=SimpleNamespace(text=xml)):
             result = loader_catalog._fetch_provider("forge")
-        self.assertEqual(set(result["versions"]), {"1.5.2", "1.7.10", "1.21.1", "26.3"})
+        self.assertEqual(set(result["versions"]), {"1.5.2", "1.7.10", "1.7.10-pre4", "1.21.1", "26.3"})
 
     def test_neoforge_catalog_understands_legacy_calendar_and_preview_pins(self):
         pins = ("20.2.3-beta", "21.1.90", "26.1.2.3", "26.3.0.10", "26.1.0.0-alpha.15+pre-3", "26.1.0.0-alpha.14+snapshot-11")
@@ -472,6 +472,12 @@ class LoaderCompatibilityApiTests(unittest.TestCase):
         reopened = App(self.app.store.root)
         self.assertEqual(reopened.version_catalog()[:3], rows)
         self.assertEqual(reopened.store.profile(self.pid)["version"], "1.20.1")
+
+    def test_release_picker_can_read_all_categories_without_waiting_for_network(self):
+        with patch.object(game, "version_catalog", side_effect=AssertionError("network")):
+            result = self.call("/api/releases?cached=1")
+        self.assertEqual(result["allVersions"], self.app.version_catalog())
+        self.assertEqual(result["versions"], self.app.release_catalog())
 
     def test_release_endpoint_keeps_all_categories_available_when_refresh_is_offline(self):
         before = self.app.version_catalog()

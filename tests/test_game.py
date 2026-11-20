@@ -70,7 +70,10 @@ class GameTests(unittest.TestCase):
         versions = [
             {"loader": {"stable": True, "version": v}} for v in ("0.20.2", "0.20.10")
         ]
-        with patch.object(game, "_get_json", side_effect=[versions, profile]) as get:
+        with (
+            patch.object(game.loader_catalog, "meta_pin", return_value=None),
+            patch.object(game, "_get_json", side_effect=[versions, profile]) as get,
+        ):
             self.prepare("fabric")
             self.prepare("fabric", memory=8192)
         self.assertEqual(get.call_count, 2)
@@ -98,7 +101,7 @@ class GameTests(unittest.TestCase):
             patch.object(
                 game,
                 "_get_json",
-                side_effect=[[{"loader": {"version": "0.20.10"}}], bad_profile],
+                return_value=bad_profile,
             ),
             self.assertRaises(ValueError),
         ):
@@ -127,21 +130,12 @@ class GameTests(unittest.TestCase):
 
         with (
             patch.object(mc.mod_loader, "get_mod_loader", return_value=provider),
-            patch.object(
-                game,
-                "_get_json",
-                return_value={
-                    "promos": {
-                        "1.21.1-recommended": "52.1.20",
-                        "1.21.1-latest": "52.1.21",
-                    }
-                },
-            ),
+            patch.object(game, "_get_json", side_effect=AssertionError("redundant lookup")),
             patch.object(mc.install, "install_minecraft_version"),
             patch.object(
                 mc.runtime, "get_executable_path", return_value=managed_java
             ) as runtime,
-            patch.object(provider, "install", side_effect=fake_install) as installer,
+            patch.object(provider._base, "install", side_effect=fake_install) as installer,
         ):
             game.official_prepare(version, "forge", self.instance, "Forge · Test")
         runtime.assert_called_once_with("java-runtime-delta", self.cache)

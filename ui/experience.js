@@ -105,6 +105,26 @@
     const data = galleryState(pid), profile = state.profiles.find(p=>p.id===pid);
     modal("Удалённые скриншоты · " + (profile?.name || "Сборка"), `<p class="note">Восстановление вернёт снимки в галерею. Существующие файлы с такими же именами сохраняются.</p><div class="gallery-trash">${data.trash.length ? data.trash.map(batch=>`<section class="gallery-trash-batch"><div><strong>${date(batch.created)}</strong><small>${batch.count} файлов · ${fmt(batch.size)}</small><details><summary>Имена файлов</summary><ul class="gallery-file-list">${batch.names.map(name=>`<li>${esc(name)}</li>`).join("")}</ul></details></div>${expButton("restoreScreenshots", "Восстановить", "refresh", `data-gallery-profile="${pid}" data-gallery-batch="${batch.id}"`)}</section>`).join("") : '<p class="note">Удалённых снимков нет.</p>'}</div>`);
   }
+  async function loadBuildErrors() {
+    const list = $("#buildErrorsPanel [data-error-list]");
+    const profile = active();
+    if (!list || !profile) return;
+    try {
+      const data = await query("buildErrors", {id:profile.id});
+      if (!list.isConnected) return;
+      const groups = data.groups.map(group => {
+        const last = group.events[0];
+        const rows = group.events.map(event =>
+          `<li><strong>${esc(event.stage)}</strong><small>${esc(date(event.created))}</small><pre>${esc(event.evidence)}</pre></li>`
+        ).join("");
+        return `<article class="diagnostic-finding"><div class="line"><h3>${esc(group.title)}</h3><small>${esc(date(last.created))}</small></div><p>${esc(group.advice)}</p><details><summary>Подробности (${group.events.length})</summary><ul class="build-error-events">${rows}</ul></details></article>`;
+      }).join("");
+      list.innerHTML = (groups || '<p class="empty">Пока нет записанных ошибок.</p>') +
+        expButton("diagnostics", "Проверить журнал Minecraft", "search", `data-experience-profile="${esc(profile.id)}"`);
+    } catch (error) {
+      if (list.isConnected) list.textContent = error.message;
+    }
+  }
   async function diagnosticsBox(pid) {
     const p = pid ? state.profiles.find(x=>x.id===pid) : active(); if (!p) return notice("Сборка для диагностики не найдена.", true);
     modal("Диагностика · " + p.name, '<p id="diagnosticLoading">Читаем журнал и метаданные установленных модов…</p>');
@@ -115,6 +135,13 @@
   }
   async function handle(action, el) {
     const p = active();
+    if (action === "showBuildErrors") {
+      const pid = el.dataset.experienceProfile;
+      if (!state.profiles.some(item => item.id === pid)) return notice("Сборка для этой записи не найдена.", true);
+      await act("select", {id:pid});
+      kind = "errors";
+      return navigateFresh("addons");
+    }
     if (action === "diagnostics") return diagnosticsBox(el.dataset.experienceProfile);
     if (action === "manageDiagnosticBuild") {await act("select", {id:el.dataset.experienceProfile}); closeDialog(); view="addons"; kind="mods"; return refresh();}
     if (action === "savePreferences") { await act("experiencePreferences", {scale:Number($("#uiScale").value),reducedMotion:$("#reducedMotion").checked}); await refresh(); return notice("Оформление сохранено."); }
@@ -184,8 +211,8 @@
     }
   });
   // The existing picker performs format/compatibility checks for dropped files too.
-  document.addEventListener("dragover",e=>{if(view==="addons"&&e.dataTransfer?.types.includes("Files")){e.preventDefault();if($("#filePick"))$("#view").classList.add("drop-ready");}});
+  document.addEventListener("dragover",e=>{if(view==="addons"&&Object.hasOwn(kinds,kind)&&e.dataTransfer?.types.includes("Files")){e.preventDefault();if($("#filePick"))$("#view").classList.add("drop-ready");}});
   document.addEventListener("dragleave",e=>{if(!e.relatedTarget)$("#view").classList.remove("drop-ready");});
-  document.addEventListener("drop",e=>{if(view!=="addons"||!e.dataTransfer?.files.length)return;e.preventDefault();$("#view").classList.remove("drop-ready");const input=$("#filePick");if(!input)return notice("Открой вкладку модов, шейдеров или ресурс-паков для добавления файлов.",true);input.files=e.dataTransfer.files;input.dispatchEvent(new Event("change"));});
-  window.ExperienceUI = {settingsPanel,wardrobe,gallery,filterBar,preferences,media,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();filterRows();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
+  document.addEventListener("drop",e=>{if(view!=="addons"||!e.dataTransfer?.files.length)return;e.preventDefault();if(!Object.hasOwn(kinds,kind))return notice("Открой вкладку модов, шейдеров или ресурс-паков.",true);$("#view").classList.remove("drop-ready");const input=$("#filePick");if(!input)return notice("Открой вкладку модов, шейдеров или ресурс-паков для добавления файлов.",true);input.files=e.dataTransfer.files;input.dispatchEvent(new Event("change"));});
+  window.ExperienceUI = {settingsPanel,wardrobe,gallery,filterBar,preferences,media,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();filterRows();if($("#buildErrorsPanel"))loadBuildErrors();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
 })();

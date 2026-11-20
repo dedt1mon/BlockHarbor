@@ -37,6 +37,7 @@ DESCRIPTORS = (
     "quilt.mod.json",
     "META-INF/mods.toml",
     "META-INF/neoforge.mods.toml",
+    "mcmod.info",
 )
 
 
@@ -96,6 +97,12 @@ def read_archive_entry(jar, label, limit):
         return None
 
 
+def legacy_mods(data):
+    """Forge writers use either a raw array or the versioned modList envelope."""
+    rows = data.get("modList") if isinstance(data, dict) else data
+    return [row for row in rows[:512] if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
 def read_descriptor(jar, label):
     """Read at most one MiB of declarative metadata without extracting the archive."""
     try:
@@ -104,6 +111,8 @@ def read_descriptor(jar, label):
             return {}
         text = raw.decode("utf-8-sig")
         data = tomllib.loads(text) if label.endswith(".toml") else json.loads(text)
+        if label == "mcmod.info":
+            return {"modList": legacy_mods(data)}
         return data if isinstance(data, dict) else {}
     except (KeyError, OSError, ValueError, RuntimeError, RecursionError, zipfile.BadZipFile, zlib.error):
         return {}
@@ -120,7 +129,14 @@ def mod_info(file, stamp):
                 data = read_descriptor(jar, label)
                 if not data:
                     continue
-                if label.endswith(".toml"):
+                if label == "mcmod.info":
+                    for mod in data["modList"]:
+                        key = mod.get("modid")
+                        if isinstance(key, str) and key:
+                            ids.add(key.lower())
+                            if isinstance(mod.get("version"), str):
+                                version = mod["version"]
+                elif label.endswith(".toml"):
                     for m in data.get("mods", []):
                         if isinstance(m, dict) and isinstance(m.get("modId"), str):
                             ids.add(m["modId"].lower())

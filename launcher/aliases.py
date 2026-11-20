@@ -92,14 +92,14 @@ def _download(release: ModRelease) -> bytes:
     lifecycle.check()
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/2.4.11 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": "BlockHarbor/2.5.0 (Minecraft Java desktop launcher)"},
     )
     try:
         with lifecycle.response(urlopen(request, timeout=30)) as response:
             raw = response.read(release.size + 1)
     except OSError as exc:
         raise SkinError(
-            f"Не удалось скачать {release.title} с Modrinth. Проверьте соединение."
+            f"Не удалось скачать {release.title} из каталога. Проверьте соединение."
         ) from exc
     if len(raw) != release.size or hashlib.sha512(raw).hexdigest() != release.sha512:
         raise SkinError(

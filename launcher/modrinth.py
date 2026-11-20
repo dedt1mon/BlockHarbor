@@ -1,4 +1,4 @@
-"""Browse compatible Modrinth Java projects and install verified releases per instance."""
+"""Browse compatible Java add-ons from the community catalog and reviewed publisher releases."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import catalog_filters, compatibility, lifecycle
+from . import catalog_filters, compatibility, lifecycle, trusted_catalog
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
 from .store import KINDS, MAX_ADDON, clean_filename, verify_pack
@@ -30,10 +30,14 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/2.4.11 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.5.0 (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):
+    pass
+
+
+class CatalogNotFound(CatalogError):
     pass
 
 
@@ -43,7 +47,7 @@ class PlanConflict(CatalogError):
 
 def _id(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9]{1,32}", value):
-        raise CatalogError("Недопустимый идентификатор проекта или версии Modrinth.")
+        raise CatalogError("Недопустимый идентификатор проекта или версии.")
     return value
 
 
@@ -60,7 +64,7 @@ def _category(kind, loader):
 def _allowed(url, hosts):
     parts = urlsplit(url)
     if parts.scheme != "https" or parts.netloc.lower() not in hosts:
-        raise CatalogError("Modrinth вернул неподдерживаемый адрес загрузки.")
+        raise CatalogError("Каталог вернул неподдерживаемый адрес загрузки.")
 
 
 class _Redirect(HTTPRedirectHandler):
@@ -97,18 +101,18 @@ def _open(url, hosts, body=None, *, timeout=30):
         exc.close()
         if code == 429:
             raise CatalogError(
-                "Modrinth временно ограничил запросы. Подожди немного и повтори."
+                "Сервис временно ограничил запросы. Подожди немного и повтори."
             ) from None
         if code == 404:
-            raise CatalogError(
-                "Этот проект или файл больше не доступен на Modrinth."
+            raise CatalogNotFound(
+                "Этот проект или файл больше не доступен в каталоге."
             ) from None
         raise CatalogError(
-            f"Modrinth вернул HTTP {code}. Повтори попытку позже."
+            f"Каталог вернул HTTP {code}. Повтори попытку позже."
         ) from None
     except (OSError, URLError) as exc:
         raise CatalogError(
-            "Не удалось подключиться к Modrinth. Проверь интернет и повтори попытку."
+            "Не удалось подключиться к каталогу. Проверь интернет и повтори попытку."
         ) from exc
 
 
@@ -126,12 +130,16 @@ def _read_response(response):
         return json.loads(data)
     except (ValueError, UnicodeError) as exc:
         raise CatalogError(
-            "Modrinth вернул нечитаемый ответ. Попробуй ещё раз."
+            "Каталог вернул нечитаемый ответ. Попробуй ещё раз."
         ) from exc
 
 
 def _get(path, **params):
     lifecycle.check()
+    if path.startswith("/version/") and (reviewed := trusted_catalog.version(path.removeprefix("/version/"))):
+        return reviewed
+    if path.startswith("/project/") and (reviewed := trusted_catalog.project(path.removeprefix("/project/"))):
+        return reviewed
     suffix = "?" + urlencode(params) if params else ""
     return _get_cached(_API + path + suffix, int(time.monotonic() // 300))
 
@@ -159,7 +167,7 @@ def dependency_suggestions(query):
     }
 
 
-def search(profile, kind, query, offset, filters=None, sort="relevance"):
+def search(profile, kind, query, offset, filters=None, sort="relevance", source="community"):
     category = _category(kind, profile["loader"])
     if len(query) > 180:
         raise CatalogError("Поисковый запрос длиннее 180 символов.")
@@ -169,33 +177,54 @@ def search(profile, kind, query, offset, filters=None, sort="relevance"):
     facets = [["project_type:" + category], ["versions:" + profile["version"]]]
     if kind == "mods":
         facets.append(["categories:" + profile["loader"]])
-    facets.extend(
-        catalog_filters.facets(kind, {} if filters is None else filters, sort)
-    )
-    result = _get(
-        "/search",
-        query=query.strip(),
-        facets=json.dumps(facets, separators=(",", ":")),
-        limit=_PAGE,
-        offset=offset,
-        index=sort,
-    )
-    return {
-        "hits": [
-            {
-                "id": _id(h["project_id"]),
-                "title": h["title"],
-                "author": h.get("author", ""),
-                "description": h.get("description", ""),
-                "downloads": h.get("downloads", 0),
-                "icon": _icon_url(h.get("icon_url"), h["project_id"]),
-            }
-            for h in result["hits"]
-        ],
-        "offset": offset,
-        "limit": _PAGE,
-        "total": result["total_hits"],
-    }
+    extra_facets = catalog_filters.facets(kind, {} if filters is None else filters, sort)
+    facets.extend(extra_facets)
+    if source not in {"all", "github", "community"}:
+        raise CatalogError("Неизвестный источник дополнений.")
+    publisher = [] if source == "community" else trusted_catalog.search(profile, kind, category, query, extra_facets)
+    if source == "github":
+        ordered = _order_hits(publisher, sort)
+        return {"hits": ordered[offset:offset + _PAGE], "offset": offset, "limit": _PAGE, "total": len(ordered)}
+
+    # Pages refer to one combined, duplicate-free list. Skip publisher projects
+    # on the remote side only if they satisfy this profile, text and filters.
+    facets.extend([["project_id!=" + hit["id"]] for hit in publisher if not hit["id"].startswith("BHghP")])
+    start = max(0, offset - len(publisher))
+    try:
+        result = _get(
+            "/search", query=query.strip(), facets=json.dumps(facets, separators=(",", ":")),
+            limit=_PAGE + len(publisher), offset=start, index=sort,
+        )
+    except CatalogError:
+        if source != "all":
+            raise
+        ordered = _order_hits(publisher, sort)
+        return {"hits": ordered[offset:offset + _PAGE], "offset": offset, "limit": _PAGE,
+                "total": len(ordered), "partial": True,
+                "message": "Основной каталог недоступен. Показаны подходящие выпуски авторов с GitHub."}
+    remote = [
+        {"id": _id(h["project_id"]), "title": h["title"], "author": h.get("author", ""),
+         "description": h.get("description", ""), "downloads": h.get("downloads", 0),
+         "icon": _icon_url(h.get("icon_url"), h["project_id"]), "follows": h.get("follows", 0),
+         "newest": h.get("date_created", ""), "updated": h.get("date_modified", ""),
+         "source": "community", "sourceTitle": "Основной каталог"}
+        for h in result["hits"]
+    ]
+    if not publisher:
+        return {"hits": remote, "offset": offset, "limit": _PAGE, "total": result["total_hits"]}
+    for hit in publisher:
+        # Opening a mixed result also lists newer releases from the main catalog.
+        if not hit["id"].startswith("BHghP"):
+            hit.update(source="all", sourceTitle="Каталог и GitHub автора")
+    ordered = _order_hits(publisher + remote, sort)
+    index = offset - start
+    return {"hits": ordered[index:index + _PAGE], "offset": offset, "limit": _PAGE, "total": result["total_hits"] + len(publisher)}
+
+
+def _order_hits(hits, sort):
+    if sort == "relevance":
+        return hits
+    return sorted(hits, key=lambda hit: hit[sort], reverse=True)
 
 
 @dataclass(frozen=True)
@@ -215,6 +244,7 @@ class Package:
     icon: str = ""
     title: str = ""
     description: str = ""
+    renderers: tuple = ()
 
 
 def _package(v, profile, kind, project, icon="", metadata=None):
@@ -237,9 +267,11 @@ def _package(v, profile, kind, project, icon="", metadata=None):
     f = next((f for f in files if f.get("primary")), files[0])
     name = clean_filename(f["filename"])
     sha = str(f.get("hashes", {}).get("sha512", "")).lower()
-    _allowed(f["url"], _CDN_HOSTS)
+    if not trusted_catalog.is_publisher_file(project, v.get("id"), f):
+        _allowed(f["url"], _CDN_HOSTS)
     if not re.fullmatch("[a-f0-9]{128}", sha) or not 0 < int(f["size"]) <= MAX_ADDON:
         return None
+    renderers = {"iris": "Iris", "optifine": "OptiFine", "canvas": "Canvas", "vanilla": "Vanilla"}
     return Package(
         _id(v["id"]),
         project,
@@ -256,22 +288,51 @@ def _package(v, profile, kind, project, icon="", metadata=None):
         _icon_url(icon, project),
         str((metadata or {}).get("title", ""))[:180],
         str((metadata or {}).get("description", ""))[:500],
+        tuple(renderers[r] for r in v["loaders"] if r in renderers) if kind == "shaderpacks" else (),
     )
 
 
 def _project_kind(project, metadata=None):
-    metadata = metadata if metadata is not None else _get("/project/" + _id(project))
+    metadata = metadata if metadata is not None else trusted_catalog.project(project) or _get("/project/" + _id(project))
     if metadata["id"] != project:
-        raise CatalogError("Modrinth вернул сведения о другом проекте.")
+        raise CatalogError("Каталог вернул сведения о другом проекте.")
     for kind, project_type in _TYPES.items():
         if metadata["project_type"] == project_type:
             return kind
     raise CatalogError(
-        "Для этой зависимости нужен неподдерживаемый тип проекта Modrinth."
+        "Для этой зависимости нужен неподдерживаемый тип проекта."
     )
 
 
-def _releases(profile, kind, project):
+def _releases(profile, kind, project, source="all"):
+    if source not in {"all", "community", "github"}:
+        raise CatalogError("Неизвестный источник дополнений.")
+    bundled = trusted_catalog.project(project)
+    if source == "community" or (not bundled and source == "all"):
+        return _community_releases(profile, kind, project)
+    if not bundled:
+        return []
+    _category(kind, profile["loader"])
+    if _project_kind(project, bundled) != kind:
+        raise CatalogError("Выбери проект из текущей категории дополнений.")
+    author = [_package(v, profile, kind, project, bundled.get("icon_url", ""), bundled)
+              for v in trusted_catalog.compatible(profile, kind, project)]
+    author = [r for r in author if r is not None]
+    if source == "github" or project.startswith("BHghP"):
+        return author
+    try:
+        community = _community_releases(profile, kind, project)
+    except CatalogError:
+        if author:
+            return author
+        raise
+    # Keep canonical community IDs for the normal and automatic update paths.
+    # The GitHub-only view returns the publisher ID, which selects its own URL.
+    hashes = {r.sha512 for r in community}
+    return sorted(community + [r for r in author if r.sha512 not in hashes], key=lambda r: r.published, reverse=True)
+
+
+def _community_releases(profile, kind, project):
     _category(kind, profile["loader"])
     metadata = _get("/project/" + _id(project))
     if _project_kind(project, metadata) != kind:
@@ -310,9 +371,9 @@ def _installed(files, release):
     return None
 
 
-def versions(store, pid, kind, project):
+def versions(store, pid, kind, project, source="all"):
     profile = store.profile(pid)
-    releases = _releases(profile, kind, _id(project))
+    releases = _releases(profile, kind, _id(project), source=source)
     existing = _files(store.content_folder(pid, kind), kind)
     return {
         "versions": [
@@ -325,104 +386,147 @@ def versions(store, pid, kind, project):
                 "filename": r.filename,
                 "size": r.size,
                 "installed": bool(_installed(existing, r)),
+                "source": "github" if trusted_catalog.has_version(r.version) else "community",
+                "renderers": list(r.renderers),
             }
             for r in releases
         ]
     }
 
 
+def _selections(items):
+    if not isinstance(items, list) or not 1 <= len(items) <= 32:
+        raise CatalogError("Выбери от 1 до 32 дополнений за одну установку.")
+    selected = {}
+    for row in items:
+        if not isinstance(row, dict) or row.get("kind") not in _TYPES:
+            raise CatalogError("Некорректная категория выбранного дополнения.")
+        project = _id(row.get("project"))
+        version = _id(row["version"]) if row.get("version") is not None else None
+        item = {"kind": row["kind"], "project": project, "version": version}
+        source = row.get("source", "all")
+        if source not in ("all", "community", "github"):
+            raise CatalogError("Неизвестный источник дополнений.")
+        if source != "all":
+            item["source"] = source
+        if project in selected and selected[project] != item:
+            raise PlanConflict("Один проект выбран несколько раз с разными параметрами.")
+        selected[project] = item
+    return list(selected.values())
+
+
 def _plan(store, profile, kind, project, version):
-    # Resolve the whole graph before touching the game. Unpinned dependencies reuse a
-    # compatible local release and otherwise take the newest stable compatible file.
+    return _plan_items(store, profile, [{"project": project, "version": version, "kind": kind}])
+
+
+def _plan_items(store, profile, items):
+    # Rebuild only when a pin arrives from another branch. Constraints of a superseded
+    # version must disappear with that version; otherwise an unused branch can block a basket.
     pid = profile["id"]
-    queue = deque([(project, version, kind)])
-    chosen = {}
-    constraints = {}
-    while queue:
-        project, pinned, expected_kind = queue.popleft()
-        if pinned and project in constraints and constraints[project] != pinned:
-            raise PlanConflict(
-                "Проекты требуют разные версии одной зависимости. Выбери другую версию дополнения."
-            )
-        if pinned:
-            constraints[project] = pinned
-        if project in chosen and (not pinned or chosen[project].version == pinned):
-            continue
-        if len(chosen) >= 64 or len(queue) > 256:
-            raise CatalogError("Слишком много зависимостей в одной установке.")
-        category = expected_kind or _project_kind(project)
-        compatible = _releases(profile, category, project)
-        files = _files(store.content_folder(pid, category), category)
-        present = [r for r in compatible if _installed(files, r)]
-        if pinned:
-            release = next((r for r in compatible if r.version == pinned), None)
-            if release is None:
-                # Version-pinned dependencies can be unlisted but remain downloadable.
-                release = _package(
-                    _get("/version/" + _id(pinned)), profile, category, project
-                )
-        else:
-            release = (
-                next(iter(present), None)
-                or next((r for r in compatible if r.channel == "release"), None)
-                or next(iter(compatible), None)
-            )
-        if release is None or (pinned and release.version != pinned):
-            raise PlanConflict(
-                f"На Modrinth нет совместимого файла для {_get('/project/' + project).get('title') or project} и этой сборки."
-            )
-        other = next((r for r in present if r.sha512 != release.sha512), None)
-        if other:
-            actual = _installed(files, other)
-            actual_name = actual.name if actual else other.filename
-            raise PlanConflict(
-                f"Для установки {release.filename} нужно убрать другую версию ({actual_name}) или выбрать установленный выпуск."
-            )
-        chosen[project] = release
-        for dep in release.deps:
-            if dep.get("dependency_type") != "required":
+    roots = {item["project"]: item for item in items}
+    inventory = _inventory(store, pid)
+    by_kind = {kind: [p for p in inventory if p.parent.name == kind] for kind in _TYPES}
+    filenames = {p.name for p in inventory}
+
+    @lru_cache(maxsize=128)
+    def candidates(project, category, source):
+        if not category:
+            category = _project_kind(project)
+        releases = _releases(profile, category, project) if source == "all" else _releases(profile, category, project, source=source)
+        present = [(r, file) for r in releases if (file := _installed(by_kind[category], r))]
+        return category, releases, present
+
+    @lru_cache(maxsize=256)
+    def exact_version(pin):
+        return _get("/version/" + _id(pin))
+
+    root_pins = {p: row["version"] for p, row in roots.items() if row["version"]}
+    pins = dict(root_pins)
+    for _ in range(32):
+        targets = {p: {pin} for p, pin in root_pins.items()}
+        chosen, edges, conflicts = {}, {}, []
+        queue = deque(roots)
+        while queue:
+            project = queue.popleft()
+            if project in chosen:
                 continue
-            required, exact = dep.get("project_id"), dep.get("version_id")
-            if exact:
-                exact = _id(exact)
-                if not required:
-                    required = _get("/version/" + exact)["project_id"]
-            if not required:
-                external = dep.get("file_name")
-                if external and any(f.name == external for f in _inventory(store, pid)):
+            if len(chosen) >= 128 or len(queue) > 512:
+                raise CatalogError("Слишком много зависимостей в одной установке.")
+            row = roots.get(project, {})
+            pin = pins.get(project)
+            source = "github" if pin and pin.startswith("BHghV") else row.get("source", "all")
+            category, compatible, present = candidates(project, row.get("kind"), source)
+            if pin:
+                # One verified binary can have distinct IDs at the two providers.
+                pin_id = trusted_catalog.canonical_version(pin)
+                release = next((r for r in compatible if trusted_catalog.canonical_version(r.version) == pin_id), None)
+                if release is None and source != "github":
+                    release = _package(exact_version(pin), profile, category, project)
+            else:
+                stable = next((r for r in compatible if r.channel == "release"), None)
+                release = present[0][0] if present else stable or next(iter(compatible), None)
+            edges[project] = []
+            chosen[project] = release
+            if release is None or (pin and trusted_catalog.canonical_version(release.version) != pin_id):
+                conflicts.append(f"В каталоге нет совместимого файла для {project} и этой сборки.")
+                continue
+            for installed, file in present:
+                if installed.sha512 != release.sha512:
+                    conflicts.append(f"Для установки {release.filename} нужно убрать другую версию ({file.name}) или выбрать установленный выпуск.")
+                    break
+            for dep in release.deps:
+                if dep.get("dependency_type") != "required":
                     continue
-                raise PlanConflict(
-                    f"{release.filename} требует внешний файл {external or 'без имени'}. Для него нужна ручная установка."
-                )
-            queue.append((_id(required), exact, None))
-    # Only keep dependencies reachable from the final pinned choices.
-    reachable = set()
-    ordered = []
+                nxt, exact = dep.get("project_id"), dep.get("version_id")
+                if exact:
+                    exact = _id(exact)
+                    if not nxt:
+                        nxt = exact_version(exact)["project_id"]
+                if not nxt:
+                    external = dep.get("file_name")
+                    if not external or external not in filenames:
+                        conflicts.append(f"{release.filename} требует внешний файл {external or 'без имени'}. Для него нужна ручная установка.")
+                    continue
+                nxt = _id(nxt)
+                edges[project].append(nxt)
+                if exact:
+                    targets.setdefault(nxt, set()).add(exact)
+                queue.append(nxt)
+        next_pins = {p: root_pins.get(p, min(versions)) for p, versions in targets.items()}
+        if pins != next_pins:
+            pins = next_pins
+            continue
+        if any(len({trusted_catalog.canonical_version(v) for v in versions}) > 1 for versions in targets.values()):
+            raise PlanConflict("Проекты требуют разные версии одной зависимости. Выбери другой выпуск дополнения.")
+        if conflicts:
+            raise PlanConflict(conflicts[0])
+        break
+    else:
+        raise PlanConflict("Не удалось согласовать версии общих зависимостей. Выбери другой выпуск.")
+    visited, ordered = set(), []
 
-    def visit(key):
-        if key in reachable:
+    def visit(project):
+        if project in visited:
             return
-        reachable.add(key)
-        for dep in chosen[key].deps:
-            if dep.get("dependency_type") == "required" and (
-                dep.get("project_id") or dep.get("version_id")
-            ):
-                nxt = (
-                    dep.get("project_id")
-                    or _get("/version/" + _id(dep["version_id"]))["project_id"]
-                )
-                visit(nxt)
-        ordered.append(chosen[key])
+        visited.add(project)
+        for child in edges[project]:
+            visit(child)
+        ordered.append(chosen[project])
 
-    visit(next(iter(chosen)))
+    for project in roots:
+        visit(project)
     return ordered
 
 
 @lru_cache(maxsize=32)
 def _versions_by_hash(digests, period):
-    body = json.dumps({"algorithm": "sha512", "hashes": digests}).encode("ascii")
+    local = {digest: v for digest in digests if (v := trusted_catalog.by_hash(digest))}
+    unknown = [digest for digest in digests if digest not in local]
+    if not unknown:
+        return local
+    body = json.dumps({"algorithm": "sha512", "hashes": unknown}).encode("ascii")
     with lifecycle.response(_open(_API + "/version_files", _API_HOSTS, body)) as response:
-        return _read_response(response)
+        return {**_read_response(response), **local}
 
 
 def _inventory(store, pid):
@@ -464,9 +568,15 @@ def _recognized(inventory):
     return identified, limited
 
 
-def _catalog_report(releases, inventory):
+def _catalog_report(releases, inventory, roots=None):
     result = compatibility.report()
-    existing, limited = _recognized(inventory)
+    try:
+        existing, limited = _recognized(inventory)
+    except CatalogError:
+        if not releases or any(not r.version.startswith("BHghV") for r in releases):
+            raise
+        existing, limited = [], False
+        result["warnings"].append("Сервис распознавания установленных файлов недоступен. Проверим описания модов в самих файлах.")
     if limited:
         result["warnings"].append(
             "Каталог проверил до 1024 файлов и 4 ГБ данных. Для остальных файлов доступны проверки по данным загрузчика."
@@ -485,16 +595,20 @@ def _catalog_report(releases, inventory):
                 for p, v, f, _, planned in items
                 if not planned
                 and (not project or p == project)
-                and (not version or v == version)
+                and (not version or trusted_catalog.canonical_version(v) == trusted_catalog.canonical_version(version))
             ),
             "",
         )
 
-    for r in releases[:-1]:
-        filename = installed_name(r.project, r.version)
+    selected = {releases[-1].project} if roots is None else set(roots)
+    for r in releases:
+        if r.project in selected:
+            continue
+        existing_file = _installed([p for p in inventory if p.parent.name == r.kind], r)
+        filename = existing_file.name if existing_file else installed_name(r.project, r.version)
         result["required"].append(
             {
-                "name": _get("/project/" + r.project).get("title") or r.name,
+                "name": r.title or r.name,
                 "filename": filename or r.filename,
                 "installed": bool(filename),
                 "version": r.number,
@@ -516,11 +630,11 @@ def _catalog_report(releases, inventory):
                     if (
                         (target or pin)
                         and (not target or p == target)
-                        and (not pin or v == pin)
+                        and (not pin or trusted_catalog.canonical_version(v) == trusted_catalog.canonical_version(pin))
                     ):
                         pair = " и ".join(sorted((filename, f)))
                         result["warnings"].append(
-                            f"Автор на Modrinth отмечает несовместимость: {pair}. Можно выбрать другой выпуск или убрать конфликтующий файл."
+                            f"Автор отмечает несовместимость: {pair}. Можно выбрать другой выпуск или убрать конфликтующий файл."
                         )
                 if planned and not (target or pin) and external:
                     result["warnings"].append(
@@ -606,19 +720,87 @@ def _staged_warnings(local, catalog):
 
 
 def check(store, pid, kind, project, version):
+    request = {"id": pid, "kind": kind, "project": project, "version": version}
+    return check_selection(store, pid, [request], request=request)
+
+
+def check_selection(store, pid, items, *, request=None):
+    profile = store.profile(pid)
     try:
-        releases = _plan(store, store.profile(pid), kind, _id(project), _id(version))
+        selected = _selections(items)
+        releases = _plan_items(store, profile, selected)
     except PlanConflict as exc:
         result = compatibility.report()
         result.update(blocked=True, conflicts=[str(exc)], reviewToken="")
         return result
     inventory = _inventory(store, pid)
-    result = _catalog_report(releases, inventory)
-    request = {"id": pid, "kind": kind, "project": project, "version": version}
-    result["reviewToken"] = _review_token(
-        request, releases, inventory, result["warnings"]
-    )
+    roots = {r["project"] for r in selected}
+    result = _catalog_report(releases, inventory, roots)
+    result["selected"] = [
+        {"project": r.project, "name": r.title or r.name, "version": r.number, "filename": r.filename,
+         "installed": bool(_installed([p for p in inventory if p.parent.name == r.kind], r))}
+        for r in releases if r.project in roots
+    ]
+    by_project = {r.project: r for r in releases}
+    result["items"] = [{**item, "version": by_project[item["project"]].version} for item in selected]
+    request = request or {"id": pid, "items": result["items"]}
+    result["reviewToken"] = _review_token(request, releases, inventory, result["warnings"])
     return result
+
+
+# These are loader mod IDs whose official catalog slug differs from the ID in the JAR.
+# For other IDs use an exact slug only. The downloaded archive must actually provide the ID.
+_DEPENDENCY_SLUGS = {
+    "fabric": "fabric-api", "fabric_api": "fabric-api", "cloth_config": "cloth-config",
+    "cloth-config2": "cloth-config", "forgeconfigapiport": "forge-config-api-port",
+    "architectury": "architectury-api", "roughlyenoughitems": "rei",
+    "resourcefullib": "resourceful-lib", "resourcefulconfig": "resourceful-config",
+    "balm-fabric": "balm",
+}
+
+
+def _unresolved(rows):
+    details = "; ".join(
+        f"{r['source']} требует {r['id']} {r['version']}" for r in rows[:6]
+    )
+    raise PlanConflict(
+        details + ". Совместимый файл зависимости не найден. Добавь подходящую версию вручную "
+        "или выбери другой выпуск мода."
+    )
+
+
+def _descriptor_dependencies(profile, missing):
+    requirements = {}
+    for row in missing:
+        requirements.setdefault(row["id"], []).append(row)
+    items = {}
+    for mod_id, rows in requirements.items():
+        slug = _DEPENDENCY_SLUGS.get(mod_id, mod_id)
+        normalized = slug.replace("_", "-")
+        for candidate in dict.fromkeys((slug, normalized, mod_id)):
+            try:
+                metadata = _get("/project/" + candidate)
+            except CatalogNotFound:
+                continue
+            project = metadata.get("id")
+            if not project or metadata.get("project_type") != "mod":
+                continue
+            releases = _releases(profile, "mods", _id(project))
+            bounds = [row["version"].split(" / ") for row in rows]
+            suitable = [
+                release for release in releases
+                if all(compatibility._any_match(release.number, group) is not False for group in bounds)
+            ]
+            if not suitable:
+                continue
+            picked = next((r for r in suitable if r.channel == "release"), suitable[0])
+            if project in items and items[project]["version"] != picked.version:
+                _unresolved(rows)
+            items[project] = {"project": project, "kind": "mods", "version": picked.version}
+            break
+        else:
+            _unresolved(rows)
+    return list(items.values())
 
 
 def manual_check(store, pid, kind, name, path):
@@ -637,17 +819,37 @@ def manual_check(store, pid, kind, name, path):
     )
 
 
+def manual_plan(store, pid, name, path):
+    profile = store.profile(pid)
+    local = manual_check(store, pid, "mods", name, path)
+    _require_no_conflicts(local)
+    missing = [row for row in local["required"] if not row["installed"]]
+    selected = _descriptor_dependencies(profile, missing)
+    releases = _plan_items(store, profile, selected)
+    inventory = _inventory(store, pid)
+    report = _catalog_report(releases, inventory, set()) if releases else compatibility.report()
+    report["warnings"] = sorted(set(report["warnings"] + _staged_warnings(
+        {**local, "required": []}, report)))
+    request = {"id": pid, "file": name, "sha512": file_hash(path, file_stamp(path), "sha512"), "items": selected}
+    report["reviewToken"] = _review_token(request, releases, inventory, report["warnings"])
+    return report, request
+
+
 def _require_no_conflicts(report):
     if report["blocked"]:
         raise PlanConflict(" ".join(report["conflicts"][:3]))
 
 
 def _download(release, target, transfer=None, status=lambda _message: None):
+    file = {"url": release.url, "filename": release.filename, "size": release.size, "hashes": {"sha512": release.sha512}}
+    hosts = trusted_catalog.RELEASE_HOSTS if trusted_catalog.is_publisher_file(release.project, release.version, file) else _CDN_HOSTS
+    _allowed(release.url, hosts)
     if transfer is not None:
-        transfer.download(release.url, target, title=release.filename, hashes={"sha512": release.sha512}, size=release.size, max_size=MAX_ADDON, hosts=_CDN_HOSTS, category="modrinth", status=status)
+        transfer.download(release.url, target, title=release.filename, hashes={"sha512": release.sha512},
+                          size=release.size, max_size=MAX_ADDON, hosts=hosts, category="content", status=status)
         return
     digest = hashlib.sha512()
-    with lifecycle.response(_open(release.url, _CDN_HOSTS)) as src, target.open("xb") as out:
+    with lifecycle.response(_open(release.url, hosts)) as src, target.open("xb") as out:
         remaining = release.size
         while remaining:
             chunk = src.read(min(256 * 1024, remaining))
@@ -658,7 +860,7 @@ def _download(release, target, transfer=None, status=lambda _message: None):
             remaining -= len(chunk)
         if remaining or src.read(1) or digest.hexdigest() != release.sha512:
             raise CatalogError(
-                "Контрольная сумма или размер скачанного файла не совпали с данными Modrinth."
+                "Контрольная сумма или размер скачанного файла не совпали с данными выпуска."
             )
 
 
@@ -687,7 +889,7 @@ def _publish_set(store, pid, releases, staged):
         target = folder / release.filename
         if os.path.lexists(target):
             raise CatalogError(
-                f"Файл {release.filename} уже есть и отличается от версии Modrinth."
+                f"Файл {release.filename} уже есть и отличается от выбранной версии."
             )
         if release.kind == "mods":
             ids = mod_info(src, file_stamp(src))[0] - {""}
@@ -760,63 +962,112 @@ def _save_project_icons(store, pid, releases, status):
 def install(
     store, pid, kind, project, version, status, mutation_lock=None, acknowledgement="", *, before_publish=None, transfer=None, after_publish=None
 ):
-    profile = store.profile(pid)
-    status("Проверяем совместимость и обязательные зависимости…")
-    releases = _plan(store, profile, kind, _id(project), _id(version))
-    inventory = _inventory(store, pid)
     request = {"id": pid, "kind": kind, "project": project, "version": version}
-    catalog = _catalog_report(releases, inventory)
+    return install_selection(
+        store, pid, [request], status, mutation_lock, acknowledgement,
+        before_publish=before_publish, transfer=transfer, after_publish=after_publish, request=request,
+    )
+
+
+def install_selection(
+    store, pid, items, status, mutation_lock=None, acknowledgement="", *,
+    before_publish=None, transfer=None, after_publish=None, request=None, local_mod=None,
+):
+    profile = store.profile(pid)
+    selected = _selections(items) if items or local_mod is None else []
+    request = request or {"id": pid, "items": selected}
+    roots = {r["project"] for r in selected}
+    status("Проверяем совместимость и обязательные зависимости…")
+    releases = _plan_items(store, profile, selected)
+    inventory = _inventory(store, pid)
+    catalog = _catalog_report(releases, inventory, roots) if releases else compatibility.report()
     _require_no_conflicts(catalog)
     warnings = list(catalog["warnings"])
     if warnings and not acknowledgement:
-        raise NeedsReview(
-            request, _review_token(request, releases, inventory, warnings), warnings
-        )
-    with tempfile.TemporaryDirectory(
-        dir=store.folder(pid), prefix=".modrinth-"
-    ) as work:
+        raise NeedsReview(request, _review_token(request, releases, inventory, warnings), warnings)
+    with tempfile.TemporaryDirectory(dir=store.folder(pid), prefix=".catalog-") as work:
         staged = {}
-        for release in releases:
-            files = _files(store.content_folder(pid, release.kind), release.kind)
-            if _installed(files, release):
-                continue
-            status("Скачиваем " + release.filename + "…")
-            tmp = Path(work) / release.version
-            if transfer is None:
-                _download(release, tmp)
-            else:
-                _download(release, tmp, transfer, status)
-            verify_pack(tmp, release.kind, profile["loader"])
-            staged[release.version] = tmp
+        # Check dependencies declared only inside JARs, including roots already present on disk.
+        # Each new dependency goes through the same verified provider and loader checks.
+        discovered = {}
+        for _ in range(32):
+            by_name = {}
+            for release in releases:
+                key = (release.kind, release.filename.casefold())
+                if key in by_name and by_name[key] != release.sha512:
+                    raise PlanConflict("Два выпуска используют одно имя файла: " + release.filename)
+                by_name[key] = release.sha512
+                if release.version in staged or _installed([p for p in inventory if p.parent.name == release.kind], release):
+                    continue
+                status("Скачиваем " + release.filename + "…")
+                tmp = Path(work) / release.version
+                if transfer is None:
+                    _download(release, tmp)
+                else:
+                    _download(release, tmp, transfer, status)
+                verify_pack(tmp, release.kind, profile["loader"])
+                staged[release.version] = tmp
+            active = {p.name: p for p in inventory if p.parent.name == "mods"}
+            additions = {}
+            for r in releases:
+                if r.kind != "mods":
+                    continue
+                path = staged.get(r.version) or _installed(list(active.values()), r)
+                if path:
+                    name = r.filename if r.version in staged else path.name
+                    if name in active and active[name] != path:
+                        raise PlanConflict("В сборке уже есть другой файл с именем " + name)
+                    additions[name] = path
+            if local_mod:
+                name, path = local_mod
+                if name.casefold() in {n.casefold() for n in [*active, *additions]}:
+                    raise PlanConflict("Файл уже есть в сборке или плане установки: " + name)
+                additions[name] = path
+            inspected = compatibility.local_report(profile, active, additions)
+            _require_no_conflicts(inspected)
+            missing = [row for row in inspected["required"] if not row["installed"]]
+            if not missing:
+                break
+            new_items = _descriptor_dependencies(profile, missing)
+            occupied = {r.project: r.version for r in releases}
+            for item in new_items:
+                project = item["project"]
+                if project in roots or occupied.get(project) == item["version"]:
+                    _unresolved(missing)
+                discovered[project] = item
+            if len(discovered) > 64:
+                raise PlanConflict("Превышен предел обязательных зависимостей. Проверь состав сборки.")
+            releases = _plan_items(store, profile, selected + list(discovered.values()))
+            catalog = _catalog_report(releases, inventory, roots)
+            _require_no_conflicts(catalog)
+        else:
+            raise PlanConflict("Слишком много уровней зависимостей в описаниях модов.")
+        warnings = list(catalog["warnings"])
+        if discovered:
+            names = [r.filename for r in releases if r.project in discovered]
+            warnings.append("Также будут установлены обязательные зависимости из описаний модов: " + ", ".join(names))
+        warnings.extend(_staged_warnings(inspected, catalog))
         with mutation_lock or nullcontext():
             if _inventory(store, pid) != inventory:
                 raise CatalogError(
                     "Файлы сборки изменились во время загрузки. Повтори проверку."
                 )
-            additions = {
-                r.filename: staged[r.version]
-                for r in releases
-                if r.kind == "mods" and r.version in staged
-            }
-            if additions:
-                active = {
-                    f.name: f
-                    for f in inventory
-                    if f.parent == store.content_folder(pid, "mods")
-                }
-                inspected = compatibility.local_report(profile, active, additions)
-                _require_no_conflicts(inspected)
-                warnings.extend(_staged_warnings(inspected, catalog))
             warnings = sorted(set(warnings))
             token = _review_token(request, releases, inventory, warnings)
             if token and token != acknowledgement:
                 raise NeedsReview(request, token, warnings)
+            if local_mod:
+                name, path = local_mod
+                digest = file_hash(path, file_stamp(path), "sha512")
+                manual = Package("local-" + digest, "", "mods", "", name, "", "", name, path.stat().st_size, digest, "", ())
+                staged[manual.version] = path
+            publish = releases + [manual] if local_mod else releases
             if staged and before_publish is not None:
                 before_publish()
-            written = _publish_set(store, pid, releases, staged)
+            written = _publish_set(store, pid, publish, staged)
     _save_project_icons(store, pid, releases, status)
     if after_publish is not None:
         after_publish(releases)
     if not written:
         return "Эта версия уже установлена в сборке."
-    return f"Установлено файлов из Modrinth: {written}."
+    return f"Установлено файлов: {written}."

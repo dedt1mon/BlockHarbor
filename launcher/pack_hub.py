@@ -81,7 +81,7 @@ def _url(value):
         raise ValueError("Модпак содержит некорректную ссылку загрузки.")
     parsed = urlsplit(value)
     if parsed.scheme != "https" or parsed.netloc.lower() not in DOWNLOAD_HOSTS or parsed.fragment:
-        raise ValueError("Модпак использует неподдерживаемый сервер загрузки. Разрешены Modrinth, GitHub и GitLab по HTTPS.")
+        raise ValueError("Модпак использует неподдерживаемый сервер загрузки. Выбери сборку с файлами из разрешённых источников HTTPS.")
     return value
 
 
@@ -130,7 +130,7 @@ def _validate_paths(paths):
 
 def _manifest(raw):
     if not isinstance(raw, dict) or type(raw.get("formatVersion")) is not int or raw["formatVersion"] != 1 or raw.get("game") != "minecraft":
-        raise ValueError("Поддерживается формат Modrinth .mrpack версии 1 для Minecraft.")
+        raise ValueError("Поддерживается формат .mrpack версии 1 для Minecraft.")
     dependencies = raw.get("dependencies")
     if not isinstance(dependencies, dict) or "minecraft" not in dependencies:
         raise ValueError("В модпаке не указана версия Minecraft.")
@@ -185,7 +185,7 @@ def _inspect(archive):
             raise ValueError("Индекс модпака превышает 8 МБ.")
         manifest = _manifest(json.loads(data))
     except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("В архиве нужен корректный modrinth.index.json в корне.") from exc
+        raise ValueError("В корне архива .mrpack отсутствует или повреждён индекс содержимого.") from exc
     entries = archive.infolist()
     if len(entries) > MAX_FILES:
         raise ValueError("В ZIP модпака слишком много файлов.")
@@ -307,7 +307,7 @@ class PackHub:
         project = modrinth._id(project)
         meta = modrinth._get("/project/" + project)
         if meta.get("project_type") != "modpack" or meta.get("id") != project:
-            raise ValueError("Выбери модпак из каталога Modrinth.")
+            raise ValueError("Выбери модпак из каталога.")
         rows = modrinth._get("/project/" + project + "/version", include_changelog="false")
         result = []
         for row in rows:
@@ -341,7 +341,7 @@ class PackHub:
         meta = modrinth._get("/project/" + project)
         row = modrinth._get("/version/" + version)
         if meta.get("project_type") != "modpack" or row.get("id") != version or row.get("project_id") != project:
-            raise ValueError("Modrinth вернул другую сборку или версию.")
+            raise ValueError("Каталог вернул другую сборку или версию.")
         file = self._release_file(row)
         if not file:
             raise ValueError("У этого выпуска нет файла .mrpack.")

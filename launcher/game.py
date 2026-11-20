@@ -25,7 +25,7 @@ from typing import Callable
 from urllib.parse import parse_qs, quote, urlsplit
 from uuid import UUID
 
-from . import lifecycle, loader_catalog, preparation, version_ids
+from . import legacy_forge, lifecycle, loader_catalog, preparation, version_ids
 
 REDIRECT_URI = "http://localhost:43821/callback"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -174,7 +174,7 @@ def _meta_profile(
                 raise ValueError(loader_catalog.unsupported_message(version, loader)) from None
             raise
 
-    if not pin:
+    def choose_remote():
         loaders = [row["loader"] for row in request(url)]
         stable = [
             row["version"]
@@ -185,13 +185,26 @@ def _meta_profile(
         if not stable:
             raise ValueError(loader_catalog.unsupported_message(version, loader))
         # Quilt returns rows in mixed order. For both vendors choose the newest stable build.
-        pin = max(stable, key=lambda v: tuple(int(n) for n in v.split(".")))
+        return max(stable, key=lambda v: tuple(int(n) for n in v.split(".")))
+
+    candidate = loader_catalog.meta_pin(cache, version, loader) if not pin else None
+    if candidate:
+        cached = _manifest_path(cache, f"{loader}-loader-{candidate}-{version}")
+        if cached.is_file():
+            return _meta_profile(cache, version, loader, candidate)
+        try:
+            profile = _get_json(f"{url}/{candidate}/profile/json")
+        except preparation.DownloadError as error:
+            if error.status_code not in {400, 404}:
+                raise
+            candidate = None
+    pin = pin or candidate or choose_remote()
     _version_id(pin)
     installed = _version_id(f"{loader}-loader-{pin}-{version}")
     dest = _manifest_path(cache, installed)
     if dest.is_file():
         profile = json.loads(dest.read_text(encoding="utf-8"))
-    else:
+    elif not candidate:
         profile = request(f"{url}/{quote(pin, safe='')}/profile/json")
     if (
         profile.get("id") != installed
@@ -202,6 +215,29 @@ def _meta_profile(
     if not dest.is_file():
         _atomic_json(dest, profile)
     return installed, pin
+
+
+def _forge_preview_profile(cache, installed, version, coordinate, metadata):
+    # Forge used an underscore for its Maven directory; Mojang's game ID has
+    # a hyphen. The archived releases share this LaunchWrapper client profile.
+    recipe = loader_catalog._read_snapshot(cache)["legacyForgeProfile"]
+    if version != recipe["minecraft"] or coordinate not in recipe["builds"]:
+        raise ValueError(f"Неизвестная архивная сборка Forge {coordinate}.")
+    build = recipe["builds"][coordinate]
+    forge = {
+        "name": "net.minecraftforge:forge:" + coordinate + ":universal",
+        "url": "https://maven.minecraftforge.net/",
+        "sha1": build["sha1"],
+    }
+    profile = {
+        "id": installed,
+        "jar": version,
+        "inheritsFrom": version,
+        "mainClass": recipe["mainClass"],
+        "minecraftArguments": metadata["minecraftArguments"] + " --tweakClass " + recipe["tweakClass"],
+        "libraries": [forge, *recipe["librarySets"][build["libs"]]],
+    }
+    _atomic_json(_manifest_path(cache, installed), profile)
 
 
 def _repair_loader_files(cache: Path, installed: str, status: Status) -> None:
@@ -471,27 +507,22 @@ def _install(
         )
         if not pinned_ready:
             loader_catalog.require_supported(cache, version, loader)
-        if loader == "forge" and not pin:
-            # Maven metadata is not consistently sorted. Forge publishes per-Minecraft recommendations.
-            promos = _get_json(
-                "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
-            )["promos"]
-            pin = promos.get(f"{version}-recommended") or promos.get(
-                f"{version}-latest"
-            )
-        if loader == "neoforge" and not pin:
-            # The pinned provider predates calendar Minecraft IDs (26.x), whose
-            # NeoForge pins encode MC year.release.patch.build rather than 1.X.
-            pin = loader_catalog.latest_neoforge(cache, version)
-        pin = _version_id(pin or provider.get_latest_loader_version(version))
+        # Early installers in 2.4.x lost embedded libraries or native
+        # descriptors. Rebuild those legacy profiles once after upgrading.
+        if pinned_ready and loader == "forge" and version in legacy_forge.VERSIONS:
+            old = json.loads(_manifest_path(cache, pinned_id).read_bytes())
+            pinned_ready = old.get("inheritsFrom") == version and bool(old.get("jar"))
+        if not pinned_ready and loader == "forge":
+            coordinate = loader_catalog.forge_coordinate(cache, version, pin)
+            pin = coordinate.partition("-")[2]
+        if loader == "neoforge":
+            if not pin:
+                pin = loader_catalog.latest_neoforge(cache, version)
+            elif not pinned_ready and loader_catalog._neo_minecraft(pin) != version:
+                raise ValueError(f"NeoForge {pin} несовместим с Minecraft {version}.")
+        pin = _version_id(pin)
         installed = _version_id(provider.get_installed_version(version, pin))
-        ready = (
-            same
-            and previous.get("cache") == str(cache)
-            and previous.get("id") == installed
-            and _manifest_path(cache, installed).is_file()
-        )
-        if not ready:
+        if not pinned_ready:
             # Vanilla metadata specifies the Java generation required by this game.
             _prepare_files(version, cache, callbacks, status)
             metadata = json.loads(
@@ -508,9 +539,18 @@ def _install(
                     "Не удалось установить Java для этой версии. Проверь подключение и снова нажми «Играть»."
                 )
             try:
-                result = provider.install(
-                    version, cache, loader_version=pin, java=java, callback=callbacks
-                )
+                # The public wrapper re-downloads the whole loader catalog and base
+                # game, and 8.0 misidentifies calendar NeoForge as Minecraft 1.26.
+                # We already resolved the exact coordinate and prepared the base.
+                if loader == "forge" and version in legacy_forge.VERSIONS:
+                    profile = legacy_forge.profile(cache, installed, coordinate, metadata, status)
+                    _atomic_json(_manifest_path(cache, installed), profile)
+                    _repair_loader_files(cache, installed, status)
+                elif loader == "forge" and version == "1.7.10-pre4":
+                    _forge_preview_profile(cache, installed, version, coordinate, metadata)
+                    _repair_loader_files(cache, installed, status)
+                else:
+                    provider._base.install(version, str(cache), loader_version=pin, java=str(java), callback=callbacks)
                 lifecycle.check()
             except subprocess.CalledProcessError as exc:
                 task = ""
@@ -524,15 +564,20 @@ def _install(
                     f"Установщик {loader} завершился с кодом {exc.returncode}{task}. "
                     "Проверь доступ Java к интернету и снова нажми «Играть»."
                 ) from None
-            if result != installed or not _manifest_path(cache, installed).is_file():
+            if not _manifest_path(cache, installed).is_file():
                 raise RuntimeError(
                     f"Установщик {loader} не создал профиль {installed}. Повтори установку."
                 )
+            _prepare_files(installed, cache, callbacks, status)
     if not official:
         import minecraft_launcher_lib as mc
 
         status("Проверяем локальные файлы игры…")
-        if loader in META:
+        if loader == "forge" and version in legacy_forge.VERSIONS and pinned_ready:
+            profile = json.loads(_manifest_path(cache, installed).read_bytes())
+            if profile.get("jar") == installed + "-client":
+                legacy_forge.client_jar(cache, version, installed)
+        if loader in META or (loader == "forge" and (version in legacy_forge.VERSIONS or version == "1.7.10-pre4")):
             _repair_loader_files(cache, installed, status)
         try:
             ready = _missing_install_file(cache, version, installed) is None
@@ -1018,7 +1063,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.4.11",
+        "launcherVersion": "2.5.0",
     }
     if record.get("java"):
         options["executablePath"] = record["java"]

@@ -9,18 +9,19 @@ function openModrinth(profile, category) {
     resourcepacks: "Ресурс-пак",
   }[category];
   modal(
-    "Каталог Modrinth",
+    "Каталог дополнений",
     `
     <section class="catalog" aria-label="Каталог дополнений">
       <p class="catalog-context"></p>
       <div class="catalog-output">
         <div class="catalog-browse">
           <form class="catalog-search" role="search">
-            <input type="search" class="field" maxlength="120" aria-label="Поиск на Modrinth" autofocus>
+            <input type="search" class="field" maxlength="120" aria-label="Поиск дополнений" autofocus>
             <button class="btn" type="submit">${ic("search")}Найти</button>
           </form>
           <div class="catalog-toolbar">
             <button type="button" class="btn" data-catalog-filters aria-expanded="false" aria-controls="catalogFilterPanel">Фильтры</button>
+            <select class="field" data-catalog-source aria-label="Источник"><option value="all">Все источники</option><option value="community">Основной каталог</option><option value="github">Авторы на GitHub</option></select>
             <select class="field" aria-label="Сортировка результатов"><option value="relevance">По релевантности</option></select>
           </div>
           <div class="catalog-pages"></div>
@@ -32,7 +33,9 @@ function openModrinth(profile, category) {
         </div>
         <section id="catalogFilterPanel" class="catalog-filter-panel" aria-label="Фильтры" hidden></section>
         <section class="catalog-detail" aria-label="Версии проекта" hidden></section>
+        <section class="catalog-cart catalog-detail" aria-label="Выбранные дополнения" hidden></section>
       </div>
+      <div class="catalog-cart-footer" hidden><button type="button" class="btn main" data-cart-open></button></div>
       <div class="catalog-feedback"><span role="status"></span>
         <button type="button" class="linkbtn" data-catalog-retry hidden>Повторить</button>
       </div>
@@ -49,6 +52,11 @@ function openModrinth(profile, category) {
   const output = find(".catalog-output");
   const status = find("[role=status]");
   const retry = find("[data-catalog-retry]");
+  const source = find("[data-catalog-source]");
+  const cart = new Map();
+  const cartPanel = find(".catalog-cart");
+  const cartFooter = find(".catalog-cart-footer");
+  let cartRequest = null, checkedItems = null, checkedToken = "";
   find(".catalog-context").textContent = [
     profile.name,
     loaders[profile.loader],
@@ -97,7 +105,7 @@ function openModrinth(profile, category) {
     targetPage = null;
     output.removeAttribute("aria-busy");
   }
-  dialog.addEventListener("close", cancel, { once: true });
+  dialog.addEventListener("close", () => { cancel(); cartRequest?.abort(); }, { once: true });
 
   async function request(endpoint, params, message, repeat) {
     const current = new AbortController();
@@ -118,7 +126,7 @@ function openModrinth(profile, category) {
         kind: category,
         ...params,
       });
-      const data = await api("/api/modrinth/" + endpoint + "?" + query, {
+      const data = await api("/api/catalog/" + endpoint + "?" + query, {
         signal: current.signal,
       });
       if (active()) {
@@ -183,11 +191,11 @@ function openModrinth(profile, category) {
       data.hits
         .map(
           (item) => `
-      <li><button type="button" class="catalog-result" data-project="${esc(item.id)}">
+      <li class="catalog-choice"><button type="button" class="btn catalog-mark" data-mark="${esc(item.id)}" aria-label="Выбрать ${esc(item.title)}" aria-pressed="false">${ic("plus")}</button><button type="button" class="catalog-result" data-project="${esc(item.id)}">
         ${icon(item)}
         <span class="catalog-copy"><strong>${esc(item.title)}</strong>
           <span class="catalog-description">${esc(item.description)}</span>
-          <small>${[esc(item.author), "Скачиваний " + number.format(item.downloads)].filter(Boolean).join(" · ")}</small>
+          <small>${[esc(item.author), esc(item.sourceTitle || ""), item.downloads ? "Скачиваний " + number.format(item.downloads) : ""].filter(Boolean).join(" · ")}</small>
         </span><span class="catalog-next" aria-hidden="true">${ic("arrow")}</span>
       </button></li>`,
         )
@@ -225,6 +233,8 @@ function openModrinth(profile, category) {
       pages.replaceChildren(page.list);
       page.list.scrollTop = page.scroll;
     }
+    renderCartControls();
+    if (entry.data.partial) status.textContent = entry.data.message;
     updatePager();
     if (focusWasInList) {
       (navigationButton && !pager.hidden ? navigationButton : input).focus({
@@ -240,7 +250,7 @@ function openModrinth(profile, category) {
   ) {
     cancel();
     clearStatus();
-    const key = JSON.stringify([query, offset, preset.sort, preset.filters]);
+    const key = JSON.stringify([query, offset, preset.sort, preset.filters, source.value]);
     if (history.has(key)) {
       showPage(history.get(key), navigationButton);
       return;
@@ -249,7 +259,7 @@ function openModrinth(profile, category) {
     updatePager();
     const data = await request(
       "search",
-      { q: query, offset, ...preset },
+      { q: query, offset, ...preset, source: source.value },
       "Ищем совместимые дополнения…",
       () => search(query, offset, navigationButton, preset),
     );
@@ -273,12 +283,15 @@ function openModrinth(profile, category) {
     ];
     find(".catalog-file").textContent = [
       chosen.filename,
+      chosen.renderers?.join(" / "),
       fmt(chosen.size),
       type,
       Number.isNaN(date.valueOf()) ? "" : date.toLocaleDateString("ru-RU"),
     ]
       .filter(Boolean)
       .join("  ·  ");
+    const add = detail.querySelector("[data-cart-add]");
+    add.textContent = cart.get(project.id)?.version === chosen.id ? "Убрать из выбранного" : "Добавить в выбранное";
     compatibility.check(project, chosen);
   }
   async function versions(item, button) {
@@ -287,7 +300,7 @@ function openModrinth(profile, category) {
     input.value = page.query;
     const data = await request(
       "versions",
-      { project: item.id },
+      { project: item.id, source: item.source || "all" },
       "Загружаем совместимые версии…",
       () => versions(item, button),
     );
@@ -316,7 +329,7 @@ function openModrinth(profile, category) {
         )
         .join("")}</select></label>
       <p class="catalog-file"></p><div class="compatibility-report" aria-live="polite"></div>
-      <div class="dialog-actions"><button type="button" class="btn main" data-install-project>Установить в сборку</button></div>`
+      <div class="dialog-actions"><button type="button" class="btn" data-cart-add>Добавить в выбранное</button><button type="button" class="btn main" data-install-project>Установить в сборку</button></div>`
         : '<p class="empty">У проекта нет доступных файлов для этой версии игры и загрузчика.</p>');
     loadIcons(detail);
     const select = detail.querySelector("select");
@@ -328,6 +341,75 @@ function openModrinth(profile, category) {
     detail.scrollTop = 0;
     (select || find("[data-catalog-back]")).focus({ preventScroll: true });
   }
+  function renderCartControls() {
+    cartFooter.hidden = !cart.size || !cartPanel.hidden;
+    find("[data-cart-open]").textContent = "К установке (" + cart.size + ")";
+    for (const button of pages.querySelectorAll("[data-mark]")) {
+      const selected = cart.has(button.dataset.mark);
+      button.setAttribute("aria-pressed", String(selected));
+      button.innerHTML = ic(selected ? "check" : "plus");
+    }
+  }
+  function selectItem(item, version = null) {
+    if (!cart.has(item.id) && cart.size >= 32) {
+      notice("За один раз можно выбрать до 32 дополнений.", true);
+      return;
+    }
+    const chosenSource = item.source || "all";
+    cart.set(item.id, {project: item.id, kind: category, version, source: chosenSource, title: item.title});
+  }
+  function leaveCart() {
+    cartRequest?.abort();
+    cartRequest = null;
+    cartPanel.hidden = true;
+    browse.hidden = false;
+    renderCartControls();
+    (cart.size ? find("[data-cart-open]") : input).focus({preventScroll: true});
+  }
+  async function previewCart() {
+    cancel();
+    clearStatus();
+    compatibility.cancel();
+    cartRequest?.abort();
+    if (!cart.size) { leaveCart(); return; }
+    const current = new AbortController();
+    cartRequest = current;
+    checkedItems = null;
+    checkedToken = "";
+    browse.hidden = true;
+    detail.hidden = true;
+    find("#catalogFilterPanel").hidden = true;
+    find("[data-catalog-filters]").setAttribute("aria-expanded", "false");
+    cartPanel.hidden = false;
+    renderCartControls();
+    const items = [...cart.values()].map(({title, ...item}) => item);
+    cartPanel.innerHTML = `<button type="button" class="linkbtn" data-cart-back>${ic("back")} К результатам</button>
+      <h3>К установке (${items.length})</h3>
+      <ul class="catalog-cart-items">${[...cart.values()].map(item => `<li><span>${esc(item.title)}</span><button type="button" class="linkbtn" data-cart-remove="${esc(item.project)}" aria-label="Убрать ${esc(item.title)}">Убрать</button></li>`).join("")}</ul>
+      <div class="compatibility-report" role="status">Проверяем выбранные выпуски и общие зависимости…</div>
+      <div class="dialog-actions"><button type="button" class="btn main" data-cart-install disabled>Установить выбранное</button></div>`;
+    const area = cartPanel.querySelector(".compatibility-report");
+    const install = cartPanel.querySelector("[data-cart-install]");
+    cartPanel.querySelector("[data-cart-back]").focus({preventScroll:true});
+    const active = () => current === cartRequest && dialog.open && area.isConnected;
+    try {
+      const result = await api("/api/catalog/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id:profile.id, items}), signal:current.signal});
+      if (!active()) return;
+      for (const row of result.selected || []) {
+        const item = [...cartPanel.querySelectorAll("[data-cart-remove]")].find(el => el.dataset.cartRemove === row.project);
+        if (item) item.previousElementSibling.textContent = [cart.get(row.project).title, row.version, row.installed ? "уже в сборке" : ""].filter(Boolean).join(" · ");
+      }
+      area.innerHTML = compatibilitySummary(result);
+      checkedItems = result.items;
+      checkedToken = result.reviewToken || "";
+      install.disabled = result.blocked || !checkedItems?.length;
+      install.textContent = result.blocked ? "Установка недоступна" : checkedToken ? "Установить с предупреждением" : "Установить выбранное";
+    } catch (error) {
+      if (!active()) return;
+      area.innerHTML = `<p class="compat-error">${esc(error.message)}</p><button class="linkbtn" type="button" data-cart-retry>Повторить проверку</button>`;
+    }
+  }
+  source.addEventListener("change", () => search());
   find("form").addEventListener("submit", (e) => {
     e.preventDefault();
     search();
@@ -350,6 +432,35 @@ function openModrinth(profile, category) {
     const el = e.target.closest("button");
     if (!el || el.disabled || el.getAttribute("aria-disabled") === "true")
       return;
+    if (el.dataset.mark) {
+      const item = page?.data.hits.find(hit => hit.id === el.dataset.mark);
+      if (!item) return;
+      if (cart.has(item.id)) cart.delete(item.id);
+      else selectItem(item);
+      renderCartControls();
+      return;
+    }
+    if (el.hasAttribute("data-cart-add")) {
+      const version = detail.querySelector("select").value;
+      if (cart.get(project.id)?.version === version) cart.delete(project.id);
+      else selectItem(project, version);
+      el.textContent = cart.has(project.id) ? "Убрать из выбранного" : "Добавить в выбранное";
+      renderCartControls();
+      return;
+    }
+    if (el.hasAttribute("data-cart-open") || el.hasAttribute("data-cart-retry") || el.dataset.cartRemove) {
+      if (el.dataset.cartRemove) cart.delete(el.dataset.cartRemove);
+      await previewCart();
+      return;
+    }
+    if (el.hasAttribute("data-cart-back")) { leaveCart(); return; }
+    if (el.hasAttribute("data-cart-install") && checkedItems) {
+      el.disabled = true;
+      try {
+        await runJob("installModrinth", {id:profile.id, items:checkedItems, acknowledgement:checkedToken});
+      } catch (error) { el.disabled = false; notice(error.message, true); }
+      return;
+    }
     if (el.hasAttribute("data-catalog-back")) {
       compatibility.cancel();
       detail.hidden = true;

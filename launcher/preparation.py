@@ -32,7 +32,7 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.4.11", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.5.0", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -65,13 +65,15 @@ def _error(url, error):
     return f"Загрузка с {host} не завершена. Проверь подключение и снова нажми «Играть». Скачанные файлы сохраняются."
 
 
-def _receive(url, output, limit, notify=lambda *_: None):
+def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False):
     lifecycle.check()
     if urlsplit(url).scheme not in ("https", "http"):
         raise ValueError("Адрес загрузки использует неподдерживаемый протокол.")
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
-    with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=SOCKET_TIMEOUT)) as response:
+    timeout = 5 if quick_catalog else SOCKET_TIMEOUT
+    deadline = time.monotonic() + (8 if quick_catalog else 20 * 60)
+    with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=timeout)) as response:
         try:
             length = int(response.headers.get("Content-Length", "0"))
         except ValueError:
@@ -79,8 +81,8 @@ def _receive(url, output, limit, notify=lambda *_: None):
         if length < 0 or length > limit:
             raise _Incomplete("Размер загрузки превышает допустимый.")
         count = 0
-        deadline = time.monotonic() + 20 * 60
-        while block := response.read(256 * 1024):
+        read_chunk = getattr(response, "read1", response.read) if quick_catalog else response.read
+        while block := read_chunk(256 * 1024):
             lifecycle.check()
             count += len(block)
             if count > limit or time.monotonic() > deadline:
@@ -92,16 +94,17 @@ def _receive(url, output, limit, notify=lambda *_: None):
         return dict(response.headers), response.geturl()
 
 
-def metadata_response(url, **_kwargs):
+def metadata_response(url, *, quick_catalog=False, **_kwargs):
     """The response shape used by launcher-lib's catalog/XML routines."""
     import io
 
     import requests
 
-    for attempt in range(ATTEMPTS):
+    attempts = 1 if quick_catalog else ATTEMPTS
+    for attempt in range(attempts):
         try:
             data = io.BytesIO()
-            headers, effective_url = _receive(url, data, MAX_METADATA)
+            headers, effective_url = _receive(url, data, MAX_METADATA, quick_catalog=quick_catalog)
             reply = requests.Response()
             reply.status_code = 200
             reply.url = effective_url
@@ -117,7 +120,7 @@ def metadata_response(url, **_kwargs):
             ConnectionError,
             _Incomplete,
         ) as error:
-            if not _retry(error) or attempt + 1 == ATTEMPTS:
+            if not _retry(error) or attempt + 1 == attempts:
                 raise DownloadError(
                     _error(url, error), url=url,
                     status_code=error.code if isinstance(error, HTTPError) else None,
@@ -126,9 +129,9 @@ def metadata_response(url, **_kwargs):
     raise AssertionError("unreachable")
 
 
-def json_document(url):
+def json_document(url, *, quick_catalog=False):
     try:
-        return metadata_response(url).json()
+        return metadata_response(url, quick_catalog=quick_catalog).json()
     except lifecycle.OperationCancelled:
         raise
     except ValueError:

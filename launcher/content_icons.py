@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 from PIL import Image
 
-from .modfiles import DESCRIPTORS, file_stamp
+from .modfiles import DESCRIPTORS, file_stamp, legacy_mods
 
 MAX_IMAGE = 2 * 1024**2
 MAX_THUMBNAIL = 64 * 1024
@@ -170,6 +170,10 @@ def archive_thumbnail(file):
                             else json.loads(raw)
                         )
                     except (ValueError, UnicodeError, RecursionError):
+                        continue
+                    if descriptor == "mcmod.info":
+                        for mod in legacy_mods(data):
+                            paths.extend(_paths(mod.get("logoFile")))
                         continue
                     if not isinstance(data, dict):
                         continue

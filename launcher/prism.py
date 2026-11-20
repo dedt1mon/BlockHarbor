@@ -59,7 +59,7 @@ def _engine(root: Path, status: Status) -> Path:
         digest = hashlib.sha256()
         size = 0
         status("Загружаем Prism с GitHub · 43,7 МБ")
-        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.4.11"})
+        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.5.0"})
         try:
             with lifecycle.response(urlopen(request, timeout=25)) as source, archive.open("wb") as dest:
                 while block := source.read(512 * 1024):
@@ -130,7 +130,9 @@ def _components(folder: Path, version: str, loader: str) -> list[dict]:
     ):
         pin = saved["loader_version"]
         if loader == "forge":
-            pin = pin.removeprefix(version + "-")
+            # Prism indexes Forge by its numeric build, without the Maven branch.
+            prefix = version.replace("-pre", "_pre") + "-"
+            pin = pin.removeprefix(prefix).removeprefix(version + "-").partition("-")[0]
         selected = next((row for row in compatible if row["version"] == pin), None)
         if selected is None:
             raise ValueError(

@@ -1004,9 +1004,7 @@ class BuildCare:
                 target = directory / release.version
                 status("Проверяем файл обновления: " + release.filename + "…")
                 if self.transfers:
-                    self.transfers.download(release.url, target, title=release.filename,
-                                            hashes={"sha512": release.sha512}, size=release.size,
-                                            hosts=modrinth._CDN_HOSTS, category="content", status=status)
+                    modrinth._download(release, target, self.transfers, status)
                 else:
                     modrinth._download(release, target)
                 verify_pack(target, release.kind, profile["loader"])

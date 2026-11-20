@@ -91,15 +91,15 @@ jobs:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $compiler = Join-Path $env:MSYS2_LOCATION "clang64\bin\makensis.exe"
-          $home = Join-Path $env:MSYS2_LOCATION "clang64\share\nsis"
+          $nsisRoot = Join-Path $env:MSYS2_LOCATION "clang64\share\nsis"
           if (!(Test-Path $compiler)) { throw "NSIS compiler not found" }
           foreach ($required in @("Stubs\zlib-amd64-unicode", "Plugins\amd64-unicode\nsDialogs.dll")) {
-            if (!(Test-Path (Join-Path $home $required))) { throw "Missing NSIS x64 dependency: $required" }
+            if (!(Test-Path (Join-Path $nsisRoot $required))) { throw "Missing NSIS x64 dependency: $required" }
           }
           & $compiler /VERSION
           if ($LASTEXITCODE -ne 0) { throw "NSIS compiler cannot start" }
           "NSIS_COMPILER=$compiler" >> $env:GITHUB_ENV
-          "NSIS_HOME=$home" >> $env:GITHUB_ENV
+          "NSIS_HOME=$nsisRoot" >> $env:GITHUB_ENV
 
       - name: Build installer and verified update manifest
         shell: pwsh

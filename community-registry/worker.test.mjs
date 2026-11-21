@@ -10,6 +10,8 @@ import worker from './worker.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const migration = readFileSync(new URL('drizzle/0000_catalog.sql', import.meta.url), 'utf8');
+const abuseMigration = readFileSync(new URL('drizzle/0001_abuse_guard.sql', import.meta.url), 'utf8')
+  .replaceAll('--> statement-breakpoint', '');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const partSize = 8 * 1024 ** 2;
 const buildName = 'Моя сборка';
@@ -61,6 +63,7 @@ class D1Fixture {
     this.db = new DatabaseSync(':memory:');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(migration);
+    this.db.exec(abuseMigration);
   }
   prepare(sql) {
     const statement = this.db.prepare(sql);
@@ -128,15 +131,16 @@ class R2Fixture {
   async delete(key) { this.objects.delete(key); }
 }
 function registry(t) {
-  const env = {DB:new D1Fixture(), BUCKET:new R2Fixture()};
+  const env = {DB:new D1Fixture(), BUCKET:new R2Fixture(),
+    RATE_SALT:'integration-test-only-long-random-test-salt-2026'};
   t.after(() => env.DB.db.close());
-  const call = (method, path, body, token) => {
-    const headers = {};
+  const call = (method, path, body, token, {ip='203.0.113.10'}={}) => {
+    const headers = {'CF-Connecting-IP':ip};
     if (body) headers['Content-Length'] = String(body.length);
     if (token) headers.Authorization = 'Bearer '+token;
     return worker.fetch(new Request('https://catalog.test/v1/'+path,{method, body, headers}),env);
   };
-  const begin = data => call('POST','uploads',Buffer.from(JSON.stringify(data)));
+  const begin = (data, opts) => call('POST','uploads',Buffer.from(JSON.stringify(data)),undefined,opts);
   async function open(data) {
     const response = await begin(data);
     assert.equal(response.status,201);
@@ -250,4 +254,170 @@ test('completion resumes from a previously completed R2 object and withdrawal wi
   assert.equal((await completing).status,410);
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal((await (await api.call('GET','builds')).json()).total,0);
+});
+
+
+test('public snapshot expires exactly one hour after completion and replay cannot renew it',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  assert.equal((await author.put(1,small)).status,200);
+  const first=await (await author.finish()).json();
+  const row=api.env.DB.db.prepare('SELECT created,state FROM builds WHERE id=?').get(first.id);
+  assert.equal(row.state,'ready');
+  assert.equal(first.expiresAt,row.created+3600);
+  assert.deepEqual(await (await author.finish()).json(),first);
+  const page=await (await api.call('GET','builds')).json();
+  assert.deepEqual(page.hits,[first]);
+  const fetched=await api.call('GET','builds/'+first.id+'/archive');
+  assert.equal(fetched.status,200);
+  assert.equal(sha(new Uint8Array(await fetched.arrayBuffer())),sha(small));
+  api.env.DB.db.prepare("UPDATE builds SET created=created-3600 WHERE id=?").run(first.id);
+  assert.equal((await author.finish()).status,410);
+  assert.equal((await api.call('GET','builds/'+first.id+'/archive')).status,404);
+  const expiredPage=await (await api.call('GET','builds')).json();
+  assert.equal(expiredPage.total,0);
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+});
+
+test('scheduled janitor deletes expired R2 objects without catalog traffic',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  assert.equal(api.env.BUCKET.objects.size,1);
+  await worker.scheduled({cron:'*/5 * * * *'},api.env,{waitUntil(){}});
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+  assert.equal((await api.call('GET','builds/'+listing.id)).status,404);
+});
+
+test('expired publications free space before next upload reservation',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  await author.put(1,small);
+  await author.finish();
+  api.env.CATALOG_STORAGE_LIMIT=small.length;
+  assert.equal((await api.begin(metadata(small))).status,429);
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  assert.equal((await api.begin(metadata(small))).status,201);
+  assert.equal(api.env.BUCKET.objects.size,0);
+});
+
+
+
+test('256 MiB cap, storage reserve, and per-network active-slot limit',async t => {
+  const api=registry(t);
+  const big=await api.begin({...metadata(small),size:256*1024*1024+1});
+  assert.equal(big.status,413);
+  assert.match((await big.json()).error,/256 МиБ/);
+  const allowed=await api.begin({...metadata(small),size:256*1024*1024});
+  assert.equal(allowed.status,201); // metadata only; no large file allocated
+  const reserve=await api.begin(metadata(small));
+  assert.equal(reserve.status,201);
+  const third=await api.begin(metadata(small));
+  assert.equal(third.status,201);
+  const fourth=await api.begin(metadata(small));
+  assert.equal(fourth.status,429);
+  assert.match((await fourth.json()).error,/3 активных/);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,3);
+  const otherNetwork=await api.begin(metadata(small),{ip:'198.51.100.44'});
+  assert.equal(otherNetwork.status,201);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,4);
+  assert.equal(api.env.DB.db.prepare('SELECT length(subject) AS n FROM publisher_rate LIMIT 1').get().n,64);
+  const raw=api.env.DB.db.prepare('SELECT subject FROM publisher_rate LIMIT 1').get().subject;
+  assert.ok(!raw.includes('203.0.113.10'));
+});
+
+test('11th attempt in ten minutes triggers five-hour ban and Retry-After',async t => {
+  const api=registry(t), attempts=[];
+  for(let i=0;i<10;i++) attempts.push(await api.begin(metadata(small)));
+  assert.equal(attempts.slice(0,3).filter(r=>r.status===201).length,3);
+  assert.equal(attempts.slice(3).filter(r=>r.status===429).length,7);
+  const eleventh=await api.begin(metadata(small));
+  assert.equal(eleventh.status,429);
+  const info=await eleventh.json();
+  assert.equal(info.code,'PUBLISH_RATE_BAN');
+  assert.ok(info.retryAfterSeconds>0 && info.retryAfterSeconds<=5*3600);
+  assert.ok(info.blockedUntil>Math.floor(Date.now()/1000));
+  assert.equal(eleventh.headers.get('Retry-After'),String(info.retryAfterSeconds));
+  const row=api.env.DB.db.prepare('SELECT * FROM publisher_rate').get();
+  assert.equal(row.attempts,11);
+  assert.equal(row.blocked_until,info.blockedUntil);
+  const again=await (await api.begin(metadata(small))).json();
+  assert.equal(again.blockedUntil,info.blockedUntil); // hammering cannot extend ban
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+  assert.equal(api.env.BUCKET.uploads.size,0); // pending spam reservations cancelled
+  api.env.DB.db.exec('DELETE FROM builds'); // simulate TTL cleanup before later retry
+  api.env.DB.db.exec('UPDATE publisher_rate SET blocked_until=0,window_start=0');
+  const recovered=await api.begin(metadata(small));
+  assert.equal(recovered.status,201);
+  const reset=api.env.DB.db.prepare('SELECT attempts,blocked_until FROM publisher_rate').get();
+  assert.equal(reset.attempts,1);
+  assert.equal(reset.blocked_until,0);
+});
+
+test('concurrent publication bursts remain atomic even with many simultaneous clients',async t => {
+  const api=registry(t);
+  const results=await Promise.all(Array.from({length:16},()=>api.begin(metadata(small))));
+  assert.equal(results.filter(x=>x.status===201).length,3);
+  const blocked=await Promise.all(results.map(async x=>x.status===429?await x.json():{}));
+  assert.ok(blocked.some(x=>x.code==='PUBLISH_RATE_BAN'));
+  assert.equal(api.env.DB.db.prepare('SELECT attempts FROM publisher_rate').get().attempts,11);
+  assert.ok(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n<=3);
+});
+
+test('missing edge identity or secret fails closed only for publishing',async t => {
+  const api=registry(t);
+  api.env.RATE_SALT='';
+  assert.equal((await api.begin(metadata(small))).status,503);
+  assert.equal((await api.call('GET','builds')).status,200);
+  api.env.RATE_SALT='integration-test-only-long-random-test-salt-2026';
+  const body=Buffer.from(JSON.stringify(metadata(small)));
+  const withoutIp=await worker.fetch(new Request('https://catalog.test/v1/uploads',{
+    method:'POST',body,headers:{'Content-Length':String(body.length)}}),api.env);
+  assert.equal(withoutIp.status,403);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
+});
+
+
+test('a temporary ban removes only unfinished uploads, not verified builds',async t => {
+  const api=registry(t), owner=await api.open(metadata(small));
+  await owner.put(1,small);
+  const published=await (await owner.finish()).json();
+  for(let i=0;i<9;i++) await api.begin(metadata(small));
+  const blocked=await api.begin(metadata(small));
+  assert.equal((await blocked.json()).code,'PUBLISH_RATE_BAN');
+  const remaining=await (await api.call('GET','builds')).json();
+  assert.equal(remaining.total,1);
+  assert.equal(remaining.hits[0].id,published.id);
+  assert.equal(api.env.BUCKET.objects.size,1);
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal((await api.call('GET','builds/'+published.id+'/archive')).status,200);
+});
+
+test('unfinished uploads expire after 30 minutes and release their reservation',async t => {
+  const api=registry(t);
+  assert.equal((await api.begin(metadata(small))).status,201);
+  assert.equal(api.env.BUCKET.uploads.size,1);
+  api.env.DB.db.exec("UPDATE builds SET created=created-1801 WHERE state='uploading'");
+  await api.call('GET','builds');
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+});
+
+
+test('capabilities endpoint advertises effective one-hour and anti-spam constraints',async t => {
+  const api=registry(t);
+  const response=await api.call('GET','capabilities');
+  assert.equal(response.status,200);
+  const policy=await response.json();
+  assert.deepEqual(policy, {
+    publicRetentionSeconds:3600,
+    manifestFormat:1,
+    publishLimits:{
+      maxArchiveBytes:256*1024*1024, maxActive:3,
+      windowSeconds:600, maxAttempts:10, banSeconds:5*3600,
+    },
+  });
+  // Policy discovery is read-only and cannot consume any publisher quotas.
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
 });

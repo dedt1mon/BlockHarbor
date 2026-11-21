@@ -19,7 +19,8 @@ from .version import VERSION
 
 ORIGIN = "https://blockharbor-community-catalog.ded8timon.chatgpt.site"
 CHUNK = 8 * 1024**2
-MAX_ARCHIVE = 2 * 1024**3
+MAX_ARCHIVE = 2 * 1024**3  # Existing archives remain readable during migration.
+MAX_PUBLIC_UPLOAD = 256 * 1024**2  # New public snapshots are capped at 256 MiB.
 PAGE = 20
 MAX_JSON = 128 * 1024
 MIRROR_INDEX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-index/index.json"
@@ -50,8 +51,20 @@ def _listing(value):
     size, digest = value.get("size"), value.get("sha256")
     if type(size) is not int or not 0 < size <= MAX_ARCHIVE or not isinstance(digest, str) or not re.fullmatch("[a-f0-9]{64}", digest):
         raise ValueError("Размер или контрольная сумма сборки в каталоге неверны.")
-    return {"id": _build_id(value.get("id")), "name": name, "minecraft": version, "loader": loader,
-            "category": _category(value.get("category")), "size": size, "sha256": digest}
+    expiry = value.get("expiresAt")
+    if expiry is not None and (type(expiry) is not int or expiry <= 0):
+        raise ValueError("Каталог вернул неверный срок публикации.")
+    listing = {"id": _build_id(value.get("id")), "name": name, "minecraft": version, "loader": loader,
+               "category": _category(value.get("category")), "size": size, "sha256": digest}
+    if expiry is not None:
+        listing["expiresAt"] = expiry
+    return listing
+
+
+def _expired(listing):
+    """Fail closed for expired listings, including cached GitHub mirror pages."""
+    expiry = listing.get("expiresAt")
+    return expiry is not None and expiry <= time.time()
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -60,9 +73,12 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class CatalogError(ValueError):
-    def __init__(self, code, reason):
+    def __init__(self, code, reason, *, reason_code="", blocked_until=0, retry_after=0):
         super().__init__(reason)
         self.code = code
+        self.reason_code = reason_code
+        self.blocked_until = blocked_until
+        self.retry_after = retry_after
 
 
 class CatalogAPI:
@@ -90,12 +106,28 @@ class CatalogAPI:
         except HTTPError as exc:
             with exc:
                 try:
-                    reason = json.loads(exc.read(4096)).get("error")
+                    response = json.loads(exc.read(4096))
                 except (ValueError, AttributeError):
-                    reason = ""
+                    response = {}
+            if not isinstance(response, dict):
+                response = {}
+            reason = response.get("error")
             if not isinstance(reason, str) or not reason:
                 reason = "Каталог отклонил запрос."
-            raise CatalogError(exc.code, f"{reason[:240]} (HTTP {exc.code})") from None
+            reason_code = response.get("code", "")
+            blocked_until = response.get("blockedUntil", 0)
+            retry_after = response.get("retryAfterSeconds", 0)
+            if reason_code != "PUBLISH_RATE_BAN" or exc.code != 429:
+                reason_code, blocked_until, retry_after = "", 0, 0
+            if type(blocked_until) is not int or blocked_until < 0:
+                blocked_until = 0
+            if type(retry_after) is not int or not 0 <= retry_after <= 5 * 3600:
+                retry_after = 0
+            raise CatalogError(
+                exc.code, f"{reason[:240]} (HTTP {exc.code})",
+                reason_code=reason_code, blocked_until=blocked_until,
+                retry_after=retry_after,
+            ) from None
         except (OSError, URLError, HTTPException) as exc:
             lifecycle.check()
             raise CatalogError(0, "Не удалось связаться с каталогом сборок. Проверь подключение и попробуй ещё раз.") from exc
@@ -174,6 +206,8 @@ class GitHubMirror:
                 or type(data.get("total")) is not int or data["total"] != len(rows)):
             raise CatalogError(0, "Резервный каталог вернул неполные сведения.")
         items = [_listing(row) for row in rows]
+        # Legacy mirror indexes do not have expiry metadata. Preserve their
+        # working downloads, but make the unknown retention visible in the UI.
         if len({item["id"] for item in items}) != len(items):
             raise CatalogError(0, "Резервный каталог содержит повторяющиеся сборки.")
         self._cache = (time.monotonic(), items)
@@ -181,21 +215,24 @@ class GitHubMirror:
 
     def search(self, filters):
         needle = filters["q"].strip().casefold()
+        listings = self._listings()
+        legacy = any("expiresAt" not in item for item in listings)
         matching = [
-            item for item in self._listings()
-            if (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
+            item for item in listings
+            if not _expired(item)
+            and (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
             and (not filters["category"] or item["category"] == filters["category"])
             and (not filters["version"] or item["minecraft"] == filters["version"])
             and (not filters["loader"] or item["loader"] == filters["loader"])
         ]
         offset = filters["offset"]
         return {"hits": matching[offset:offset + PAGE], "total": len(matching),
-                "limit": PAGE, "offset": offset, "source": "github"}
+                "limit": PAGE, "offset": offset, "source": "github-legacy" if legacy else "github"}
 
     def listing(self, public_id):
         public_id = _build_id(public_id)
         for item in self._listings():
-            if item["id"] == public_id:
+            if item["id"] == public_id and not _expired(item):
                 return item
         raise CatalogError(404, "Сборка не найдена в резервном каталоге.")
 
@@ -204,7 +241,7 @@ class GitHubMirror:
 
 
 class CommunityCatalog:
-    READ_ACTIONS = {"communitySearch", "communityPublication"}
+    READ_ACTIONS = {"communitySearch", "communityPublication", "communityCapabilities"}
     JOBS = {"communityInstall", "communityPublish", "communityUnpublish"}
     ACTIONS = READ_ACTIONS | JOBS
 
@@ -248,6 +285,47 @@ class CommunityCatalog:
             raise ValueError("Каталог вернул неверный список сборок.")
         return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
+    def capabilities(self):
+        """Detect whether the live server actually enforces retention and bans.
+
+        Older server versions do not expose this endpoint. Never label those
+        sites as enforcing the one-hour rule simply because the client knows it.
+        """
+        try:
+            data = self.api.json("GET", "capabilities")
+        except CatalogError as exc:
+            if exc.code == 404:
+                return {"enabled": False, "mode": "legacy",
+                        "message": "Сервер каталога пока не поддерживает автоудаление и антиспам. Публикация может храниться дольше 1 часа."}
+            return {"enabled": False, "mode": "unknown",
+                    "message": "Не удалось подтвердить ограничения сервера. Перед публикацией проверь подключение."}
+        limits = data.get("publishLimits")
+        if (data.get("publicRetentionSeconds") != 3600 or not isinstance(limits, dict)
+                or limits.get("maxArchiveBytes") != MAX_PUBLIC_UPLOAD
+                or limits.get("maxActive") != 3 or limits.get("windowSeconds") != 600
+                or limits.get("maxAttempts") != 10 or limits.get("banSeconds") != 18000):
+            return {"enabled": False, "mode": "unsupported",
+                    "message": "Версия сервера не подтверждает часовую очистку и защиту от спама."}
+        return {"enabled": True, "mode": "retention",
+                "message": "Подтверждено сервером: 1 час хранения, 256 МиБ и защита от спама.",
+                "publicRetentionSeconds": 3600, "publishLimits": limits}
+
+    def _reconcile_legacy(self, pid, item):
+        """Resolve a pre-retention publication without losing its owner token."""
+        public_id = _build_id(item["id"])
+        current = _listing(self.api.json("GET", "builds/" + public_id))
+        if current["id"] != public_id:
+            raise CatalogError(0, "Сервер вернул другую публикацию.")
+        if "expiresAt" not in current:
+            # Existing public catalogs do not implement TTL yet. Preserve the
+            # original owner token and display the entry with an honest warning.
+            return {**current, "statusUnverified": True}
+        with self.store.connection() as db:
+            db.execute("""UPDATE community_uploads SET listing=?
+                WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?""",
+                (json.dumps(current, ensure_ascii=False), self.api.origin, pid, public_id))
+        return current
+
     def _new_upload(self, pid, key, metadata):
         session = self.api.json("POST", "uploads", payload=metadata)
         upload, token = session.get("upload"), session.get("token")
@@ -269,7 +347,17 @@ class CommunityCatalog:
         metadata = {"name": name, "minecraft": version, "loader": loader, "category": _category(category)}
         status("Собираем файлы дополнений для публикации…")
         with tempfile.TemporaryFile(dir=self.store.root) as stream:
-            build_archive.export_build(self.store, pid, stream, catalog_name=name, max_bytes=MAX_ARCHIVE, include_configs=include_configs)
+            try:
+                build_archive.export_build(
+                    self.store, pid, stream, catalog_name=name,
+                    max_bytes=MAX_PUBLIC_UPLOAD, include_configs=include_configs,
+                )
+            except ValueError as exc:
+                if "лимит каталога" in str(exc):
+                    raise ValueError(
+                        "Сборка превышает лимит публикации 256 МиБ. Удали лишние файлы или уменьши сборку."
+                    ) from exc
+                raise
             digest = hashlib.sha256()
             while block := stream.read(CHUNK):
                 lifecycle.check()
@@ -280,8 +368,21 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 old = db.execute("SELECT * FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?", args).fetchone()
             listing = json.loads(old["listing"]) if old and old["listing"] else None
-            if listing:
+            # Preserve pre-retention owner tokens: reconcile old publications
+            # with the authoritative server instead of silently losing access.
+            if listing and "expiresAt" not in listing:
+                try:
+                    listing = self._reconcile_legacy(pid, listing)
+                except CatalogError as exc:
+                    if exc.code != 404:
+                        raise
+                    listing = None
+                    old = None
+            if listing and not _expired(listing):
                 return listing
+            if listing:
+                old = None
+                listing = None
 
             # If the completion response was lost, recover the published ID
             # before sending another byte. A changed archive gets a new session.
@@ -306,6 +407,8 @@ class CommunityCatalog:
                     self.api.json("PUT", f"uploads/{upload}/parts/{part}", token=token, block=block)
                 listing = self.api.json("POST", f"uploads/{upload}/complete", token=token)
             listing = _listing(listing)
+            if _expired(listing):
+                raise ValueError("Срок публикации истёк. Опубликуй сборку снова.")
             if any(listing[k] != v for k, v in metadata.items()):
                 raise ValueError("Запись каталога не соответствует отправленной сборке.")
             with self.store.connection() as db:
@@ -318,9 +421,30 @@ class CommunityCatalog:
         with self.store.connection() as db:
             rows = db.execute("SELECT listing FROM community_uploads WHERE origin=? AND pid=? AND listing IS NOT NULL ORDER BY rowid DESC",
                               (self.api.origin, pid)).fetchall()
-        items = [json.loads(row["listing"]) for row in rows]
-        for item in items:
+        items = []
+        retired = []
+        for row in rows:
+            item = json.loads(row["listing"])
+            if "expiresAt" not in item:
+                try:
+                    item = self._reconcile_legacy(pid, item)
+                except CatalogError as exc:
+                    if exc.code == 404:
+                        retired.append(item["id"])
+                        continue
+                    # A blocked network must never erase the owner's ability
+                    # to revoke a potentially still-live old publication.
+                    item["statusUnverified"] = True
+            if _expired(item):
+                retired.append(item["id"])
+                continue
             item["build"] = item["id"]
+            items.append(item)
+        if retired:
+            with self.store.connection() as db:
+                for public_id in retired:
+                    db.execute("DELETE FROM community_uploads WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?",
+                               (self.api.origin, pid, public_id))
         return {**(items[0] if items else {"build": "", "name": ""}), "publications": items}
 
     def unpublish(self, pid, public_id):
@@ -354,6 +478,8 @@ class CommunityCatalog:
             from_mirror = True
         if listing["id"] != public_id:
             raise ValueError("Каталог вернул другую сборку.")
+        if _expired(listing):
+            raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
         if not allow_without_steam and not e4steam.support(listing["minecraft"], listing["loader"]):
             raise ValueError("Подтверди установку этой сборки без встроенной игры через Steam.")
         size = listing["size"]
@@ -396,6 +522,8 @@ class CommunityCatalog:
     def handle(self, action, params, status=lambda msg: None):
         if action == "communitySearch":
             return self.search(params)
+        if action == "communityCapabilities":
+            return self.capabilities()
         if action == "communityPublication":
             return self.publications(params["id"])
         if action == "communityPublish":

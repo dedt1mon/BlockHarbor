@@ -139,3 +139,22 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
   .community-confirm-actions,
   .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
 }
+
+.community-expiry { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+
+/* Rate-limit feedback is an ordinary dialog; it never disables unrelated pages. */
+.community-ban-dialog { display: grid; gap: 13px; min-width: 0; }
+.community-ban-dialog h3 { margin: 0; font-size: 17px; }
+.community-ban-dialog p { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
+.community-ban-dialog .community-ban-actions { display: grid; grid-template-columns: 1fr; width: 100%; margin-top: 6px; }
+.community-ban-dialog .community-ban-actions > .btn { width: 100%; min-height: 44px; }
+
+.community-policy-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.community-policy-status[data-mode="verified"] { color: var(--lime); }
+.community-policy-status[data-mode="unverified"] { color: #e4b36e; }

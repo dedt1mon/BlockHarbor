@@ -59,7 +59,7 @@ from launcher.performance_profiles import PerformanceProfiles
 from launcher.transfers import TransferManager
 from launcher.updates import UpdateService, version_key
 from launcher.pack_hub import PackHub
-from launcher.community_catalog import CommunityCatalog
+from launcher.community_catalog import CommunityCatalog, CatalogError as CommunityCatalogError
 from launcher.shared_builds import SharedBuilds
 
 HERE = Path(__file__).resolve().parent
@@ -792,6 +792,13 @@ class App:
                     "ok": False,
                     "busy": False,
                 }
+                if isinstance(exc, CommunityCatalogError) and exc.reason_code == "PUBLISH_RATE_BAN":
+                    # Structured status reaches the existing UI job polling flow.
+                    # It affects only publication; all other launcher APIs remain available.
+                    final["publicationBan"] = {
+                        "blockedUntil": exc.blocked_until,
+                        "retryAfterSeconds": exc.retry_after,
+                    }
             try:
                 if not self.closing.is_set():
                     self.experience.notify(final["message"], "success" if final["ok"] else "error")

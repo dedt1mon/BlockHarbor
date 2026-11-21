@@ -214,7 +214,9 @@
       form.classList.remove("is-checking");
       form.classList.toggle("is-published", publications.length > 0);
       form.querySelector(".community-publication-status").textContent = publications.length
-        ? "Статус: опубликовано. Автоматическое удаление через 1 час после публикации."
+        ? publications.some(row => row.statusUnverified)
+          ? "Статус прежней публикации пока не подтверждён. Проверь подключение."
+          : "Статус: опубликовано. Автоматическое удаление через 1 час после публикации."
         : "Статус: не опубликовано.";
       if (pendingPublication?.id === form.dataset.packPublish) {
         setPublicationBusy(form, true, pendingPublication.progress);

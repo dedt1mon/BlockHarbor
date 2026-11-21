@@ -265,6 +265,18 @@ class CommunityCatalog:
             raise ValueError("Каталог вернул неверный список сборок.")
         return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
+    def _reconcile_legacy(self, pid, item):
+        """Resolve a pre-retention publication without losing its owner token."""
+        public_id = _build_id(item["id"])
+        current = _listing(self.api.json("GET", "builds/" + public_id))
+        if current["id"] != public_id or "expiresAt" not in current:
+            raise CatalogError(0, "Сервер пока не подтвердил срок публикации.")
+        with self.store.connection() as db:
+            db.execute("""UPDATE community_uploads SET listing=?
+                WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?""",
+                (json.dumps(current, ensure_ascii=False), self.api.origin, pid, public_id))
+        return current
+
     def _new_upload(self, pid, key, metadata):
         session = self.api.json("POST", "uploads", payload=metadata)
         upload, token = session.get("upload"), session.get("token")
@@ -297,9 +309,17 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 old = db.execute("SELECT * FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?", args).fetchone()
             listing = json.loads(old["listing"]) if old and old["listing"] else None
-            # A retired ID must never be resurrected by the local upload
-            # cache. Expiry is issued by the server upon successful completion.
-            if listing and not _expired(listing) and "expiresAt" in listing:
+            # Preserve pre-retention owner tokens: reconcile old publications
+            # with the authoritative server instead of silently losing access.
+            if listing and "expiresAt" not in listing:
+                try:
+                    listing = self._reconcile_legacy(pid, listing)
+                except CatalogError as exc:
+                    if exc.code != 404:
+                        raise
+                    listing = None
+                    old = None
+            if listing and not _expired(listing):
                 return listing
             if listing:
                 old = None
@@ -346,9 +366,17 @@ class CommunityCatalog:
         retired = []
         for row in rows:
             item = json.loads(row["listing"])
-            # Old cached publications lack an expiry and must be reconciled
-            # with the one-hour server policy before showing them as live.
-            if _expired(item) or "expiresAt" not in item:
+            if "expiresAt" not in item:
+                try:
+                    item = self._reconcile_legacy(pid, item)
+                except CatalogError as exc:
+                    if exc.code == 404:
+                        retired.append(item["id"])
+                        continue
+                    # A blocked network must never erase the owner's ability
+                    # to revoke a potentially still-live old publication.
+                    item["statusUnverified"] = True
+            if _expired(item):
                 retired.append(item["id"])
                 continue
             item["build"] = item["id"]

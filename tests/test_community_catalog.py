@@ -137,6 +137,39 @@ class CommunityCatalogTests(unittest.TestCase):
         self.assertFalse(self.reader.search({})["hits"])
         self.assertTrue(dest.exists())
 
+    def test_legacy_publication_recovers_expiry_without_losing_token(self):
+        published = self.publish()
+        self.assertTrue(published["expiresAt"])
+        with self.author.connection() as db:
+            cached = {key: value for key, value in published.items() if key != "expiresAt"}
+            db.execute("UPDATE community_uploads SET listing=? WHERE pid=?",
+                       (json.dumps(cached), self.pid))
+        records = self.publisher.publications(self.pid)["publications"]
+        self.assertEqual(records[0]["id"], self.server.public_id)
+        self.assertEqual(records[0]["expiresAt"], published["expiresAt"])
+        with self.author.connection() as db:
+            record = db.execute("SELECT token,listing FROM community_uploads WHERE pid=?", (self.pid,)).fetchone()
+            self.assertEqual(record["token"], "b" * 64)
+            self.assertIn("expiresAt", json.loads(record["listing"]))
+
+    def test_legacy_publication_offline_retains_revoke_token(self):
+        published = self.publish()
+        cached = {key: value for key, value in published.items() if key != "expiresAt"}
+        with self.author.connection() as db:
+            db.execute("UPDATE community_uploads SET listing=? WHERE pid=?",
+                       (json.dumps(cached), self.pid))
+        original = self.server.json
+        def disconnected(method, path, **kwargs):
+            if method == "GET":
+                raise catalog.CatalogError(0, "offline")
+            return original(method, path, **kwargs)
+        with patch.object(self.server, "json", side_effect=disconnected):
+            visible = self.publisher.publications(self.pid)["publications"]
+        self.assertTrue(visible[0]["statusUnverified"])
+        with self.author.connection() as db:
+            token = db.execute("SELECT token FROM community_uploads WHERE pid=?", (self.pid,)).fetchone()
+        self.assertEqual(token["token"], "b" * 64)
+
     def test_expired_publication_is_removed_locally_without_touching_build(self):
         published = self.publish()
         self.assertTrue(self.publisher.publications(self.pid)["publications"])

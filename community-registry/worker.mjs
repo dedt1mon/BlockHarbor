@@ -1,6 +1,11 @@
 // Public BlockHarbor build directory. D1 holds searchable metadata, R2 holds the snapshots.
 const PART = 8 * 1024 ** 2;
-const MAX_SIZE = 2 * 1024 ** 3;
+const MAX_SIZE = 256 * 1024 ** 2; // 256 MiB maximum per public archive.
+const STORAGE_LIMIT = 8 * 1024 ** 3; // Hard ceiling below R2's free allowance.
+const ACTIVE_PER_PUBLISHER = 3;
+const RATE_WINDOW = 10 * 60;
+const RATE_REQUESTS = 10;
+const RATE_BAN = 5 * 60 * 60;
 const DAY = 86400;
 const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after completion.
 const PAGE = 20;
@@ -13,11 +18,17 @@ const random = length => hex(crypto.getRandomValues(new Uint8Array(length)));
 const hash = async value => hex(await crypto.subtle.digest('SHA-256', text.encode(value)));
 const now = () => Math.floor(Date.now() / 1000);
 const key = row => `builds/${row.id}.zip`;
-function json(value, status = 200) {
-  return Response.json(value, {status, headers: {'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+function json(value, status = 200, extraHeaders = {}) {
+  return Response.json(value, {status, headers: {
+    'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...extraHeaders
+  }});
 }
 class RequestError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, details = {}) {
+    super(message);
+    this.status = status;
+    this.details = details;
+  }
 }
 function requireThat(valid, status, message) { if (!valid) throw new RequestError(status, message); }
 function publicBuild(row) {
@@ -28,6 +39,68 @@ async function authorized(request, row) {
   const token = /^Bearer ([0-9a-f]{64})$/.exec(request.headers.get('Authorization') || '');
   requireThat(row && token && await hash(token[1]) === row.owner_hash, 403, 'Нет прав на изменение этой публикации.');
 }
+
+async function publisherKey(request, env) {
+  // Cloudflare sets CF-Connecting-IP at ingress; never use a self-selected
+  // installation UUID as the sole rate-limit identity (trivial to rotate).
+  const ip = request.headers.get('CF-Connecting-IP');
+  requireThat(ip && ip.length<=64 && /^[0-9a-fA-F:.]+$/.test(ip),403,
+    'Не удалось подтвердить сетевой адрес для публикации.');
+  // The random RATE_SALT is a backend secret. Only a keyed digest of the IP
+  // is persisted in D1; raw addresses must not enter logs or SQLite.
+  requireThat(typeof env.RATE_SALT==='string' && env.RATE_SALT.length>=32,503,
+    'Сервис публикации не настроен. Обратитесь к разработчику лаунчера.');
+  const key=await crypto.subtle.importKey('raw',text.encode(env.RATE_SALT),
+    {name:'HMAC',hash:'SHA-256'},false,['sign']);
+  return hex(await crypto.subtle.sign('HMAC',key,text.encode(ip)));
+}
+async function checkPublicationRate(env, subject) {
+  const moment=now();
+  // SQLite UPSERT + RETURNING is one atomic statement, so concurrent POSTs
+  // cannot defeat the 10-attempt window. 11th starts a fixed 5-hour block.
+  const sql = [
+    'INSERT INTO publisher_rate (subject,window_start,attempts,blocked_until,updated_at)',
+    'VALUES (?, ?, 1, 0, ?)',
+    'ON CONFLICT(subject) DO UPDATE SET',
+    'attempts=CASE',
+      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.attempts',
+      'WHEN publisher_rate.window_start<=?-? THEN 1',
+      'ELSE publisher_rate.attempts+1 END,',
+    'blocked_until=CASE',
+      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.blocked_until',
+      'WHEN publisher_rate.window_start> ?-? AND publisher_rate.attempts>=?',
+      'THEN ?+?',
+      'ELSE 0 END,',
+    'window_start=CASE',
+      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.window_start',
+      'WHEN publisher_rate.window_start<=?-? THEN ?',
+      'ELSE publisher_rate.window_start END,',
+    'updated_at=?',
+    'RETURNING attempts,blocked_until,window_start'
+  ].join(' ');
+  const result=await env.DB.prepare(sql).bind(
+    subject,moment,moment,
+    moment,moment,RATE_WINDOW,
+    moment,moment,RATE_WINDOW,RATE_REQUESTS,moment,RATE_BAN,
+    moment,moment,RATE_WINDOW,moment,moment).first();
+  requireThat(result && Number.isInteger(result.attempts),503,
+    'Не удалось проверить ограничения публикации.');
+  if(result.blocked_until>moment) {
+    const remaining=result.blocked_until-moment;
+    throw new RequestError(429,
+      'Публикация временно заблокирована из-за слишком частых попыток.',
+      {code:'PUBLISH_RATE_BAN',retryAfterSeconds:remaining,blockedUntil:result.blocked_until});
+  }
+}
+async function cleanupRateCounters(env) {
+  const cutoff=now()-RATE_BAN-RATE_WINDOW-3600;
+  await env.DB.prepare([
+    'DELETE FROM publisher_rate WHERE subject IN',
+    '(SELECT subject FROM publisher_rate',
+    'WHERE updated_at<? AND blocked_until<? ORDER BY updated_at LIMIT 256)'
+  ].join(' ')).bind(cutoff,now()).run();
+}
+
 async function discard(env, row, expiredOnly = false) {
   // Hide first. Retries safely finish an interrupted deletion.
   const update = expiredOnly
@@ -57,18 +130,29 @@ async function begin(request, env) {
   const validVersion = typeof version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,149}$/.test(version)
     && !version.includes('..') && !/[. ]$/.test(version) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\s*\.|$)/i.test(version);
   requireThat(CATEGORIES.has(data.category) && LOADERS.has(data.loader) && validVersion,400,'Неизвестная категория, версия игры или загрузчик.');
-  requireThat(Number.isSafeInteger(data.size) && data.size >= 22 && data.size <= MAX_SIZE && typeof data.sha256 === 'string' && /^[0-9a-f]{64}$/.test(data.sha256),400,'Неверный размер архива или SHA-256.');
+  requireThat(Number.isSafeInteger(data.size) && data.size >= 22 && data.size <= MAX_SIZE,413,
+    'Размер публичного ZIP не должен превышать 256 МиБ.');
+  requireThat(typeof data.sha256==='string' && /^[a-f0-9]{64}$/.test(data.sha256),400,
+    'Неверная контрольная сумма сборки.');
+  const publisher=await publisherKey(request,env);
+  await checkPublicationRate(env,publisher);
   await prune(env);
   const token=random(32), upload=random(16), id='BH-'+random(6).toUpperCase();
-  const publisher=await hash(`${Math.floor(now()/DAY)}:${request.headers.get('CF-Connecting-IP') || 'anonymous'}`);
   const multi=await env.BUCKET.createMultipartUpload(key({id}));
   try {
+    const limit=Math.min(Number(env.CATALOG_STORAGE_LIMIT)||STORAGE_LIMIT,STORAGE_LIMIT);
     const inserted=await env.DB.prepare(`INSERT INTO builds(id,upload,owner_hash,multipart,state,name,search_name,category,minecraft,loader,size,sha256,created,publisher)
       SELECT ?,?,?,?,'uploading',?,?,?,?,?,?,?,?,? WHERE
-      (SELECT count(*) FROM builds WHERE publisher=? AND created>?)<40 AND
-      (SELECT count(*) FROM builds)<20000 AND (SELECT COALESCE(sum(size),0) FROM builds)+?<=?`)
-      .bind(id,upload,await hash(token),multi.uploadId,name,name.normalize('NFC').toLowerCase(),data.category,data.minecraft,data.loader,data.size,data.sha256,now(),publisher,publisher,now()-DAY,data.size,Number(env.CATALOG_STORAGE_LIMIT) || 10*1024**3).run();
-    requireThat(inserted.meta.changes===1,429,'Лимит публикаций или доступного места исчерпан. Попробуй позже.');
+      (SELECT count(*) FROM builds WHERE publisher=? AND
+        ((state='ready' AND created>?) OR (state='uploading' AND created>?)))<? AND
+      (SELECT count(*) FROM builds WHERE state IN ('ready','uploading'))<20000 AND
+      (SELECT COALESCE(sum(size),0) FROM builds)+?<=?`)
+      .bind(id,upload,await hash(token),multi.uploadId,name,name.normalize('NFC').toLowerCase(),data.category,
+        data.minecraft,data.loader,data.size,data.sha256,now(),publisher,
+        publisher,now()-PUBLIC_TTL,now()-DAY,ACTIVE_PER_PUBLISHER,
+        data.size,limit).run();
+    requireThat(inserted.meta.changes===1,429,
+      'Достигнут лимит: не более 3 активных публикаций с одного адреса либо заполнено хранилище.');
   } catch(error) { await multi.abort(); throw error; }
   return json({upload,token,chunkSize:PART},201);
 }
@@ -269,7 +353,8 @@ async function search(env, params) {
 }
 async function handle(request,env) {
   const url=new URL(request.url), path=url.pathname, method=request.method;
-  if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds',publicRetentionSeconds:PUBLIC_TTL,manifestFormat:1});
+  if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds',publicRetentionSeconds:PUBLIC_TTL,manifestFormat:1,
+    publishLimits:{maxArchiveBytes:MAX_SIZE,maxActive:ACTIVE_PER_PUBLISHER,windowSeconds:RATE_WINDOW,maxAttempts:RATE_REQUESTS,banSeconds:RATE_BAN}});
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
@@ -300,7 +385,11 @@ async function handle(request,env) {
 export default {
   async fetch(request,env) {
     try {return await handle(request,env);} catch(error) {
-      if(error instanceof RequestError) return json({error:error.message},error.status);
+      if(error instanceof RequestError) {
+        const seconds=error.details.retryAfterSeconds;
+        return json({error:error.message,...error.details},error.status,
+          Number.isSafeInteger(seconds) && seconds>0 ? {'Retry-After':String(seconds)} : {});
+      }
       console.error('Catalog request failed',error.name,error.message);
       return json({error:'Сервис каталога временно недоступен. Повтори запрос.'},503);
     }
@@ -312,5 +401,6 @@ export default {
       const count=await prune(env);
       if(count<4) break;
     }
+    await cleanupRateCounters(env);
   },
 };

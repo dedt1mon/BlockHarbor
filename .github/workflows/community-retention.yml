@@ -2,9 +2,12 @@ name: Verify 1-hour community retention and compatibility
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/community-retention-1h]
     paths:
       - 'community-registry/**'
+      - 'main.py'
+      - 'launcher/community_catalog.py'
+      - 'ui/pack-hub.css'
       - 'launcher/community_catalog.py'
       - 'tools/sync_community_mirror.py'
       - 'ui/pack-hub.js'

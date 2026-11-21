@@ -19,7 +19,8 @@ from .version import VERSION
 
 ORIGIN = "https://blockharbor-community-catalog.ded8timon.chatgpt.site"
 CHUNK = 8 * 1024**2
-MAX_ARCHIVE = 2 * 1024**3
+MAX_ARCHIVE = 2 * 1024**3  # Existing archives remain readable during migration.
+MAX_PUBLIC_UPLOAD = 256 * 1024**2  # New public snapshots are capped at 256 MiB.
 PAGE = 20
 MAX_JSON = 128 * 1024
 MIRROR_INDEX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-index/index.json"
@@ -72,9 +73,12 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class CatalogError(ValueError):
-    def __init__(self, code, reason):
+    def __init__(self, code, reason, *, reason_code="", blocked_until=0, retry_after=0):
         super().__init__(reason)
         self.code = code
+        self.reason_code = reason_code
+        self.blocked_until = blocked_until
+        self.retry_after = retry_after
 
 
 class CatalogAPI:
@@ -102,12 +106,28 @@ class CatalogAPI:
         except HTTPError as exc:
             with exc:
                 try:
-                    reason = json.loads(exc.read(4096)).get("error")
+                    response = json.loads(exc.read(4096))
                 except (ValueError, AttributeError):
-                    reason = ""
+                    response = {}
+            if not isinstance(response, dict):
+                response = {}
+            reason = response.get("error")
             if not isinstance(reason, str) or not reason:
                 reason = "Каталог отклонил запрос."
-            raise CatalogError(exc.code, f"{reason[:240]} (HTTP {exc.code})") from None
+            reason_code = response.get("code", "")
+            blocked_until = response.get("blockedUntil", 0)
+            retry_after = response.get("retryAfterSeconds", 0)
+            if reason_code != "PUBLISH_RATE_BAN" or exc.code != 429:
+                reason_code, blocked_until, retry_after = "", 0, 0
+            if type(blocked_until) is not int or blocked_until < 0:
+                blocked_until = 0
+            if type(retry_after) is not int or not 0 <= retry_after <= 5 * 3600:
+                retry_after = 0
+            raise CatalogError(
+                exc.code, f"{reason[:240]} (HTTP {exc.code})",
+                reason_code=reason_code, blocked_until=blocked_until,
+                retry_after=retry_after,
+            ) from None
         except (OSError, URLError, HTTPException) as exc:
             lifecycle.check()
             raise CatalogError(0, "Не удалось связаться с каталогом сборок. Проверь подключение и попробуй ещё раз.") from exc
@@ -298,7 +318,17 @@ class CommunityCatalog:
         metadata = {"name": name, "minecraft": version, "loader": loader, "category": _category(category)}
         status("Собираем файлы дополнений для публикации…")
         with tempfile.TemporaryFile(dir=self.store.root) as stream:
-            build_archive.export_build(self.store, pid, stream, catalog_name=name, max_bytes=MAX_ARCHIVE, include_configs=include_configs)
+            try:
+                build_archive.export_build(
+                    self.store, pid, stream, catalog_name=name,
+                    max_bytes=MAX_PUBLIC_UPLOAD, include_configs=include_configs,
+                )
+            except ValueError as exc:
+                if "лимит каталога" in str(exc):
+                    raise ValueError(
+                        "Сборка превышает лимит публикации 256 МиБ. Удали лишние файлы или уменьши сборку."
+                    ) from exc
+                raise
             digest = hashlib.sha256()
             while block := stream.read(CHUNK):
                 lifecycle.check()

@@ -245,7 +245,7 @@
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note community-publish-description">Сборка станет общедоступной на 1 час, после чего архив автоматически удалится. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
+      <p class="note community-publish-description">Сборка станет общедоступной на 1 час, после чего архив автоматически удалится. Лимит ZIP: 256 МиБ; не более 3 активных публикаций. Более 10 попыток за 10 минут блокируют новые публикации на 5 часов. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
       <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
@@ -265,6 +265,28 @@
     form.querySelector(".community-feedback").textContent = message;
   }
 
+  function showPublicationBan(details) {
+    const seconds = Math.max(0, Math.min(5 * 3600, Number(details?.retryAfterSeconds) || 5 * 3600));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.ceil((seconds % 3600) / 60);
+    const remaining = hours + " ч " + String(minutes).padStart(2, "0") + " мин";
+    const until = Number(details?.blockedUntil);
+    const date = Number.isSafeInteger(until) && until > Date.now() / 1000 &&
+      until < Date.now() / 1000 + 5 * 3600 + 300
+        ? new Date(until * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})
+        : "";
+    modal("Публикация временно заблокирована", `
+      <section class="community-ban-dialog" role="alert">
+        <h3>Слишком много попыток публикации</h3>
+        <p>Превышен лимит: 10 попыток за 10 минут. Новые публикации временно заблокированы на 5 часов.</p>
+        <p><strong>Осталось: ${esc(remaining)}</strong>${date ? " · До " + esc(date) : ""}</p>
+        <p class="note">Остальные возможности BlockHarbor работают как обычно: ты можешь запускать Minecraft, устанавливать моды и скачивать сборки игроков.</p>
+        <div class="dialog-actions community-ban-actions">
+          ${button('data-act="close"', "Понятно")}
+        </div>
+      </section>`);
+  }
+
   function observeJob(job) {
     const request = pendingPublication;
     if (!request || !request.job || job.id !== request.job || job.busy) return;
@@ -277,6 +299,11 @@
       if (document.querySelector(".community-results")) searchCommunity();
     }
     const form = document.querySelector("[data-pack-publish]");
+    if (job.publicationBan) {
+      if (form?.dataset.packPublish === request.id) setPublicationBusy(form, false, job.message);
+      showPublicationBan(job.publicationBan);
+      return;
+    }
     if (form?.dataset.packPublish !== request.id) return;
     setPublicationBusy(form, false, job.ok ? request.done : job.message);
     if (job.ok) readPublications(form);

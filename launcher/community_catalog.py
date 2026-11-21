@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import build_archive, e4steam, lifecycle, version_ids
+from . import build_archive, community_auto, e4steam, lifecycle, version_ids
 from .pack_hub import CATEGORIES
 from .store import LOADERS, input_profile
 from .version import VERSION
@@ -212,10 +212,28 @@ class CommunityCatalog:
         self.store = store
         self.api = api or CatalogAPI()
         self.mirror = mirror if mirror is not None else GitHubMirror()
+        self._scan_at = 0.0
+        self._observed = {}
         with self.store.connection() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS community_uploads (
                 origin TEXT NOT NULL, pid TEXT NOT NULL, fingerprint TEXT NOT NULL, upload TEXT NOT NULL,
                 token TEXT NOT NULL, listing TEXT, PRIMARY KEY (origin,pid,fingerprint))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS community_auto (
+                origin TEXT NOT NULL, pid TEXT NOT NULL, public_id TEXT NOT NULL,
+                include_configs INTEGER NOT NULL DEFAULT 0, signature TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '', next_retry REAL NOT NULL DEFAULT 0,
+                updated REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (origin,pid,public_id))""")
+            # Publications created before auto-sync existed are migrated without
+            # altering their owner tokens or public IDs. Their first fingerprint
+            # is established by comparing actual archive bytes with the server.
+            for row in db.execute("SELECT origin,pid,listing FROM community_uploads WHERE listing IS NOT NULL"):
+                try:
+                    public_id = _build_id(json.loads(row["listing"])["id"])
+                except (KeyError,TypeError,ValueError):
+                    continue
+                db.execute("INSERT OR IGNORE INTO community_auto(origin,pid,public_id) VALUES(?,?,?)",
+                           (row["origin"],row["pid"],public_id))
 
     def search(self, params):
         query = params.get("q", "")
@@ -281,6 +299,7 @@ class CommunityCatalog:
                 old = db.execute("SELECT * FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?", args).fetchone()
             listing = json.loads(old["listing"]) if old and old["listing"] else None
             if listing:
+                self._remember_auto(pid, listing["id"], include_configs)
                 return listing
 
             # If the completion response was lost, recover the published ID
@@ -311,7 +330,131 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 db.execute("UPDATE community_uploads SET listing=? WHERE origin=? AND pid=? AND fingerprint=?",
                            (json.dumps(listing, ensure_ascii=False), *args))
+            self._remember_auto(pid, listing["id"], include_configs)
             return listing
+
+
+    def _remember_auto(self, pid, public_id, include_configs):
+        # Only the explicit opt-in checkbox can enable config sharing.
+        signature = community_auto.signature(self.store, pid, include_configs=include_configs)
+        with self.store.connection() as db:
+            db.execute("""INSERT INTO community_auto(origin,pid,public_id,include_configs,signature,error,next_retry,updated)
+                VALUES(?,?,?,?,?,'',0,?)
+                ON CONFLICT(origin,pid,public_id) DO UPDATE SET
+                include_configs=excluded.include_configs,signature=excluded.signature,
+                error='',next_retry=0,updated=excluded.updated""",
+                (self.api.origin,pid,public_id,int(include_configs),signature,time.time()))
+        self._observed.pop((pid,public_id),None)
+
+    def _auto_rows(self):
+        with self.store.connection() as db:
+            return db.execute("""SELECT a.*,u.token,u.listing FROM community_auto a
+                JOIN community_uploads u ON a.origin=u.origin AND a.pid=u.pid AND json_extract(u.listing,'$.id')=a.public_id
+                WHERE a.origin=? AND u.listing IS NOT NULL ORDER BY a.pid,a.public_id""",
+                (self.api.origin,)).fetchall()
+
+    def next_auto_update(self, is_idle=lambda _pid: True):
+        """Cheap, debounced check: never touches the network or game/world files."""
+        current = time.monotonic()
+        if current < self._scan_at:
+            return None
+        self._scan_at = current + 8
+        now = time.time()
+        signatures = {}
+        rows = self._auto_rows()
+        seen = set()
+        for row in rows:
+            pid, public_id = row["pid"],row["public_id"]
+            key = (pid,public_id)
+            seen.add(key)
+            if row["next_retry"] > now or not is_idle(pid):
+                continue
+            try:
+                cache_key = (pid,bool(row["include_configs"]))
+                if cache_key not in signatures:
+                    signatures[cache_key] = community_auto.signature(
+                        self.store,pid,include_configs=cache_key[1])
+                fingerprint = signatures[cache_key]
+            except (OSError,ValueError):
+                # A changing directory is not a stable publication snapshot.
+                self._observed.pop(key,None)
+                continue
+            if fingerprint == row["signature"]:
+                self._observed.pop(key,None)
+                continue
+            previous = self._observed.get(key)
+            if not previous or previous[0] != fingerprint:
+                self._observed[key] = (fingerprint,current)
+            elif current - previous[1] >= 15:
+                return pid,public_id
+        for key in set(self._observed)-seen:
+            self._observed.pop(key,None)
+        return None
+
+    def sync_existing(self, pid, public_id, status):
+        """Publish newer bytes to exactly the same authorized public build ID."""
+        public_id = _build_id(public_id)
+        with self.store.connection() as db:
+            row = db.execute("""SELECT a.*,u.token,u.listing FROM community_auto a
+                JOIN community_uploads u ON a.origin=u.origin AND a.pid=u.pid
+                WHERE a.origin=? AND a.pid=? AND a.public_id=? AND u.listing IS NOT NULL""",
+                (self.api.origin,pid,public_id)).fetchone()
+        if row is None:
+            return "Публикация снята с каталога."
+        try:
+            listing = _listing(json.loads(row["listing"]))
+            profile = self.store.profile(pid)
+            if (profile["version"],profile["loader"]) != (listing["minecraft"],listing["loader"]):
+                raise ValueError("Версия Minecraft или загрузчик изменились. Создай новую публикацию.")
+            configs = bool(row["include_configs"])
+            fingerprint = community_auto.signature(self.store,pid,include_configs=configs)
+            status("Готовим обновление опубликованной сборки…")
+            with tempfile.TemporaryFile(dir=self.store.root) as stream:
+                build_archive.export_build(self.store,pid,stream,catalog_name=listing["name"],
+                                           max_bytes=MAX_ARCHIVE,include_configs=configs)
+                digest=hashlib.sha256()
+                while chunk := stream.read(CHUNK):
+                    lifecycle.check()
+                    digest.update(chunk)
+                size,sha=stream.tell(),digest.hexdigest()
+                if sha != listing["sha256"] or size != listing["size"]:
+                    metadata = {k:listing[k] for k in ("name","minecraft","loader","category")}
+                    metadata.update(size=size,sha256=sha)
+                    session = self.api.json("POST",f"builds/{public_id}/revisions",
+                                            token=row["token"],payload=metadata)
+                    if session.get("unchanged"):
+                        new_listing = _listing(session)
+                    else:
+                        upload = session.get("upload")
+                        if not isinstance(upload,str) or not re.fullmatch("[a-f0-9]{32}",upload) or session.get("chunkSize")!=CHUNK:
+                            raise ValueError("Реестр вернул некорректную сессию обновления.")
+                        stream.seek(0)
+                        number=0
+                        while block := stream.read(CHUNK):
+                            lifecycle.check()
+                            number+=1
+                            status(f"Обновляем {public_id} · {stream.tell()*100//size}%")
+                            self.api.json("PUT",f"revisions/{upload}/parts/{number}",
+                                          token=row["token"],block=block)
+                        new_listing=_listing(self.api.json(
+                            "POST",f"revisions/{upload}/complete",token=row["token"]))
+                    if new_listing["id"]!=public_id or any(new_listing[k]!=metadata[k] for k in metadata):
+                        raise ValueError("Обновление каталога не совпадает с отправленным архивом.")
+                    with self.store.connection() as db:
+                        db.execute("UPDATE community_uploads SET listing=? WHERE origin=? AND pid=? AND listing IS NOT NULL AND json_extract(listing,'$.id')=?",
+                                   (json.dumps(new_listing,ensure_ascii=False),self.api.origin,pid,public_id))
+            with self.store.connection() as db:
+                db.execute("""UPDATE community_auto SET signature=?,error='',next_retry=0,updated=?
+                    WHERE origin=? AND pid=? AND public_id=?""",
+                           (fingerprint,time.time(),self.api.origin,pid,public_id))
+            self._observed.pop((pid,public_id),None)
+            return f"Сборка {public_id} обновлена без изменения кода."
+        except (OSError,ValueError,HTTPException) as exc:
+            # Retry across restarts, but do not hammer the registry while offline.
+            with self.store.connection() as db:
+                db.execute("UPDATE community_auto SET error=?,next_retry=? WHERE origin=? AND pid=? AND public_id=?",
+                           (str(exc)[:240],time.time()+300,self.api.origin,pid,public_id))
+            raise
 
     def publications(self, pid):
         self.store.profile(pid)
@@ -319,8 +462,16 @@ class CommunityCatalog:
             rows = db.execute("SELECT listing FROM community_uploads WHERE origin=? AND pid=? AND listing IS NOT NULL ORDER BY rowid DESC",
                               (self.api.origin, pid)).fetchall()
         items = [json.loads(row["listing"]) for row in rows]
+        with self.store.connection() as db:
+            flags = {row["public_id"]:dict(row) for row in db.execute(
+                "SELECT public_id,error,next_retry,updated FROM community_auto WHERE origin=? AND pid=?",
+                (self.api.origin,pid))}
         for item in items:
             item["build"] = item["id"]
+            flag = flags.get(item["id"],{})
+            item["autoSync"] = {"enabled": True, "error":flag.get("error",""),
+                                "retryAt":flag.get("next_retry",0),
+                                "updated":flag.get("updated",0)}
         return {**(items[0] if items else {"build": "", "name": ""}), "publications": items}
 
     def unpublish(self, pid, public_id):
@@ -340,6 +491,9 @@ class CommunityCatalog:
         with self.store.connection() as db:
             db.execute("DELETE FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?",
                        (self.api.origin, pid, row["fingerprint"]))
+            db.execute("DELETE FROM community_auto WHERE origin=? AND pid=? AND public_id=?",
+                       (self.api.origin,pid,public_id))
+        self._observed.pop((pid,public_id),None)
         return "Сборка " + public_id + " снята с публикации."
 
     def install(self, public_id, allow_without_steam, status):

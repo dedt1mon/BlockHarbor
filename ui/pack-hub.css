@@ -139,3 +139,5 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
   .community-confirm-actions,
   .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
 }
+
+.community-auto-note { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 0; overflow-wrap: anywhere; }

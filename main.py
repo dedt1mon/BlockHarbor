@@ -653,6 +653,17 @@ class App:
                         self.start_job(lambda status: self.care.backup_after_game(pid, status) or "Копии миров актуальны.", profile=pid)
                     else:
                         self.pending_world_backups.add(pid)
+            # Only a stable, previously published build is scheduled. The job
+            # acquires the normal cross-process operation lock and never
+            # replaces an active Minecraft profile while the game is running.
+            if not self.job_snapshot()["busy"]:
+                target = self.community.next_auto_update(
+                    lambda candidate: not self.profile_running(candidate))
+                if target:
+                    pid, public_id = target
+                    self.start_job(
+                        lambda status: self.community.sync_existing(pid, public_id, status),
+                        profile=pid)
         finally:
             self.lock.release()
         if not self.closing.is_set():

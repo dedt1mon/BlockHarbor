@@ -375,7 +375,7 @@ async function search(env, params) {
 }
 async function handle(request,env) {
   const url=new URL(request.url), path=url.pathname, method=request.method;
-  if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds'});
+  if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds',schema:2,capabilities:['revisions']});
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
   const revisionBegin=/^\/v1\/builds\/(BH-[0-9A-F]{12})\/revisions$/.exec(path);

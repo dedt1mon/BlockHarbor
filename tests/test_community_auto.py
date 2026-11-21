@@ -77,10 +77,11 @@ class AutoPublicationTests(unittest.TestCase):
     def test_auto_update_preserves_id_and_metadata(self):
         old_sha = self.listing["sha256"]
         self.write("mods/extra.jar", b"mod-file-v1")
-        self.assertIsNone(self.service.next_auto_update())
-        with patch.object(catalog.time, "monotonic", return_value=self.service._scan_at + 10):
+        with patch.object(catalog.time, "monotonic", return_value=100):
             self.assertIsNone(self.service.next_auto_update())
-        with patch.object(catalog.time, "monotonic", return_value=self.service._scan_at + 16):
+        with patch.object(catalog.time, "monotonic", return_value=109):
+            self.assertIsNone(self.service.next_auto_update())
+        with patch.object(catalog.time, "monotonic", return_value=117):
             # The candidate has been stable for at least 15 seconds.
             self.assertEqual(self.service.next_auto_update(), (self.pid, self.api.public_id))
         done = self.service.sync_existing(self.pid, self.api.public_id, self.sent.append)

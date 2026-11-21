@@ -103,9 +103,13 @@ async function beginRevision(request,env,id) {
   if(data.sha256===parent.sha256 && data.size===parent.size) return json({...publicBuild(parent),unchanged:true});
   const old=await env.DB.prepare("SELECT * FROM revisions WHERE id=? AND state='uploading'").bind(id).first();
   if(old) {
-    requireThat(old.sha256===data.sha256 && old.size===data.size && old.base_sha===parent.sha256 &&
-      old.name===data.name && old.category===data.category,409,'Предыдущее обновление ещё выполняется.');
-    return json({upload:old.upload,chunkSize:PART},200);
+    if(old.sha256===data.sha256 && old.size===data.size && old.base_sha===parent.sha256 &&
+       old.name===data.name && old.category===data.category) {
+      return json({upload:old.upload,chunkSize:PART},200);
+    }
+    // Same authenticated author submitted a newer snapshot. Abandon only the
+    // unfinished candidate; the currently published archive remains untouched.
+    await discardRevision(env,old);
   }
   await pruneRevisions(env);
   const occupied=await env.DB.prepare('SELECT (SELECT COALESCE(sum(size),0) FROM builds)+(SELECT COALESCE(sum(size),0) FROM revisions WHERE state=\'uploading\') AS used').first();

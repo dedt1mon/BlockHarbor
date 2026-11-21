@@ -313,3 +313,20 @@ test('same ZIP revision is idempotent and incompatible loader cannot overwrite p
   assert.equal((await api.call('POST','builds/'+pub.id+'/revisions',
     Buffer.from(JSON.stringify(metadata(small))),'0'.repeat(64))).status,403);
 });
+
+test('newer edits replace unfinished revision without unpublishing old archive',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  await author.put(1,small);
+  const published=await (await author.finish()).json();
+  const first=await api.call('POST','builds/'+published.id+'/revisions',
+    Buffer.from(JSON.stringify({...metadata(small),size:small.length+20,sha256:'1'.repeat(64)})),author.token);
+  assert.equal(first.status,201);
+  const stale=(await first.json()).upload;
+  const newer=await api.call('POST','builds/'+published.id+'/revisions',
+    Buffer.from(JSON.stringify({...metadata(small),size:small.length+30,sha256:'2'.repeat(64)})),author.token);
+  assert.equal(newer.status,201);
+  assert.notEqual((await newer.json()).upload,stale);
+  assert.equal((await api.call('PUT','revisions/'+stale+'/parts/1',small,author.token)).status,404);
+  const current=await (await api.call('GET','builds/'+published.id)).json();
+  assert.equal(current.sha256,published.sha256);
+});

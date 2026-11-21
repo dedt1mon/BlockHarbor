@@ -6,7 +6,7 @@ const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after co
 const PAGE = 20;
 const CATEGORIES = new Set(['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']);
 const LOADERS = new Set(['vanilla','fabric','quilt','forge','neoforge']);
-const FIELDS = 'id, name, category, minecraft, loader, size, sha256';
+const FIELDS = 'id, name, category, minecraft, loader, size, sha256, created';
 const text = new TextEncoder();
 const hex = bytes => Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2,'0')).join('');
 const random = length => hex(crypto.getRandomValues(new Uint8Array(length)));
@@ -250,7 +250,12 @@ async function search(env, params) {
   const offset=Number(params.get('offset')||0);
   requireThat(Array.from(q).length<=180 && Number.isSafeInteger(offset) && offset>=0,400,'Некорректный запрос каталога.');
   // Keep expired snapshots hidden even if a cleanup job is delayed.
-  await prune(env);
+  try { await prune(env); }
+  catch(error) {
+    // Cleanup failure must not block a healthy catalog; expiration is enforced
+    // independently by the SQL filter and exact-ID read guards.
+    console.warn('Catalog expiry cleanup deferred',error?.name || 'error');
+  }
   const filters=["state='ready'","created>?"], args=[now()-PUBLIC_TTL];
   if(q) { filters.push('(id=? OR instr(search_name,?)>0)'); args.push(q.toUpperCase(),q); }
   for(const [parameter,column] of [['category','category'],['version','minecraft'],['loader','loader']]) {
@@ -260,7 +265,7 @@ async function search(env, params) {
   const where=filters.join(' AND ');
   const [count,rows]=await env.DB.batch([env.DB.prepare(`SELECT count(*) AS total FROM builds WHERE ${where}`).bind(...args),
     env.DB.prepare(`SELECT ${FIELDS} FROM builds WHERE ${where} ORDER BY created DESC,id LIMIT ? OFFSET ?`).bind(...args,PAGE,offset)]);
-  return json({hits:rows.results,total:count.results[0].total,limit:PAGE,offset});
+  return json({hits:rows.results.map(publicBuild),total:count.results[0].total,limit:PAGE,offset});
 }
 async function handle(request,env) {
   const url=new URL(request.url), path=url.pathname, method=request.method;

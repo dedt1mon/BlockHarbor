@@ -182,9 +182,6 @@
     return `<div class="community-publications">${list.map(row => `<section class="community-receipt">
       ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
       <label class="community-code-label">Код сборки</label>
-      <p class="community-auto-note" role="status">${row.autoSync?.error
-        ? "Автообновление ожидает повторной попытки. Предыдущая версия остаётся доступна: " + esc(row.autoSync.error)
-        : "Автообновление включено — изменения дополнений будут опубликованы с тем же кодом."}</p>
       <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
       <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">

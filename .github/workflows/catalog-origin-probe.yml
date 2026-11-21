@@ -21,7 +21,6 @@ jobs:
           python3 - <<'PY'
           import urllib.request, urllib.error, json
           targets = [
-              "https://blockharbor-community-catalog.ded8timon.chatgpt.site/",
               "https://blockharbor-community-catalog.ded8timon.chatgpt.site/v1/builds",
               "https://github.com/dedt1mon/BlockHarbor/releases/latest",
           ]

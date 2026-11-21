@@ -6,7 +6,7 @@ const ACTIVE_PER_PUBLISHER = 3;
 const RATE_WINDOW = 10 * 60;
 const RATE_REQUESTS = 10;
 const RATE_BAN = 5 * 60 * 60;
-const DAY = 86400;
+const UPLOAD_TTL = 30 * 60; // Unfinished multipart reservations expire in 30 min.
 const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after completion.
 const PAGE = 20;
 const CATEGORIES = new Set(['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']);
@@ -86,6 +86,18 @@ async function checkPublicationRate(env, subject) {
   requireThat(result && Number.isInteger(result.attempts),503,
     'Не удалось проверить ограничения публикации.');
   if(result.blocked_until>moment) {
+    if(result.blocked_until===moment+RATE_BAN) {
+      // Immediately cancel unfinished spam reservations to free R2 capacity.
+      // Never unpublish already verified 'ready' builds.
+      try {
+        const {results:unfinished}=await env.DB.prepare(
+          "SELECT * FROM builds WHERE publisher=? AND state='uploading' LIMIT ?"
+        ).bind(subject,ACTIVE_PER_PUBLISHER).all();
+        for(const row of unfinished) await discard(env,row);
+      } catch(error) {
+        console.warn('Deferred cleanup for blocked publisher',error?.name || 'error');
+      }
+    }
     const remaining=result.blocked_until-moment;
     throw new RequestError(429,
       'Публикация временно заблокирована из-за слишком частых попыток.',
@@ -104,7 +116,7 @@ async function cleanupRateCounters(env) {
 async function discard(env, row, expiredOnly = false) {
   // Hide first. Retries safely finish an interrupted deletion.
   const update = expiredOnly
-    ? env.DB.prepare("UPDATE builds SET state='removing' WHERE id=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(row.id, now()-DAY, now()-PUBLIC_TTL)
+    ? env.DB.prepare("UPDATE builds SET state='removing' WHERE id=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(row.id, now()-UPLOAD_TTL, now()-PUBLIC_TTL)
     : env.DB.prepare("UPDATE builds SET state='removing' WHERE id=?").bind(row.id);
   if ((await update.run()).meta.changes === 0) return;
   if (row.state !== 'ready') {
@@ -116,7 +128,7 @@ async function discard(env, row, expiredOnly = false) {
     env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id)]);
 }
 async function prune(env) {
-  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?) ORDER BY created,id LIMIT 4").bind(now()-DAY,now()-PUBLIC_TTL).all();
+  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?) ORDER BY created,id LIMIT 4").bind(now()-UPLOAD_TTL,now()-PUBLIC_TTL).all();
   for (const row of results) await discard(env,row,true);
   return results.length;
 }
@@ -149,7 +161,7 @@ async function begin(request, env) {
       (SELECT COALESCE(sum(size),0) FROM builds)+?<=?`)
       .bind(id,upload,await hash(token),multi.uploadId,name,name.normalize('NFC').toLowerCase(),data.category,
         data.minecraft,data.loader,data.size,data.sha256,now(),publisher,
-        publisher,now()-PUBLIC_TTL,now()-DAY,ACTIVE_PER_PUBLISHER,
+        publisher,now()-PUBLIC_TTL,now()-UPLOAD_TTL,ACTIVE_PER_PUBLISHER,
         data.size,limit).run();
     requireThat(inserted.meta.changes===1,429,
       'Достигнут лимит: не более 3 активных публикаций с одного адреса либо заполнено хранилище.');
@@ -362,7 +374,7 @@ async function handle(request,env) {
     const row=await env.DB.prepare('SELECT * FROM builds WHERE upload=?').bind(upload[1]).first();
     requireThat(row,404,'Загрузка не найдена.');
     await authorized(request,row);
-    requireThat(row.state==='ready' || row.created>=now()-DAY,410,'Срок загрузки истёк.');
+    requireThat(row.state==='ready' || row.created>=now()-UPLOAD_TTL,410,'Срок загрузки истёк.');
     if(upload[2] && method==='PUT') return part(request,env,row,Number(upload[2]));
     if(upload[3] && method==='POST') return finish(env,row);
   }

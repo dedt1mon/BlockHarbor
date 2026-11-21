@@ -344,8 +344,8 @@ test('11th attempt in ten minutes triggers five-hour ban and Retry-After',async 
   assert.equal(row.blocked_until,info.blockedUntil);
   const again=await (await api.begin(metadata(small))).json();
   assert.equal(again.blockedUntil,info.blockedUntil); // hammering cannot extend ban
-  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,3);
-  assert.equal(api.env.BUCKET.uploads.size,3);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+  assert.equal(api.env.BUCKET.uploads.size,0); // pending spam reservations cancelled
   api.env.DB.db.exec('DELETE FROM builds'); // simulate TTL cleanup before later retry
   api.env.DB.db.exec('UPDATE publisher_rate SET blocked_until=0,window_start=0');
   const recovered=await api.begin(metadata(small));
@@ -362,7 +362,7 @@ test('concurrent publication bursts remain atomic even with many simultaneous cl
   const blocked=await Promise.all(results.map(async x=>x.status===429?await x.json():{}));
   assert.ok(blocked.some(x=>x.code==='PUBLISH_RATE_BAN'));
   assert.equal(api.env.DB.db.prepare('SELECT attempts FROM publisher_rate').get().attempts,11);
-  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,3);
+  assert.ok(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n<=3);
 });
 
 test('missing edge identity or secret fails closed only for publishing',async t => {
@@ -376,4 +376,30 @@ test('missing edge identity or secret fails closed only for publishing',async t 
     method:'POST',body,headers:{'Content-Length':String(body.length)}}),api.env);
   assert.equal(withoutIp.status,403);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
+});
+
+
+test('a temporary ban removes only unfinished uploads, not verified builds',async t => {
+  const api=registry(t), owner=await api.open(metadata(small));
+  await owner.put(1,small);
+  const published=await (await owner.finish()).json();
+  for(let i=0;i<9;i++) await api.begin(metadata(small));
+  const blocked=await api.begin(metadata(small));
+  assert.equal((await blocked.json()).code,'PUBLISH_RATE_BAN');
+  const remaining=await (await api.call('GET','builds')).json();
+  assert.equal(remaining.total,1);
+  assert.equal(remaining.hits[0].id,published.id);
+  assert.equal(api.env.BUCKET.objects.size,1);
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal((await api.call('GET','builds/'+published.id+'/archive')).status,200);
+});
+
+test('unfinished uploads expire after 30 minutes and release their reservation',async t => {
+  const api=registry(t);
+  assert.equal((await api.begin(metadata(small))).status,201);
+  assert.equal(api.env.BUCKET.uploads.size,1);
+  api.env.DB.db.exec("UPDATE builds SET created=created-1801 WHERE state='uploading'");
+  await api.call('GET','builds');
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
 });

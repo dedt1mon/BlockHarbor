@@ -206,10 +206,8 @@ class GitHubMirror:
                 or type(data.get("total")) is not int or data["total"] != len(rows)):
             raise CatalogError(0, "Резервный каталог вернул неполные сведения.")
         items = [_listing(row) for row in rows]
-        # The current mirror protocol must carry expiry information. Older
-        # cached indexes cannot prove that a publication is still available.
-        if any("expiresAt" not in item for item in items):
-            raise CatalogError(0, "Резервный каталог ещё не синхронизировал сроки публикаций.")
+        # Legacy mirror indexes do not have expiry metadata. Preserve their
+        # working downloads, but make the unknown retention visible in the UI.
         if len({item["id"] for item in items}) != len(items):
             raise CatalogError(0, "Резервный каталог содержит повторяющиеся сборки.")
         self._cache = (time.monotonic(), items)
@@ -217,8 +215,10 @@ class GitHubMirror:
 
     def search(self, filters):
         needle = filters["q"].strip().casefold()
+        listings = self._listings()
+        legacy = any("expiresAt" not in item for item in listings)
         matching = [
-            item for item in self._listings()
+            item for item in listings
             if not _expired(item)
             and (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
             and (not filters["category"] or item["category"] == filters["category"])
@@ -227,7 +227,7 @@ class GitHubMirror:
         ]
         offset = filters["offset"]
         return {"hits": matching[offset:offset + PAGE], "total": len(matching),
-                "limit": PAGE, "offset": offset, "source": "github"}
+                "limit": PAGE, "offset": offset, "source": "github-legacy" if legacy else "github"}
 
     def listing(self, public_id):
         public_id = _build_id(public_id)
@@ -241,7 +241,7 @@ class GitHubMirror:
 
 
 class CommunityCatalog:
-    READ_ACTIONS = {"communitySearch", "communityPublication"}
+    READ_ACTIONS = {"communitySearch", "communityPublication", "communityCapabilities"}
     JOBS = {"communityInstall", "communityPublish", "communityUnpublish"}
     ACTIONS = READ_ACTIONS | JOBS
 
@@ -285,12 +285,41 @@ class CommunityCatalog:
             raise ValueError("Каталог вернул неверный список сборок.")
         return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
+    def capabilities(self):
+        """Detect whether the live server actually enforces retention and bans.
+
+        Older server versions do not expose this endpoint. Never label those
+        sites as enforcing the one-hour rule simply because the client knows it.
+        """
+        try:
+            data = self.api.json("GET", "capabilities")
+        except CatalogError as exc:
+            if exc.code == 404:
+                return {"enabled": False, "mode": "legacy",
+                        "message": "Сервер каталога пока не поддерживает автоудаление и антиспам. Публикация может храниться дольше 1 часа."}
+            return {"enabled": False, "mode": "unknown",
+                    "message": "Не удалось подтвердить ограничения сервера. Перед публикацией проверь подключение."}
+        limits = data.get("publishLimits")
+        if (data.get("publicRetentionSeconds") != 3600 or not isinstance(limits, dict)
+                or limits.get("maxArchiveBytes") != MAX_PUBLIC_UPLOAD
+                or limits.get("maxActive") != 3 or limits.get("windowSeconds") != 600
+                or limits.get("maxAttempts") != 10 or limits.get("banSeconds") != 18000):
+            return {"enabled": False, "mode": "unsupported",
+                    "message": "Версия сервера не подтверждает часовую очистку и защиту от спама."}
+        return {"enabled": True, "mode": "retention",
+                "message": "Подтверждено сервером: 1 час хранения, 256 МиБ и защита от спама.",
+                "publicRetentionSeconds": 3600, "publishLimits": limits}
+
     def _reconcile_legacy(self, pid, item):
         """Resolve a pre-retention publication without losing its owner token."""
         public_id = _build_id(item["id"])
         current = _listing(self.api.json("GET", "builds/" + public_id))
-        if current["id"] != public_id or "expiresAt" not in current:
-            raise CatalogError(0, "Сервер пока не подтвердил срок публикации.")
+        if current["id"] != public_id:
+            raise CatalogError(0, "Сервер вернул другую публикацию.")
+        if "expiresAt" not in current:
+            # Existing public catalogs do not implement TTL yet. Preserve the
+            # original owner token and display the entry with an honest warning.
+            return {**current, "statusUnverified": True}
         with self.store.connection() as db:
             db.execute("""UPDATE community_uploads SET listing=?
                 WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?""",
@@ -493,6 +522,8 @@ class CommunityCatalog:
     def handle(self, action, params, status=lambda msg: None):
         if action == "communitySearch":
             return self.search(params)
+        if action == "communityCapabilities":
+            return self.capabilities()
         if action == "communityPublication":
             return self.publications(params["id"])
         if action == "communityPublish":

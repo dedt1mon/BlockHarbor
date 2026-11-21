@@ -35,6 +35,16 @@ function publicBuild(row) {
   return {id:row.id, name:row.name, category:row.category, minecraft:row.minecraft,
     loader:row.loader, size:row.size, sha256:row.sha256, expiresAt:row.created+PUBLIC_TTL};
 }
+function capabilities() {
+  return {
+    publicRetentionSeconds: PUBLIC_TTL,
+    manifestFormat: 1,
+    publishLimits: {
+      maxArchiveBytes: MAX_SIZE, maxActive: ACTIVE_PER_PUBLISHER,
+      windowSeconds: RATE_WINDOW, maxAttempts: RATE_REQUESTS, banSeconds: RATE_BAN,
+    },
+  };
+}
 async function authorized(request, row) {
   const token = /^Bearer ([0-9a-f]{64})$/.exec(request.headers.get('Authorization') || '');
   requireThat(row && token && await hash(token[1]) === row.owner_hash, 403, 'Нет прав на изменение этой публикации.');
@@ -365,8 +375,12 @@ async function search(env, params) {
 }
 async function handle(request,env) {
   const url=new URL(request.url), path=url.pathname, method=request.method;
-  if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds',publicRetentionSeconds:PUBLIC_TTL,manifestFormat:1,
-    publishLimits:{maxArchiveBytes:MAX_SIZE,maxActive:ACTIVE_PER_PUBLISHER,windowSeconds:RATE_WINDOW,maxAttempts:RATE_REQUESTS,banSeconds:RATE_BAN}});
+  if(path==='/' && method==='GET') return json({
+    name:'Каталог сборок BlockHarbor',
+    releases:'https://github.com/dedt1mon/BlockHarbor/releases',
+    api:'/v1/builds', ...capabilities(),
+  });
+  if(path==='/v1/capabilities' && method==='GET') return json(capabilities());
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);

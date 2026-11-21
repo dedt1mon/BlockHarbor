@@ -85,10 +85,13 @@ class MirrorFallbackTests(unittest.TestCase):
         with self.assertRaisesRegex(catalog.CatalogError, "не найдена"):
             mirror.listing(ROW["id"])
 
-    def test_mirror_rejects_legacy_index_without_expiration(self):
+    def test_legacy_index_still_downloads_without_vpn_and_warns(self):
         legacy = {key: value for key, value in ROW.items() if key != "expiresAt"}
-        with self.assertRaisesRegex(catalog.CatalogError, "сроки публикаций"):
-            self.mirror(legacy).listing(ROW["id"])
+        mirror = self.mirror(legacy)
+        self.assertEqual(mirror.listing(ROW["id"]), legacy)
+        params = dict(q="", version="", loader="", category="", offset=0)
+        self.assertEqual(mirror.search(params)["source"], "github-legacy")
+        self.assertEqual(mirror.search(params)["hits"][0]["id"], ROW["id"])
 
     def test_mirror_rejects_non_https_or_third_party_redirect(self):
         mirror = self.mirror(ROW, url="http://untrusted.invalid/archive")

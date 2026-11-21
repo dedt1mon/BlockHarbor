@@ -403,3 +403,21 @@ test('unfinished uploads expire after 30 minutes and release their reservation',
   assert.equal(api.env.BUCKET.uploads.size,0);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
 });
+
+
+test('capabilities endpoint advertises effective one-hour and anti-spam constraints',async t => {
+  const api=registry(t);
+  const response=await api.call('GET','capabilities');
+  assert.equal(response.status,200);
+  const policy=await response.json();
+  assert.deepEqual(policy, {
+    publicRetentionSeconds:3600,
+    manifestFormat:1,
+    publishLimits:{
+      maxArchiveBytes:256*1024*1024, maxActive:3,
+      windowSeconds:600, maxAttempts:10, banSeconds:5*3600,
+    },
+  });
+  // Policy discovery is read-only and cannot consume any publisher quotas.
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
+});

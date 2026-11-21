@@ -152,6 +152,29 @@ class CommunityCatalogTests(unittest.TestCase):
             self.assertEqual(record["token"], "b" * 64)
             self.assertIn("expiresAt", json.loads(record["listing"]))
 
+    def test_legacy_server_keeps_existing_publication_without_duplicate(self):
+        published = self.publish()
+        old = {key: val for key, val in published.items() if key != "expiresAt"}
+        with self.author.connection() as db:
+            db.execute("UPDATE community_uploads SET listing=? WHERE pid=?",
+                       (json.dumps(old), self.pid))
+        original = self.server.json
+        def legacy_server(method, path, **kwargs):
+            result = original(method, path, **kwargs)
+            if isinstance(result, dict):
+                return {key: val for key, val in result.items() if key != "expiresAt"}
+            return result
+        with patch.object(self.server, "json", side_effect=legacy_server):
+            items = self.publisher.publications(self.pid)["publications"]
+            self.assertEqual(items[0]["id"], self.server.public_id)
+            self.assertTrue(items[0]["statusUnverified"])
+            returned = self.publish()
+        self.assertEqual(returned["id"], self.server.public_id)
+        self.assertEqual(self.server.uploads, 1)
+        with self.author.connection() as db:
+            record = db.execute("SELECT token FROM community_uploads WHERE pid=?", (self.pid,)).fetchone()
+        self.assertEqual(record["token"], "b" * 64)
+
     def test_legacy_publication_offline_retains_revoke_token(self):
         published = self.publish()
         cached = {key: value for key, value in published.items() if key != "expiresAt"}

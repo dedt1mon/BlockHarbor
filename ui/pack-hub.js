@@ -91,6 +91,9 @@
     else if (community.busy) status = '<p class="pack-status" role="status">Ищем сборки игроков…</p>';
     else if (page && !page.hits.length) status = '<p class="pack-status" role="status">Сборок игроков по этому запросу пока нет.</p>';
     else if (page?.source === "github") status = '<p class="pack-status" role="status">Показан резервный каталог GitHub. Новые публикации появляются после синхронизации.</p>';
+    else if (page?.source === "github-legacy") status = '<p class="pack-status" role="status">Показан резервный каталог старого формата. Срок автоматического удаления пока не подтверждён.</p>';
+    else if (page?.source === "primary" && page.hits.some(item => !item.expiresAt))
+      status = '<p class="pack-status" role="status">Основной сервер ещё не подтверждает часовое автоудаление публикаций.</p>';
     const cards = (page?.hits || []).map(item => `<article class="pack-card"><h4>${esc(item.name)}</h4>
       <p>Minecraft ${esc(item.minecraft)} · ${esc(loaders[item.loader] || item.loader)} · ${esc(categories[item.category] || item.category)}</p>
       <div class="pack-card-footer"><span class="meta">${esc(item.id)} · ${fmt(item.size)}</span>${button(`data-pack-community="${esc(item.id)}"`, "Скачать", "download")}</div></article>`).join("");
@@ -184,9 +187,9 @@
     return `<div class="community-publications">${list.map(row => `<section class="community-receipt">
       ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
       <label class="community-code-label">Код сборки</label>
-      <p class="community-expiry">Публикация доступна до ${row.expiresAt
-        ? esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"}))
-        : "уточнения срока на сервере"} и удалится автоматически. Локальные файлы сохранятся.</p>
+      <p class="community-expiry">${row.expiresAt
+        ? "Публикация доступна до " + esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})) + ", затем автоматически удалится из каталога."
+        : "Сервер не подтвердил срок автоматического удаления. Когда публикация станет не нужна, удали её вручную."} Локальная сборка сохранится.</p>
       <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
       <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">
@@ -215,7 +218,7 @@
       form.classList.toggle("is-published", publications.length > 0);
       form.querySelector(".community-publication-status").textContent = publications.length
         ? publications.some(row => row.statusUnverified)
-          ? "Статус прежней публикации пока не подтверждён. Проверь подключение."
+          ? "Статус: опубликовано, но часовая очистка не подтверждена сервером."
           : "Статус: опубликовано. Автоматическое удаление через 1 час после публикации."
         : "Статус: не опубликовано.";
       if (pendingPublication?.id === form.dataset.packPublish) {
@@ -233,6 +236,20 @@
     }
   }
 
+  async function readPublicationCapabilities(form) {
+    const status = form.querySelector(".community-policy-status");
+    try {
+      const policy = await feature("communityCapabilities");
+      if (!form.isConnected || !status) return;
+      status.textContent = policy?.message || "Не удалось подтвердить правила публикации на сервере.";
+      status.dataset.mode = policy?.enabled === true ? "verified" : "unverified";
+    } catch (error) {
+      if (!form.isConnected || !status) return;
+      status.textContent = "Невозможно проверить сервер. Часовое удаление и антиспам не подтверждены.";
+      status.dataset.mode = "unverified";
+    }
+  }
+
   function showPublish(id) {
     const profile = state.profiles.find(p => p.id === id);
     if (!profile) return;
@@ -245,7 +262,8 @@
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note community-publish-description">Сборка станет общедоступной на 1 час, после чего архив автоматически удалится. Лимит ZIP: 256 МиБ; не более 3 активных публикаций. Более 10 попыток за 10 минут блокируют новые публикации на 5 часов. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
+      <p class="note community-publish-description">Максимальный размер нового ZIP — 256 МиБ. После обновления сервера сборки хранятся 1 час, одновременно разрешены 3 активные публикации, а после 10 попыток за 10 минут новые публикации блокируются на 5 часов. Пока сервер не подтвердил эти правила, автоматическое удаление не гарантируется. Миры, журналы и данные учётных записей не публикуются.</p>
+      <p role="status" class="community-policy-status">Проверяем, действуют ли новые ограничения на сервере…</p>
       <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
@@ -256,6 +274,7 @@
     </form>`);
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
+    readPublicationCapabilities(form);
     readPublications(form);
   }
 
@@ -598,7 +617,8 @@
   window.PackHubUI = {
     render: renderPacks,
     openCatalog,
-    isPublished(id) {return (publicationCache.get(id)?.publications || []).length > 0;},
+    isPublished(id) {return (publicationCache.get(id)?.publications || []).some(row =>
+      !row.expiresAt || row.expiresAt * 1000 > Date.now());},
     refreshShareButtons,
     observeJob,
     mount() {

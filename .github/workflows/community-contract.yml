@@ -32,3 +32,9 @@ jobs:
         run: node --test community-registry/worker.test.mjs
       - name: Client publication contract
         run: python -m unittest discover -s tests -p 'test_community*.py' -q
+      - name: Full launcher Python regression
+        run: python -m unittest discover -s tests -q
+      - name: Check browser JavaScript
+        run: |
+          node --check ui/pack-hub.js
+          node --check ui/app.js

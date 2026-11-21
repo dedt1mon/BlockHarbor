@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import time
 import tempfile
 import unittest
 import zipfile
@@ -38,7 +39,7 @@ class Registry:
             if not self.listing:
                 self.data = b"".join(self.parts[n] for n in sorted(self.parts))
                 assert hashlib.sha256(self.data).hexdigest() == self.meta["sha256"]
-                self.listing = {"id": self.public_id, **self.meta}
+                self.listing = {"id": self.public_id, **self.meta, "expiresAt": int(time.time()) + 3600}
             if self.fail_after_commit:
                 self.fail_after_commit = False
                 raise catalog.CatalogError(0, "Потерян ответ")
@@ -135,6 +136,29 @@ class CommunityCatalogTests(unittest.TestCase):
         self.assertFalse(self.publisher.publications(self.pid)["publications"])
         self.assertFalse(self.reader.search({})["hits"])
         self.assertTrue(dest.exists())
+
+    def test_expired_publication_is_removed_locally_without_touching_build(self):
+        published = self.publish()
+        self.assertTrue(self.publisher.publications(self.pid)["publications"])
+        expired = {**published, "expiresAt": int(time.time()) - 1}
+        with self.author.connection() as db:
+            db.execute("UPDATE community_uploads SET listing=? WHERE pid=?",
+                       (json.dumps(expired), self.pid))
+        self.assertEqual(self.publisher.publications(self.pid)["publications"], [])
+        self.assertTrue(self.folder.is_dir())
+
+    def test_expired_idempotent_cache_never_prevents_new_publication(self):
+        self.publish()
+        self.assertEqual(self.server.uploads, 1)
+        with self.author.connection() as db:
+            row = db.execute("SELECT listing FROM community_uploads WHERE pid=?", (self.pid,)).fetchone()
+            expired = {**json.loads(row["listing"]), "expiresAt": int(time.time()) - 1}
+            db.execute("UPDATE community_uploads SET listing=? WHERE pid=?",
+                       (json.dumps(expired), self.pid))
+        self.server.listing = None
+        again = self.publish()
+        self.assertEqual(self.server.uploads, 2)
+        self.assertGreater(again["expiresAt"], time.time())
 
     def test_lost_completion_is_recovered_after_restart(self):
         self.server.fail_after_commit = True

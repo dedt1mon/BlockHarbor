@@ -251,3 +251,50 @@ test('completion resumes from a previously completed R2 object and withdrawal wi
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal((await (await api.call('GET','builds')).json()).total,0);
 });
+
+
+test('public snapshot expires exactly one hour after completion and replay cannot renew it',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  assert.equal((await author.put(1,small)).status,200);
+  const first=await (await author.finish()).json();
+  const row=api.env.DB.db.prepare('SELECT created,state FROM builds WHERE id=?').get(first.id);
+  assert.equal(row.state,'ready');
+  assert.equal(first.expiresAt,row.created+3600);
+  assert.deepEqual(await (await author.finish()).json(),first);
+  const page=await (await api.call('GET','builds')).json();
+  assert.deepEqual(page.hits,[first]);
+  const fetched=await api.call('GET','builds/'+first.id+'/archive');
+  assert.equal(fetched.status,200);
+  assert.equal(sha(new Uint8Array(await fetched.arrayBuffer())),sha(small));
+  api.env.DB.db.prepare("UPDATE builds SET created=created-3600 WHERE id=?").run(first.id);
+  assert.equal((await author.finish()).status,410);
+  assert.equal((await api.call('GET','builds/'+first.id+'/archive')).status,404);
+  const expiredPage=await (await api.call('GET','builds')).json();
+  assert.equal(expiredPage.total,0);
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+});
+
+test('scheduled janitor deletes expired R2 objects without catalog traffic',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  assert.equal(api.env.BUCKET.objects.size,1);
+  await worker.scheduled({cron:'*/5 * * * *'},api.env,{waitUntil(){}});
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
+  assert.equal((await api.call('GET','builds/'+listing.id)).status,404);
+});
+
+test('expired publications free space before next upload reservation',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  await author.put(1,small);
+  await author.finish();
+  api.env.CATALOG_STORAGE_LIMIT=small.length;
+  assert.equal((await api.begin(metadata(small))).status,429);
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  assert.equal((await api.begin(metadata(small))).status,201);
+  assert.equal(api.env.BUCKET.objects.size,0);
+});
+

@@ -50,8 +50,20 @@ def _listing(value):
     size, digest = value.get("size"), value.get("sha256")
     if type(size) is not int or not 0 < size <= MAX_ARCHIVE or not isinstance(digest, str) or not re.fullmatch("[a-f0-9]{64}", digest):
         raise ValueError("Размер или контрольная сумма сборки в каталоге неверны.")
-    return {"id": _build_id(value.get("id")), "name": name, "minecraft": version, "loader": loader,
-            "category": _category(value.get("category")), "size": size, "sha256": digest}
+    expiry = value.get("expiresAt")
+    if expiry is not None and (type(expiry) is not int or expiry <= 0):
+        raise ValueError("Каталог вернул неверный срок публикации.")
+    listing = {"id": _build_id(value.get("id")), "name": name, "minecraft": version, "loader": loader,
+               "category": _category(value.get("category")), "size": size, "sha256": digest}
+    if expiry is not None:
+        listing["expiresAt"] = expiry
+    return listing
+
+
+def _expired(listing):
+    """Fail closed for expired listings, including cached GitHub mirror pages."""
+    expiry = listing.get("expiresAt")
+    return expiry is not None and expiry <= time.time()
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -174,6 +186,10 @@ class GitHubMirror:
                 or type(data.get("total")) is not int or data["total"] != len(rows)):
             raise CatalogError(0, "Резервный каталог вернул неполные сведения.")
         items = [_listing(row) for row in rows]
+        # The current mirror protocol must carry expiry information. Older
+        # cached indexes cannot prove that a publication is still available.
+        if any("expiresAt" not in item for item in items):
+            raise CatalogError(0, "Резервный каталог ещё не синхронизировал сроки публикаций.")
         if len({item["id"] for item in items}) != len(items):
             raise CatalogError(0, "Резервный каталог содержит повторяющиеся сборки.")
         self._cache = (time.monotonic(), items)
@@ -183,7 +199,8 @@ class GitHubMirror:
         needle = filters["q"].strip().casefold()
         matching = [
             item for item in self._listings()
-            if (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
+            if not _expired(item)
+            and (not needle or needle == item["id"].casefold() or needle in item["name"].casefold())
             and (not filters["category"] or item["category"] == filters["category"])
             and (not filters["version"] or item["minecraft"] == filters["version"])
             and (not filters["loader"] or item["loader"] == filters["loader"])
@@ -195,7 +212,7 @@ class GitHubMirror:
     def listing(self, public_id):
         public_id = _build_id(public_id)
         for item in self._listings():
-            if item["id"] == public_id:
+            if item["id"] == public_id and not _expired(item):
                 return item
         raise CatalogError(404, "Сборка не найдена в резервном каталоге.")
 
@@ -280,8 +297,13 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 old = db.execute("SELECT * FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?", args).fetchone()
             listing = json.loads(old["listing"]) if old and old["listing"] else None
-            if listing:
+            # A retired ID must never be resurrected by the local upload
+            # cache. Expiry is issued by the server upon successful completion.
+            if listing and not _expired(listing) and "expiresAt" in listing:
                 return listing
+            if listing:
+                old = None
+                listing = None
 
             # If the completion response was lost, recover the published ID
             # before sending another byte. A changed archive gets a new session.
@@ -306,6 +328,8 @@ class CommunityCatalog:
                     self.api.json("PUT", f"uploads/{upload}/parts/{part}", token=token, block=block)
                 listing = self.api.json("POST", f"uploads/{upload}/complete", token=token)
             listing = _listing(listing)
+            if _expired(listing):
+                raise ValueError("Срок публикации истёк. Опубликуй сборку снова.")
             if any(listing[k] != v for k, v in metadata.items()):
                 raise ValueError("Запись каталога не соответствует отправленной сборке.")
             with self.store.connection() as db:
@@ -318,9 +342,22 @@ class CommunityCatalog:
         with self.store.connection() as db:
             rows = db.execute("SELECT listing FROM community_uploads WHERE origin=? AND pid=? AND listing IS NOT NULL ORDER BY rowid DESC",
                               (self.api.origin, pid)).fetchall()
-        items = [json.loads(row["listing"]) for row in rows]
-        for item in items:
+        items = []
+        retired = []
+        for row in rows:
+            item = json.loads(row["listing"])
+            # Old cached publications lack an expiry and must be reconciled
+            # with the one-hour server policy before showing them as live.
+            if _expired(item) or "expiresAt" not in item:
+                retired.append(item["id"])
+                continue
             item["build"] = item["id"]
+            items.append(item)
+        if retired:
+            with self.store.connection() as db:
+                for public_id in retired:
+                    db.execute("DELETE FROM community_uploads WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?",
+                               (self.api.origin, pid, public_id))
         return {**(items[0] if items else {"build": "", "name": ""}), "publications": items}
 
     def unpublish(self, pid, public_id):
@@ -354,6 +391,8 @@ class CommunityCatalog:
             from_mirror = True
         if listing["id"] != public_id:
             raise ValueError("Каталог вернул другую сборку.")
+        if _expired(listing):
+            raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
         if not allow_without_steam and not e4steam.support(listing["minecraft"], listing["loader"]):
             raise ValueError("Подтверди установку этой сборки без встроенной игры через Steam.")
         size = listing["size"]

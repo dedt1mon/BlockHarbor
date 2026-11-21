@@ -59,14 +59,18 @@ def validate(item):
     public_id = item.get("id")
     shard(public_id)
     name, mc, loader, category = (item.get(k) for k in ("name", "minecraft", "loader", "category"))
-    size, digest = item.get("size"), item.get("sha256")
+    size, digest, expires = item.get("size"), item.get("sha256"), item.get("expiresAt")
     if (not isinstance(name, str) or not name or len(name) > 128
             or not isinstance(mc, str) or not mc or len(mc) > 64
             or loader not in LOADERS or category not in CATEGORIES
             or type(size) is not int or not 0 < size <= MAX_ARCHIVE
-            or not isinstance(digest, str) or not HASH.fullmatch(digest)):
+            or not isinstance(digest, str) or not HASH.fullmatch(digest)
+            or (expires is not None and (type(expires) is not int or expires <= 0))):
         raise ValueError(f"Invalid public metadata for {public_id}")
-    return {k: item[k] for k in ("id", "name", "minecraft", "loader", "category", "size", "sha256")}
+    result = {k: item[k] for k in ("id", "name", "minecraft", "loader", "category", "size", "sha256")}
+    if expires is not None:
+        result["expiresAt"] = expires
+    return result
 
 
 def listings():
@@ -88,7 +92,10 @@ def listings():
             items.append(item)
         if len(items) > count:
             raise RuntimeError("Catalog changed during pagination")
-    return items
+    # Expired packages must not be recreated on the mirror even when the
+    # authoritative server has not finished physical R2 deletion yet.
+    now = int(time.time())
+    return [item for item in items if item.get("expiresAt", now + 1) > now]
 
 
 def gh(*args, missing_ok=False):
@@ -180,6 +187,9 @@ def sync():
                     print(f"Withdraw {name} from mirror", flush=True)
                     gh("release", "delete-asset", tag, name, "--yes", "--repo", REPO)
 
+        # A build can expire while a large mirror sync is in progress.
+        # Never publish expired entries in the final JSON index.
+        items = [item for item in items if item.get("expiresAt", int(time.time()) + 1) > int(time.time())]
         manifest = {"format": 1, "generated": int(time.time()), "total": len(items), "items": items}
         ensure_release(INDEX_TAG, "BlockHarbor public community index")
         dest = scratch / "index.json"

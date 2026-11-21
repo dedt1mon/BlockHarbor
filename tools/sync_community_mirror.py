@@ -59,18 +59,14 @@ def validate(item):
     public_id = item.get("id")
     shard(public_id)
     name, mc, loader, category = (item.get(k) for k in ("name", "minecraft", "loader", "category"))
-    size, digest, expires = item.get("size"), item.get("sha256"), item.get("expiresAt")
+    size, digest = item.get("size"), item.get("sha256")
     if (not isinstance(name, str) or not name or len(name) > 128
             or not isinstance(mc, str) or not mc or len(mc) > 64
             or loader not in LOADERS or category not in CATEGORIES
             or type(size) is not int or not 0 < size <= MAX_ARCHIVE
-            or not isinstance(digest, str) or not HASH.fullmatch(digest)
-            or (expires is not None and (type(expires) is not int or expires <= 0))):
+            or not isinstance(digest, str) or not HASH.fullmatch(digest)):
         raise ValueError(f"Invalid public metadata for {public_id}")
-    result = {k: item[k] for k in ("id", "name", "minecraft", "loader", "category", "size", "sha256")}
-    if expires is not None:
-        result["expiresAt"] = expires
-    return result
+    return {k: item[k] for k in ("id", "name", "minecraft", "loader", "category", "size", "sha256")}
 
 
 def listings():
@@ -92,10 +88,7 @@ def listings():
             items.append(item)
         if len(items) > count:
             raise RuntimeError("Catalog changed during pagination")
-    # Expired packages must not be recreated on the mirror even when the
-    # authoritative server has not finished physical R2 deletion yet.
-    now = int(time.time())
-    return [item for item in items if item.get("expiresAt", now + 1) > now]
+    return items
 
 
 def gh(*args, missing_ok=False):
@@ -131,37 +124,6 @@ def assets(rel):
     return {asset["name"]: asset for asset in rel.get("assets", [])}
 
 
-def cached_listings(folder):
-    """Expire known GitHub mirror assets even when the origin is unavailable.
-
-    The last successful index contains server-signed *content digests* and
-    absolute expiry timestamps. Never guess an expiry for legacy records.
-    """
-    indexed = release(INDEX_TAG)
-    if not indexed or "index.json" not in assets(indexed):
-        raise RuntimeError("No previously verified mirror index")
-    gh("release", "download", INDEX_TAG, "--repo", REPO, "--pattern", "index.json",
-       "--dir", str(folder))
-    raw = (folder / "index.json").read_bytes()
-    if len(raw) > 8 * 1024**2:
-        raise RuntimeError("Old mirror index exceeds size limit")
-    published_digest = assets(indexed)["index.json"].get("digest")
-    if published_digest != "sha256:" + hashlib.sha256(raw).hexdigest():
-        raise RuntimeError("Cached mirror index SHA-256 mismatch")
-    data = json.loads(raw)
-    if (not isinstance(data, dict) or data.get("format") != 1
-            or not isinstance(data.get("items"), list)
-            or type(data.get("total")) is not int
-            or data["total"] != len(data["items"])
-            or len(data["items"]) > MAX_LISTINGS):
-        raise RuntimeError("Invalid cached index")
-    checked = [validate(row) for row in data["items"]]
-    if any("expiresAt" not in row for row in checked):
-        raise RuntimeError("Cached index has no expiration; refuse destructive cleanup")
-    now = int(time.time())
-    return [row for row in checked if row["expiresAt"] > now]
-
-
 def download_verified(item, dest):
     public_id = item["id"]
     url = SOURCE + "/v1/builds/" + public_id + "/archive"
@@ -184,20 +146,14 @@ def download_verified(item, dest):
 def sync():
     if os.getenv("GITHUB_REPOSITORY") != REPO or not os.getenv("GH_TOKEN"):
         raise RuntimeError("Run only in the official repository with GITHUB_TOKEN")
+    items = listings()
+    print(f"Source: {len(items)} public builds", flush=True)
+    groups = {}
+    for item in items:
+        groups.setdefault(shard(item["id"]), []).append(item)
+
     with tempfile.TemporaryDirectory() as folder:
         scratch = Path(folder)
-        try:
-            items = listings()
-            print(f"Source: {len(items)} public builds", flush=True)
-        except (RuntimeError, OSError, ValueError) as exc:
-            # A temporary origin outage must not pin all former ZIP assets
-            # indefinitely. Use ONLY unexpired, previously indexed entries.
-            print(f"Source unavailable ({type(exc).__name__}); expiring cached mirror.", flush=True)
-            items = cached_listings(scratch)
-            (scratch / "index.json").unlink(missing_ok=True)
-        groups = {}
-        for item in items:
-            groups.setdefault(shard(item["id"]), []).append(item)
         for index in range(SHARDS):
             key = f"{index:02x}"
             tag = PREFIX + key
@@ -224,9 +180,6 @@ def sync():
                     print(f"Withdraw {name} from mirror", flush=True)
                     gh("release", "delete-asset", tag, name, "--yes", "--repo", REPO)
 
-        # A build can expire while a large mirror sync is in progress.
-        # Never publish expired entries in the final JSON index.
-        items = [item for item in items if item.get("expiresAt", int(time.time()) + 1) > int(time.time())]
         manifest = {"format": 1, "generated": int(time.time()), "total": len(items), "items": items}
         ensure_release(INDEX_TAG, "BlockHarbor public community index")
         dest = scratch / "index.json"

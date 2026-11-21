@@ -135,8 +135,7 @@
   }
 
   function updateShareButtons(id) {
-    const published = (publicationCache.get(id)?.publications || []).some(row =>
-      !row.expiresAt || row.expiresAt * 1000 > Date.now());
+    const published = (publicationCache.get(id)?.publications || []).length > 0;
     for (const control of document.querySelectorAll('[data-pack-share]')) {
       if (control.dataset.packShare !== id) continue;
       const name = state.profiles.find(p => p.id === id)?.name || "";
@@ -157,8 +156,7 @@
 
   async function fetchPublications(id, force = false) {
     const cached = publicationCache.get(id);
-    if (!force && cached && Date.now() - cached.fetched < 15000)
-      return cached.publications.filter(row => !row.expiresAt || row.expiresAt * 1000 > Date.now());
+    if (!force && cached && Date.now() - cached.fetched < 15000) return cached.publications;
     const data = await feature("communityPublication", {id});
     return savePublications(id, data);
   }
@@ -184,9 +182,6 @@
     return `<div class="community-publications">${list.map(row => `<section class="community-receipt">
       ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
       <label class="community-code-label">Код сборки</label>
-      <p class="community-expiry">Публикация доступна до ${row.expiresAt
-        ? esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"}))
-        : "уточнения срока на сервере"} и удалится автоматически. Локальные файлы сохранятся.</p>
       <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
       <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">
@@ -214,9 +209,7 @@
       form.classList.remove("is-checking");
       form.classList.toggle("is-published", publications.length > 0);
       form.querySelector(".community-publication-status").textContent = publications.length
-        ? publications.some(row => row.statusUnverified)
-          ? "Статус прежней публикации пока не подтверждён. Проверь подключение."
-          : "Статус: опубликовано. Автоматическое удаление через 1 час после публикации."
+        ? "Статус: опубликовано. Сборку можно найти в общем каталоге."
         : "Статус: не опубликовано.";
       if (pendingPublication?.id === form.dataset.packPublish) {
         setPublicationBusy(form, true, pendingPublication.progress);
@@ -245,7 +238,7 @@
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note community-publish-description">Сборка станет общедоступной на 1 час, после чего архив автоматически удалится. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
+      <p class="note community-publish-description">Сборка станет общедоступной. Игроки смогут найти её по названию или ID и скачать моды, ресурс-паки и шейдеры. Миры, журналы и данные учётных записей останутся на этом компьютере.</p>
       <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>

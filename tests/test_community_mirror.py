@@ -12,7 +12,6 @@ ROW = {
     "id": "BH-B5E5524DA526", "name": "Мир во всём мире",
     "minecraft": "1.20.1", "loader": "forge", "category": "kitchen-sink",
     "size": 3, "sha256": hashlib.sha256(b"ZIP").hexdigest(),
-    "expiresAt": int(time.time()) + 3600,
 }
 
 
@@ -75,20 +74,6 @@ class MirrorFallbackTests(unittest.TestCase):
         duplicate = self.mirror(ROW, ROW)
         with self.assertRaisesRegex(catalog.CatalogError, "повторяющиеся"):
             duplicate.listing(ROW["id"])
-
-    def test_expired_mirror_record_is_never_offered_or_downloaded(self):
-        expired = {**ROW, "expiresAt": int(time.time()) - 5}
-        mirror = self.mirror(expired)
-        params = dict(q="", version="", loader="", category="", offset=0)
-        self.assertEqual(mirror.search(params)["hits"], [])
-        self.assertEqual(mirror.search(params)["total"], 0)
-        with self.assertRaisesRegex(catalog.CatalogError, "не найдена"):
-            mirror.listing(ROW["id"])
-
-    def test_mirror_rejects_legacy_index_without_expiration(self):
-        legacy = {key: value for key, value in ROW.items() if key != "expiresAt"}
-        with self.assertRaisesRegex(catalog.CatalogError, "сроки публикаций"):
-            self.mirror(legacy).listing(ROW["id"])
 
     def test_mirror_rejects_non_https_or_third_party_redirect(self):
         mirror = self.mirror(ROW, url="http://untrusted.invalid/archive")

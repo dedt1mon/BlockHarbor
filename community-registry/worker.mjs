@@ -11,7 +11,8 @@ const hex = bytes => Array.from(new Uint8Array(bytes), n => n.toString(16).padSt
 const random = length => hex(crypto.getRandomValues(new Uint8Array(length)));
 const hash = async value => hex(await crypto.subtle.digest('SHA-256', text.encode(value)));
 const now = () => Math.floor(Date.now() / 1000);
-const key = row => `builds/${row.id}.zip`;
+const key = row => row.object_key || `builds/${row.id}.zip`;
+const revisionKey = upload => `revisions/${upload}.zip`;
 function json(value, status = 200) {
   return Response.json(value, {status, headers: {'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 }
@@ -37,6 +38,16 @@ async function discard(env, row, expiredOnly = false) {
     try { await env.BUCKET.resumeMultipartUpload(key(row), row.multipart).abort(); }
     catch { /* Already completed or automatically expired in R2. */ }
   }
+  const {results:staged} = await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(row.id).all();
+  for (const update of staged) {
+    // Once the listing is hidden, its associated revisions can no longer be served.
+    if(update.state!=='ready') await discardRevision(env,update);
+    else await env.DB.prepare('DELETE FROM revisions WHERE upload=?').bind(update.upload).run();
+    await env.BUCKET.delete(key(update));
+  }
+  const {results:retired} = await env.DB.prepare('SELECT object_key FROM retired_objects WHERE id=?').bind(row.id).all();
+  for (const old of retired) await env.BUCKET.delete(old.object_key);
+  await env.DB.prepare('DELETE FROM retired_objects WHERE id=?').bind(row.id).run();
   await env.BUCKET.delete(key(row));
   await env.DB.batch([env.DB.prepare('DELETE FROM parts WHERE upload=?').bind(row.upload),
     env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id)]);
@@ -44,7 +55,115 @@ async function discard(env, row, expiredOnly = false) {
 async function prune(env) {
   const {results} = await env.DB.prepare("SELECT * FROM builds WHERE state='removing' OR (state='uploading' AND created<?) LIMIT 4").bind(now()-DAY).all();
   for (const row of results) await discard(env,row,true);
+  await pruneRevisions(env);
 }
+
+async function discardRevision(env, row) {
+  if (row.state === 'uploading') {
+    try { await env.BUCKET.resumeMultipartUpload(key(row), row.multipart).abort(); }
+    catch { /* The upload may already have completed. */ }
+  }
+  // An already published revision is the active object. It is never discarded here.
+  if (row.state !== 'ready') await env.BUCKET.delete(key(row));
+  await env.DB.prepare('DELETE FROM revisions WHERE upload=? AND state=?').bind(row.upload,row.state).run();
+}
+async function pruneRevisions(env) {
+  const {results:expired} = await env.DB.prepare("SELECT * FROM revisions WHERE created<? LIMIT 4").bind(now()-DAY).all();
+  for (const row of expired) {
+    if (row.state==='uploading') await discardRevision(env,row);
+    else await env.DB.prepare("DELETE FROM revisions WHERE upload=? AND state='ready'").bind(row.upload).run();
+  }
+  const {results:garbage} = await env.DB.prepare('SELECT * FROM retired_objects WHERE created<? LIMIT 4').bind(now()-DAY).all();
+  for (const row of garbage) {
+    const live = await env.DB.prepare("SELECT id FROM builds WHERE object_key=? AND state='ready'").bind(row.object_key).first();
+    if (!live) await env.BUCKET.delete(row.object_key);
+    await env.DB.prepare('DELETE FROM retired_objects WHERE object_key=?').bind(row.object_key).run();
+  }
+}
+function updateMetadata(data) {
+  const name = typeof data?.name === 'string' ? data.name.trim() : '';
+  requireThat(name && Array.from(name).length<=48 && !/[\u0000-\u001f\u007f]/u.test(name),400,'Укажи название длиной от 1 до 48 символов.');
+  const version=data.minecraft;
+  const validVersion = typeof version==='string' && /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,149}$/.test(version)
+    && !version.includes('..') && !/[. ]$/.test(version) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\s*\.|$)/i.test(version);
+  requireThat(CATEGORIES.has(data.category) && LOADERS.has(data.loader) && validVersion,400,'Неизвестная категория, версия игры или загрузчик.');
+  requireThat(Number.isSafeInteger(data.size) && data.size>=22 && data.size<=MAX_SIZE &&
+    typeof data.sha256==='string' && /^[a-f0-9]{64}$/.test(data.sha256),400,'Неверный размер или SHA-256.');
+  return {name,minecraft:version,loader:data.loader,category:data.category,size:data.size,sha256:data.sha256};
+}
+async function beginRevision(request,env,id) {
+  const parent=await env.DB.prepare("SELECT * FROM builds WHERE id=? AND state='ready'").bind(id).first();
+  requireThat(parent,404,'Публикация больше не существует.');
+  await authorized(request,parent);
+  const length=Number(request.headers.get('Content-Length'));
+  requireThat(length>0 && length<=4096,400,'Неверный размер запроса.');
+  const data=updateMetadata(await request.json().catch(()=>null));
+  requireThat(data.minecraft===parent.minecraft && data.loader===parent.loader,409,
+    'Версия Minecraft или загрузчик изменились. Создай отдельную публикацию.');
+  if(data.sha256===parent.sha256 && data.size===parent.size) return json({...publicBuild(parent),unchanged:true});
+  const old=await env.DB.prepare("SELECT * FROM revisions WHERE id=? AND state='uploading'").bind(id).first();
+  if(old) {
+    requireThat(old.sha256===data.sha256 && old.size===data.size && old.base_sha===parent.sha256 &&
+      old.name===data.name && old.category===data.category,409,'Предыдущее обновление ещё выполняется.');
+    return json({upload:old.upload,chunkSize:PART},200);
+  }
+  await pruneRevisions(env);
+  const occupied=await env.DB.prepare('SELECT (SELECT COALESCE(sum(size),0) FROM builds)+(SELECT COALESCE(sum(size),0) FROM revisions WHERE state=\'uploading\') AS used').first();
+  requireThat((occupied?.used||0)+data.size <= (Number(env.CATALOG_STORAGE_LIMIT)||10*1024**3),429,
+    'Не хватает места для безопасного обновления сборки.');
+  const upload=random(16), object_key=revisionKey(upload);
+  const multi=await env.BUCKET.createMultipartUpload(object_key);
+  try {
+    await env.DB.prepare("INSERT INTO revisions(upload,id,multipart,object_key,state,name,search_name,category,minecraft,loader,size,sha256,base_sha,created) VALUES (?,?,?,?,'uploading',?,?,?,?,?,?,?,?,?)")
+      .bind(upload,id,multi.uploadId,object_key,data.name,data.name.normalize('NFC').toLowerCase(),data.category,
+        data.minecraft,data.loader,data.size,data.sha256,parent.sha256,now()).run();
+  } catch(error) {
+    await multi.abort();
+    // A racing update request is not permitted to create a second competing revision.
+    throw new RequestError(409,'Обновление уже выполняется на другом устройстве.');
+  }
+  return json({upload,chunkSize:PART},201);
+}
+async function finishRevision(env,update,parent) {
+  if(update.state==='ready') return json(publicBuild(parent));
+  requireThat(update.state==='uploading' && parent.state==='ready',410,'Публикация снята.');
+  let object=await env.BUCKET.get(key(update));
+  if(!object) {
+    const {results:parts}=await env.DB.prepare('SELECT number AS partNumber,etag FROM revision_parts WHERE upload=? ORDER BY number').bind(update.upload).all();
+    requireThat(parts.length===Math.ceil(update.size/PART),409,'Не все части обновления загружены.');
+    try {await env.BUCKET.resumeMultipartUpload(key(update),update.multipart).complete(parts);}
+    catch(error) {if(!await env.BUCKET.head(key(update))) throw error;}
+    object=await env.BUCKET.get(key(update));
+  }
+  requireThat(object,503,'Архив обновления временно недоступен.');
+  try {await validateDirectory(env.BUCKET,update);}
+  catch(error) {
+    await object.body.cancel();
+    if(error instanceof RequestError && error.status===422) await discardRevision(env,update);
+    throw error;
+  }
+  const digest=new crypto.DigestStream('SHA-256');
+  await object.body.pipeTo(digest);
+  if(object.size!==update.size || hex(await digest.digest)!==update.sha256) {
+    await discardRevision(env,update);
+    throw new RequestError(422,'Контрольная сумма новой сборки неверна. Старая версия сохранена.');
+  }
+  const fresh=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(update.id).first();
+  requireThat(fresh?.state==='ready',410,'Публикация снята.');
+  if(fresh.object_key===key(update) && fresh.sha256===update.sha256) {
+    await env.DB.prepare("UPDATE revisions SET state='ready' WHERE upload=?").bind(update.upload).run();
+    return json(publicBuild(fresh));
+  }
+  requireThat(fresh.sha256===update.base_sha,409,'Другая версия уже была опубликована.');
+  const oldKey=key(fresh);
+  const result=await env.DB.prepare("UPDATE builds SET object_key=?,name=?,search_name=?,category=?,size=?,sha256=?,created=? WHERE id=? AND state='ready' AND sha256=?")
+    .bind(key(update),update.name,update.search_name,update.category,update.size,update.sha256,now(),update.id,update.base_sha).run();
+  requireThat(result.meta.changes===1,409,'Публикация была изменена. Повтори обновление.');
+  await env.DB.prepare("UPDATE revisions SET state='ready' WHERE upload=?").bind(update.upload).run();
+  await env.DB.prepare('INSERT OR IGNORE INTO retired_objects(object_key,id,created) VALUES(?,?,?)').bind(oldKey,update.id,now()).run();
+  return json(publicBuild({...fresh,...update,id:update.id,created:now()}));
+}
+
 async function begin(request, env) {
   const length = Number(request.headers.get('Content-Length'));
   requireThat(length > 0 && length <= 4096, 400, 'Некорректный размер описания.');
@@ -99,7 +218,7 @@ function validateFirstPart(buffer,row) {
   requireThat(meta?.format==='BlockHarbor' && meta.formatVersion===1 && meta.worlds===false && meta.name===row.name && meta.minecraft===row.minecraft && meta.loader===row.loader,400,'Описание публикации расходится с манифестом сборки.');
   return meta;
 }
-async function part(request, env, row, number) {
+async function part(request, env, row, number, table = 'parts') {
   requireThat(row.state==='uploading',409,'Загрузка уже завершена.');
   const start=(number-1)*PART;
   requireThat(Number.isSafeInteger(start) && start>=0 && start<row.size,400,'Недопустимый номер части.');
@@ -109,7 +228,7 @@ async function part(request, env, row, number) {
   requireThat(buffer.byteLength===size,400,'Часть загружена не полностью.');
   if(number===1) validateFirstPart(buffer,row);
   const result=await env.BUCKET.resumeMultipartUpload(key(row),row.multipart).uploadPart(number,buffer);
-  await env.DB.prepare('INSERT INTO parts(upload,number,etag) VALUES(?,?,?) ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag')
+  await env.DB.prepare(`INSERT INTO ${table}(upload,number,etag) VALUES(?,?,?) ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag`)
     .bind(row.upload,number,result.etag).run();
   return json({part:number});
 }
@@ -255,6 +374,20 @@ async function handle(request,env) {
   if(path==='/' && method==='GET') return json({name:'Каталог сборок BlockHarbor',releases:'https://github.com/dedt1mon/BlockHarbor/releases',api:'/v1/builds'});
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
+  const revisionBegin=/^\/v1\/builds\/(BH-[0-9A-F]{12})\/revisions$/.exec(path);
+  if(revisionBegin && method==='POST') return beginRevision(request,env,revisionBegin[1]);
+  const revision=/^\/v1\/revisions\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
+  if(revision) {
+    const update=await env.DB.prepare('SELECT * FROM revisions WHERE upload=?').bind(revision[1]).first();
+    requireThat(update,404,'Обновление не найдено.');
+    const parent=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(update.id).first();
+    requireThat(parent,404,'Публикация снята.');
+    await authorized(request,parent);
+    requireThat(parent.state==='ready',410,'Публикация снята.');
+    if(revision[2] && method==='PUT') return part(request,env,update,Number(revision[2]),'revision_parts');
+    if(revision[3] && method==='POST') return finishRevision(env,update,parent);
+  }
+
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
   if(upload) {
     const row=await env.DB.prepare('SELECT * FROM builds WHERE upload=?').bind(upload[1]).first();

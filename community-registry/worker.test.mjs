@@ -10,6 +10,7 @@ import worker from './worker.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const migration = readFileSync(new URL('drizzle/0000_catalog.sql', import.meta.url), 'utf8');
+const revisionMigration = readFileSync(new URL('drizzle/0001_revisions.sql', import.meta.url), 'utf8').replaceAll('--> statement-breakpoint', '');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const partSize = 8 * 1024 ** 2;
 const buildName = 'Моя сборка';
@@ -61,6 +62,7 @@ class D1Fixture {
     this.db = new DatabaseSync(':memory:');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(migration);
+    this.db.exec(revisionMigration);
   }
   prepare(sql) {
     const statement = this.db.prepare(sql);
@@ -142,6 +144,7 @@ function registry(t) {
     assert.equal(response.status,201);
     const {upload,token} = await response.json();
     return {
+      token,
       put:(n,body) => call('PUT',`uploads/${upload}/parts/${n}`,body,token),
       finish:() => call('POST',`uploads/${upload}/complete`,undefined,token),
       remove:id => call('DELETE','builds/'+id,undefined,token),
@@ -250,4 +253,63 @@ test('completion resumes from a previously completed R2 object and withdrawal wi
   assert.equal((await completing).status,410);
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal((await (await api.call('GET','builds')).json()).total,0);
+});
+
+
+test('replacing a published build keeps its ID, rejects strangers, and leaves prior ZIP until commit',async t => {
+  const api=registry(t), original=await api.open(metadata(small));
+  assert.equal((await original.put(1,small)).status,200);
+  const publicBuild=await (await original.finish()).json();
+  const updated=exportBuild(true);
+  const next=metadata(updated);
+  const start=await api.call('POST','builds/'+publicBuild.id+'/revisions',Buffer.from(JSON.stringify(next)),original.token);
+  assert.equal(start.status,201);
+  const {upload,chunkSize}=await start.json();
+  assert.equal(chunkSize,partSize);
+  assert.equal((await api.call('GET','builds/'+publicBuild.id)).status,200);
+  assert.equal(sha(new Uint8Array(await (await api.call('GET','builds/'+publicBuild.id+'/archive')).arrayBuffer())),sha(small));
+  assert.equal((await api.call('PUT','revisions/'+upload+'/parts/1',updated.subarray(0,partSize),'a'.repeat(64))).status,403);
+  for(let part=1,at=0;at<updated.length;at+=partSize,part++){
+    const response=await api.call('PUT','revisions/'+upload+'/parts/'+part,updated.subarray(at,at+partSize),original.token);
+    assert.equal(response.status,200);
+  }
+  const finished=await api.call('POST','revisions/'+upload+'/complete',undefined,original.token);
+  assert.equal(finished.status,200);
+  const newer=await finished.json();
+  assert.equal(newer.id,publicBuild.id);
+  assert.equal(newer.sha256,sha(updated));
+  assert.equal((await (await api.call('POST','revisions/'+upload+'/complete',undefined,original.token)).json()).id,publicBuild.id);
+  assert.equal(sha(new Uint8Array(await (await api.call('GET','builds/'+publicBuild.id+'/archive')).arrayBuffer())),sha(updated));
+  assert.equal((await (await api.call('GET','builds')).json()).total,1);
+  assert.equal((await original.remove(publicBuild.id)).status,200);
+  assert.equal(api.env.BUCKET.objects.size,0);
+});
+
+test('invalid updated archive is never swapped into published listing',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  await author.put(1,small);
+  const published=await (await author.finish()).json();
+  const broken=Buffer.from(small); broken[broken.length-2]^=0x17;
+  const proposal=await api.call('POST','builds/'+published.id+'/revisions',
+    Buffer.from(JSON.stringify(metadata(broken))),author.token);
+  assert.equal(proposal.status,201);
+  const {upload}=await proposal.json();
+  assert.equal((await api.call('PUT','revisions/'+upload+'/parts/1',broken,author.token)).status,200);
+  assert.equal((await api.call('POST','revisions/'+upload+'/complete',undefined,author.token)).status,422);
+  const current=await (await api.call('GET','builds/'+published.id)).json();
+  assert.equal(current.sha256,sha(small));
+  assert.equal(sha(new Uint8Array(await (await api.call('GET','builds/'+published.id+'/archive')).arrayBuffer())),sha(small));
+});
+
+test('same ZIP revision is idempotent and incompatible loader cannot overwrite published build',async t => {
+  const api=registry(t), author=await api.open(metadata(small));
+  await author.put(1,small);
+  const pub=await (await author.finish()).json();
+  const same=await api.call('POST','builds/'+pub.id+'/revisions',Buffer.from(JSON.stringify(metadata(small))),author.token);
+  assert.equal(same.status,200);
+  assert.equal((await same.json()).unchanged,true);
+  assert.equal((await api.call('POST','builds/'+pub.id+'/revisions',
+    Buffer.from(JSON.stringify({...metadata(small),loader:'forge'})),author.token)).status,409);
+  assert.equal((await api.call('POST','builds/'+pub.id+'/revisions',
+    Buffer.from(JSON.stringify(metadata(small))),'0'.repeat(64))).status,403);
 });

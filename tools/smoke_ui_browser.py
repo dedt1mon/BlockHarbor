@@ -25,6 +25,7 @@ SCALES = (1, 1.25, 1.5, 2)
 ORIGIN = "http://blockharbor.test"
 TOKEN = "ui-audit-fixture-token"
 LONG_NAME = "Сборка с длинным названием — исследование мира и совместная игра"
+SETTINGS_CASES = {(1920, 1080, 1), (1280, 720, 2)}
 
 
 class FixtureAPI:
@@ -36,6 +37,7 @@ class FixtureAPI:
         self.racing_notification = True
         self.publication_enabled = True
         self.preview_error = ""
+        self.preferences = {"scale": 100, "reducedMotion": True}
         self.notifications = [{"id": 1, "created": 1770000000, "message": "Срок действия ссылки на сборку истёк. Сборка автоматически удалена с сервера", "level": "info", "read": False}]
         self.job = {"id": "", "busy": False, "ok": True, "message": "", "gameRunning": False, "localGameRunning": False, "runningProfiles": [], "gameExit": None, "launcherCount": 1}
         self.profile = {"id": "profile-a", "name": LONG_NAME, "version": "1.20.1", "loader": "fabric", "favorite": False, "description": "Описание " * 18}
@@ -50,7 +52,7 @@ class FixtureAPI:
     def state(self):
         return {"appVersion": "audit", "profiles": [self.profile, {**self.profile, "id": "profile-b", "name": "Вторая сборка", "loader": "quilt"}],
                 "deletedProfiles": [], "active": self.profile["id"], "contents": self.contents,
-                "experience": {"preferences": {"scale": 100, "reducedMotion": True}, "notificationUnread": self.unread},
+                "experience": {"preferences": copy.deepcopy(self.preferences), "notificationUnread": self.unread},
                 "notificationUnread": self.unread, "steam": {"supported": True, "installed": True, "canEnable": False, "canContinue": True, "message": "Готово"},
                 "skinNetwork": {"supported": True}, "skinSupport": True, "canUseFabricSkin": False, "realName": "", "nickname": "Player", "model": "classic", "skin": False,
                 "account": "", "memory": 4096, "autoMemory": True, "distanceSettings": True, "recommendedMemory": 4096, "clientId": "", "versions": ["1.20.1", "1.21.1"],
@@ -60,7 +62,7 @@ class FixtureAPI:
         if action == "experienceNotifications":
             return {"items": copy.deepcopy(list(reversed(self.notifications))), "unread": self.unread, "lastId": max((item["id"] for item in self.notifications), default=0)}
         if action == "experienceState":
-            return {"wardrobe": [], "preferences": {"scale": 100, "reducedMotion": True}, "notificationUnread": self.unread}
+            return {"wardrobe": [], "preferences": copy.deepcopy(self.preferences), "notificationUnread": self.unread}
         if action == "experienceGallery":
             return {"images": [{"name": "Длинное-название-скриншота-" + str(i) + ".png", "image": "a" * 64, "token": "token-" + str(i), "modified": 1770000000, "size": 1024} for i in range(6)], "trash": [], "total": 6, "limit": 200}
         if action == "careState":
@@ -231,6 +233,237 @@ def readable_batch_row(page):
     assert result["status"] and result["statusBottom"] > result["statusTop"], "Visible batch row has no readable status"
 
 
+def settings_field(page, session, selector, output, stem):
+    """Measure actual text fragments, including the control's UA shadow tree."""
+    field = page.locator(selector)
+    field.scroll_into_view_if_needed()
+    field.evaluate("el => el.blur()")
+    settle(page)
+    field.screenshot(path=str(output / (stem + ".png")))
+    expected = field.evaluate("el => el.tagName === 'SELECT' ? el.selectedOptions[0].label : (el.value || el.placeholder)")
+    assert expected and field.is_enabled(), selector + " has no enabled, readable value"
+    # captureSnapshot excludes UA text in current Chromium. The legacy command
+    # explicitly includes it; missing fragments are a failure, not a CSS fallback.
+    snapshot = session.send("DOMSnapshot.getSnapshot", {
+        "computedStyleWhitelist": ["visibility", "opacity", "overflow-x", "overflow-y",
+                                  "border-left-width", "border-right-width", "border-top-width", "border-bottom-width",
+                                  "padding-left", "padding-right", "padding-top", "padding-bottom"],
+        "includeUserAgentShadowTree": True,
+    })
+    nodes, layouts = snapshot["domNodes"], snapshot["layoutTreeNodes"]
+    layout_by_node = {entry["domNodeIndex"]: entry for entry in layouts}
+    parents = {child: index for index, node in enumerate(nodes) for child in node.get("childNodeIndexes", [])}
+    host_id = field.get_attribute("id")
+    host = next(index for index, node in enumerate(nodes)
+                if any(attr["name"] == "id" and attr["value"] == host_id for attr in node.get("attributes", [])))
+
+    def style(index):
+        style_index = layout_by_node.get(index, {}).get("styleIndex")
+        return {} if style_index is None else {p["name"]: p["value"] for p in snapshot["computedStyles"][style_index]["properties"]}
+
+    def px(styles, name):
+        return float(styles.get(name, "0px").removesuffix("px"))
+
+    def ancestors(index):
+        while index in parents:
+            index = parents[index]
+            yield index
+
+    def rect(box):
+        return {"left": box["x"], "top": box["y"], "right": box["x"] + box["width"], "bottom": box["y"] + box["height"]}
+
+    control = rect(layout_by_node[host]["boundingBox"])
+    css = style(host)
+    content = {
+        "left": control["left"] + px(css, "border-left-width") + px(css, "padding-left"),
+        "right": control["right"] - px(css, "border-right-width") - px(css, "padding-right"),
+        "top": control["top"] + px(css, "border-top-width") + px(css, "padding-top"),
+        "bottom": control["bottom"] - px(css, "border-bottom-width") - px(css, "padding-bottom"),
+    }
+    candidates = []
+    for index, layout in layout_by_node.items():
+        if host not in set(ancestors(index)) or expected not in layout.get("layoutText", ""):
+            continue
+        lineage = [index, *ancestors(index)]
+        if any(style(parent).get("visibility") in {"hidden", "collapse"} or style(parent).get("opacity") == "0" for parent in lineage):
+            continue
+        fragments = [part for part in layout.get("inlineTextNodes", [])
+                     if part["boundingBox"]["width"] > 0 and part["boundingBox"]["height"] > 0]
+        if not fragments:
+            continue
+        boxes = [rect(part["boundingBox"]) for part in fragments]
+        text = {"left": min(b["left"] for b in boxes), "right": max(b["right"] for b in boxes),
+                "top": min(b["top"] for b in boxes), "bottom": max(b["bottom"] for b in boxes)}
+        if text["bottom"] > control["top"] and text["top"] < control["bottom"]:
+            candidates.append((index, layout, fragments, text))
+    metrics = {"selector": selector, "expected": expected, "control": control, "content": content, "candidates": len(candidates)}
+    errors = []
+    if not candidates:
+        errors.append("No rendered UA text fragments for the selected value")
+    else:
+        index, layout, fragments, text = min(candidates, key=lambda item: abs(item[3]["top"] + item[3]["bottom"] - control["top"] - control["bottom"]))
+        prefix = layout["layoutText"].split(expected, 1)[0]
+        start = len(prefix.encode("utf-16-le")) // 2
+        required, offset = set(), start
+        for character in expected:
+            length = len(character.encode("utf-16-le")) // 2
+            if not character.isspace():
+                required.update(range(offset, offset + length))
+            offset += length
+        covered = {position for part in fragments for position in range(part["startCharacterIndex"], part["startCharacterIndex"] + part["numCharacters"])}
+        if not required <= covered:
+            errors.append("Rendered fragments omit characters from the expected value")
+        if text["left"] < content["left"] - 1 or text["right"] > content["right"] + 1 or text["top"] < content["top"] - 1 or text["bottom"] > content["bottom"] + 1:
+            errors.append("Text is clipped by the field content box or the reserved arrow area")
+        center_offset = (text["top"] + text["bottom"] - control["top"] - control["bottom"]) / 2
+        if abs(center_offset) > 2:
+            errors.append("Text is not vertically centered: " + str(round(center_offset, 3)) + " CSS px")
+        clips = []
+        for parent in ancestors(index):
+            parent_layout = layout_by_node.get(parent)
+            if not parent_layout:
+                continue
+            parent_css = style(parent)
+            axes = [axis for axis in ("x", "y") if parent_css.get("overflow-" + axis) in {"auto", "scroll", "hidden", "clip"}]
+            if not axes:
+                continue
+            clip = rect(parent_layout["boundingBox"])
+            clip["left"] += px(parent_css, "border-left-width")
+            clip["right"] -= px(parent_css, "border-right-width")
+            clip["top"] += px(parent_css, "border-top-width")
+            clip["bottom"] -= px(parent_css, "border-bottom-width")
+            clips.append({"node": nodes[parent]["nodeName"], "axes": axes, "bounds": clip})
+            if ("x" in axes and (text["left"] < clip["left"] - 1 or text["right"] > clip["right"] + 1)
+                    or "y" in axes and (text["top"] < clip["top"] - 1 or text["bottom"] > clip["bottom"] + 1)):
+                errors.append("Text exceeds a clipping ancestor: " + nodes[parent]["nodeName"])
+        metrics.update(text=text, centerOffsetCssPx=center_offset, fragments=fragments, clips=clips)
+    metrics["errors"] = errors
+    (output / (stem + ".json")).write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    if errors:
+        (output / (stem + "-snapshot.json")).write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+    assert not errors, selector + ": " + "; ".join(errors)
+    return metrics
+
+
+def settings_panel_geometry(page, descriptions):
+    errors = page.evaluate("""(selectors) => {
+      const errors = [], panels = [...document.querySelectorAll('#settingsPanel .settings-grid > .panel')];
+      const bounds = el => el.getBoundingClientRect();
+      if (panels.length !== 2) return ['Expected two settings cards'];
+      const [a, b] = panels.map(bounds), wrapper = bounds(document.querySelector('#settingsPanel'));
+      if (innerWidth >= 1200) {
+        if (Math.abs(a.top - b.top) > 1 || a.right >= b.left) errors.push('Wide settings cards are not side by side');
+        if (Math.abs(a.height - b.height) > 1) errors.push('Wide settings cards have unequal heights');
+      } else if (b.top < a.bottom - 1) errors.push('Narrow settings cards overlap instead of stacking');
+      for (const r of [a, b]) if (r.left < wrapper.left - 1 || r.right > wrapper.right + 1) errors.push('Settings card exceeds its container');
+      for (const selector of selectors) {
+        const p = document.querySelector(selector);
+        if (!p || !p.getClientRects().length) { errors.push('Missing description ' + selector); continue; }
+        const card = p.closest('.panel'), r = bounds(p), c = bounds(card), s = getComputedStyle(card);
+        const left = c.left + parseFloat(s.borderLeftWidth) + parseFloat(s.paddingLeft);
+        const right = c.right - parseFloat(s.borderRightWidth) - parseFloat(s.paddingRight);
+        if (Math.abs(r.left - left) > 1 || Math.abs(r.right - right) > 1) errors.push(selector + ' does not use the card inner width: ' + r.width + '/' + (right - left));
+      }
+      return errors;
+    }""", descriptions)
+    assert not errors, "; ".join(errors)
+    geometry(page)
+
+
+def open_select_picker(page, selector, output, stem):
+    control = page.locator(selector)
+    control.scroll_into_view_if_needed()
+    value = control.input_value()
+    control.click()
+    try:
+        if page.evaluate("CSS.supports('appearance', 'base-select')"):
+            page.wait_for_function("selector => document.querySelector(selector).matches(':open')", arg=selector)
+            page.screenshot(path=str(output / (stem + "-picker.png")))
+            options = control.locator("option")
+            for option in (options.first, options.last):
+                option.scroll_into_view_if_needed()
+                assert option.is_visible(), selector + " picker has an inaccessible option"
+                assert option.evaluate("""el => {
+                  const r = el.getBoundingClientRect();
+                  const range = document.createRange(); range.selectNodeContents(el);
+                  const text = range.getBoundingClientRect();
+                  return r.width > 0 && r.height > 0 && r.left >= -1 && r.right <= innerWidth + 1 &&
+                    r.top >= -1 && r.bottom <= innerHeight + 1 && text.left >= r.left - 1 && text.right <= r.right + 1 &&
+                    text.top >= r.top - 1 && text.bottom <= r.bottom + 1;
+                }"""), selector + " option text exceeds the opened picker"
+    finally:
+        page.keyboard.press("Escape")
+        settle(page)
+    assert control.input_value() == value, selector + " changed on opening/Escape"
+
+
+def settings_flows(page, api, output, label, results):
+    """Focused visual coverage; preferences arrive through the real state API."""
+    original_preferences, original_job = copy.deepcopy(api.preferences), copy.deepcopy(api.job)
+    session = page.context.new_cdp_session(page)
+    failures, passed = [], 0
+    try:
+        api.job = copy.deepcopy(FixtureAPI().job)
+        for app_scale in (100, 85, 120):
+            api.preferences["scale"] = app_scale
+            stem = label + "-settings-app" + str(app_scale)
+            record = {"case": label, "appTextScale": app_scale, "failures": [], "screenshotsPrefix": stem}
+            results.append(record)
+            action_start = len(api.actions)
+
+            def check(name, callback):
+                try:
+                    return callback()
+                except Exception as error:
+                    record["failures"].append(name + ": " + str(error))
+                    page.screenshot(path=str(output / (stem + "-" + name + "-FAIL.png")))
+
+            page.goto(ORIGIN + "/#" + TOKEN)
+            page.wait_for_function("typeof state !== 'undefined' && state && window.ExperienceUI")
+            settle(page)
+            assert abs(page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)") - 15 * app_scale / 100) < .01, "Production text scale was not applied"
+            page.locator('aside [data-view="settings"]').click()
+            page.locator("#settingsGeneralTab").click()
+            settle(page)
+            assert page.locator("#settingsGeneralTab").get_attribute("aria-selected") == "true"
+            assert page.locator("#settingsPanel").get_attribute("aria-labelledby") == "settingsGeneralTab"
+            check("ram-auto", lambda: settings_field(page, session, "#ram", output, stem + "-ram-auto"))
+            page.locator("#mode").select_option("direct")
+            assert page.locator("#advancedAuth").is_visible()
+            page.locator("#ram").fill("8192")
+            page.locator("#clientId").fill("12345678-1234-1234-1234-123456789abc")
+            check("general-layout", lambda: settings_panel_geometry(page, ["#modeHelp", "#advancedAuth p"]))
+            for selector in ("#mode", "#ram", "#clientId", "#uiScale"):
+                check(selector[1:], lambda selector=selector: settings_field(page, session, selector, output, stem + "-" + selector[1:]))
+            for selector in ("#mode", "#uiScale"):
+                check(selector[1:] + "-picker", lambda selector=selector: open_select_picker(page, selector, output, stem + "-" + selector[1:]))
+            page.evaluate("document.querySelector('main').scrollTop = 0")
+            settle(page)
+            page.screenshot(path=str(output / (stem + "-general.png")))
+            general_failures = len(record["failures"])
+            passed += not general_failures
+
+            page.locator("#settingsDownloadsTab").click()
+            settle(page)
+            assert page.locator("#settingsDownloadsTab").get_attribute("aria-selected") == "true"
+            assert page.locator("#settingsPanel").get_attribute("aria-labelledby") == "settingsDownloadsTab"
+            page.wait_for_function("!document.querySelector('#updateChannel').disabled")
+            check("downloads-layout", lambda: settings_panel_geometry(page, ["#automaticUpdateHelp", "#automaticUpdateStatus", ".updater-channel > div > p"]))
+            check("updateChannel", lambda: settings_field(page, session, "#updateChannel", output, stem + "-updateChannel"))
+            check("updateChannel-picker", lambda: open_select_picker(page, "#updateChannel", output, stem + "-updateChannel"))
+            page.evaluate("document.querySelector('main').scrollTop = 0")
+            settle(page)
+            page.screenshot(path=str(output / (stem + "-downloads.png")))
+            passed += len(record["failures"]) == general_failures
+            assert len(api.actions) == action_start, "Settings visual checks unexpectedly saved preferences or settings"
+            record["result"] = "FAIL" if record["failures"] else "PASS"
+            failures.extend("app " + str(app_scale) + "% " + message for message in record["failures"])
+    finally:
+        api.preferences, api.job = original_preferences, original_job
+        session.detach()
+    return passed, failures
+
+
 def production_views(page, api, output, label):
     detailed_capture = label in {"1366x768-100pct", "1280x720-200pct"}
     geometry_failures = []
@@ -376,6 +609,7 @@ def interaction_flows(page, api, output, label):
     page.evaluate("tick(true)")
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
+    open_select_picker(page, "[data-catalog-source]", output, label + "-catalog-source")
     page.locator("[data-catalog-source]").select_option("github")
     settle(page)
     for index in range(3):
@@ -453,7 +687,7 @@ def interaction_flows(page, api, output, label):
     page.locator("[data-install-project]").click()
     settle(page)
     assert api.actions[-1]["source"] == "github", "Single installation lost source"
-    return 20
+    return 21
 
 
 def main():
@@ -470,7 +704,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     from playwright.sync_api import sync_playwright
     css = "\n".join((UI / name).read_text(encoding="utf-8") for name in ("style.css", "experience.css", "build-care.css", "updates.css", "pack-hub.css"))
-    report = {"coverage": "Production browser UI with deterministic API fixtures; DPI emulated, native Windows DPI changes and Minecraft launches are outside this test", "platform": sys.platform, "cases": [], "failures": [], "checks": 0}
+    report = {"coverage": "Production browser UI with deterministic API fixtures; DPI emulated, native Windows DPI changes and Minecraft launches are outside this test", "platform": sys.platform, "cases": [], "settingsCases": [], "failures": [], "checks": 0}
     with sync_playwright() as driver:
         browser = driver.chromium.launch(executable_path=args.browser, headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         report["browser"] = browser.version
@@ -514,6 +748,15 @@ def main():
                             assert observed == {**viewport, "dpr": scale}, observed
                         except Exception as error:
                             record_failure("production", error)
+                        if (width, height, scale) in SETTINGS_CASES:
+                            try:
+                                passed_checks, settings_failures = settings_flows(page, api, args.output, label, report["settingsCases"])
+                                report["checks"] += passed_checks
+                                assert not settings_failures, "; ".join(settings_failures)
+                                assert not api.errors, "; ".join(api.errors)
+                                assert not errors, "; ".join(errors)
+                            except Exception as error:
+                                record_failure("settings", error)
                         if not case_failed:
                             report["cases"].append({"display": [width, height], "scale": scale, "viewport": observed, "result": "PASS"})
                             print(f"PASS: {label}, CSS viewport {viewport['width']}x{viewport['height']}, production views, dialogs, 32-item batch", flush=True)

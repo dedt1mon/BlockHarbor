@@ -18,6 +18,23 @@
 .updater-channel label { display: flex; flex-direction: column; gap: 8px; min-width: 205px; color: var(--muted); font-size: 13px; }
 .updater-channel select { width: 100%; }
 .updater-channel select[aria-busy="true"] { cursor: progress; }
+.settings-grid > .updater-channel {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 16px;
+}
+.settings-grid .updater-channel label {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+.settings-grid .updater-channel h2 {
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: -.5px;
+}
+.updater-automatic #automaticUpdateHelp { margin-top: 12px; }
 .updater-release { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 18px; }
 .update-release-icon { display: grid; place-items: center; flex: 0 0 56px; height: 56px; color: var(--lime); background: #c5f47812; border: 1px solid #c5f4782a; border-radius: 15px; }
 .update-release-icon i, .update-release-icon svg { width: 30px; height: 30px; }

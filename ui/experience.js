@@ -109,7 +109,7 @@
   }
   function settingsPanel() {
     const p = state.experience?.preferences || {};
-    return `<section class="panel stack"><h3>Оформление</h3><label>Масштаб текста<select class="field" id="uiScale">${[85,90,100,110,120].map(v=>`<option value="${v}" ${(p.scale||100)===v?"selected":""}>${v}%</option>`).join("")}</select></label><label class="inline-check"><input type="checkbox" id="reducedMotion" ${p.reducedMotion?"checked":""}>Уменьшить анимацию</label><div>${expButton("savePreferences","Сохранить оформление","check")}</div></section>`;
+    return `<section class="panel stack settings-card"><h3>Оформление</h3><label>Масштаб текста<select class="field" id="uiScale">${[85,90,100,110,120].map(v=>`<option value="${v}" ${(p.scale||100)===v?"selected":""}>${v}%</option>`).join("")}</select></label><label class="inline-check"><input type="checkbox" id="reducedMotion" ${p.reducedMotion?"checked":""}>Уменьшить анимацию</label><div class="actions">${expButton("savePreferences","Сохранить оформление","check")}</div></section>`;
   }
   function wardrobe() {
     return `<section class="panel"><div class="splitbar"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><p class="note">Сохрани несколько вариантов и выбирай перед следующим входом в игру.</p><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;

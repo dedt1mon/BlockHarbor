@@ -854,7 +854,7 @@ function generalSettings() {
     ["direct", "Свой Microsoft Client ID"],
   ];
   return (
-    '<div class="panel stack"><h3>Запуск Minecraft</h3><label>Профиль запуска<select id="mode" class="field">' +
+    '<div class="panel stack settings-card"><h3>Запуск Minecraft</h3><label>Профиль запуска<select id="mode" class="field">' +
     modes
       .map(
         ([k, v]) =>
@@ -892,7 +892,7 @@ function settings() {
     '<button type="button" role="tab" id="settingsGeneralTab" aria-controls="settingsPanel" aria-selected="' + !downloads + '" class="' + (!downloads ? "on" : "") + '" data-settings-section="general">' + ic("settings") + 'Основные</button>' +
     '<button type="button" role="tab" id="settingsDownloadsTab" aria-controls="settingsPanel" aria-selected="' + downloads + '" class="' + (downloads ? "on" : "") + '" data-settings-section="downloads">' + ic("download") + 'Загрузки и обновления</button></div>' +
     '<section id="settingsPanel" role="tabpanel" aria-labelledby="' + (downloads ? "settingsDownloadsTab" : "settingsGeneralTab") + '">' +
-    (downloads ? (window.UpdatesUI?.render({embedded: true}) || "") : generalSettings() + (window.ExperienceUI?.settingsPanel() || "")) + '</section>';
+    (downloads ? (window.UpdatesUI?.render({embedded: true}) || "") : '<div class="settings-grid">' + generalSettings() + (window.ExperienceUI?.settingsPanel() || "") + '</div>') + '</section>';
 }
 function updateModeHelp() {
   const mode = $("#mode").value;

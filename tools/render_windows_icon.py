@@ -1,10 +1,10 @@
-"""Regenerate the native ICO from our polygon-only SVG. Requires Pillow."""
+"""Regenerate the PNG and native ICO from our polygon-only SVG. Requires Pillow."""
 
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 UI = Path(__file__).resolve().parents[1] / "ui"
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
@@ -47,15 +47,46 @@ def main():
     _, _, width, height = map(float, root.attrib["viewBox"].split())
     scale = 2048 / width
     image = Image.new("RGBA", (2048, round(height * scale)))
-    draw = ImageDraw.Draw(image)
-    for path in root:
+    patterns = {}
+
+    def points(path):
         if path.tag.rsplit("}", 1)[-1] != "path":
+            raise ValueError("The icon supports polygon paths only")
+        return [(round(x * scale), round(y * scale)) for x, y in polygon(path.attrib["d"])]
+
+    for child in root:
+        if child.tag.rsplit("}", 1)[-1] == "defs":
+            for pattern in child:
+                if (pattern.tag.rsplit("}", 1)[-1] != "pattern"
+                        or set(pattern.attrib) - {"id", "width", "height", "patternUnits"}
+                        or pattern.attrib.get("patternUnits") != "userSpaceOnUse"
+                        or float(pattern.attrib["width"]) != width
+                        or float(pattern.attrib["height"]) != height):
+                    raise ValueError("The icon supports full-canvas user-space patterns only")
+                layer = Image.new("RGBA", image.size)
+                for face in pattern:
+                    ImageDraw.Draw(layer).polygon(points(face), fill=face.attrib["fill"])
+                patterns[pattern.attrib["id"]] = layer
+
+    for node in root:
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag == "defs":
+            continue
+        if tag != "path":
             raise ValueError("Unexpected element in icon.svg")
-        points = [
-            (round(x * scale), round(y * scale)) for x, y in polygon(path.attrib["d"])
-        ]
-        draw.polygon(points, fill=path.attrib["fill"])
-    image = image.resize((256, 256), Image.Resampling.LANCZOS)
+        fill = node.attrib["fill"]
+        if fill.startswith("url("):
+            match = re.fullmatch(r"url\(#([\w-]+)\)", fill)
+            if not match or match[1] not in patterns:
+                raise ValueError("Unknown icon fill pattern")
+            layer = patterns[match[1]].copy()
+            mask = Image.new("L", image.size)
+            ImageDraw.Draw(mask).polygon(points(node), fill=255)
+            layer.putalpha(ImageChops.multiply(layer.getchannel("A"), mask))
+            image.alpha_composite(layer)
+        else:
+            ImageDraw.Draw(image).polygon(points(node), fill=fill)
+    image.resize((96, 96), Image.Resampling.LANCZOS).save(UI / "icon.png")
     image.save(UI / "icon.ico", sizes=[(n, n) for n in SIZES], bitmap_format="bmp")
 
 

@@ -188,12 +188,18 @@ class BuildArchiveTests(unittest.TestCase):
             files.take(ticket, cookie)
         f.close()
 
-    @unittest.skipIf(os.name == "nt", "symlink creation can require developer mode")
     def test_privacy_links_in_instance_are_not_exported(self):
-        private = Path(tempfile.mkstemp(dir=self.store.root)[1])
+        descriptor, name = tempfile.mkstemp(dir=self.store.root)
+        os.close(descriptor)
+        private = Path(name)
         private.write_text("private")
-        (self.folder / "mods/normal.jar").symlink_to(private)
-        (self.folder / "config").symlink_to(private.parent, target_is_directory=True)
+        try:
+            (self.folder / "mods/normal.jar").symlink_to(private)
+            (self.folder / "config").symlink_to(private.parent, target_is_directory=True)
+        except OSError as error:
+            if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows denied symbolic-link creation (ERROR_PRIVILEGE_NOT_HELD)")
+            raise
         f = io.BytesIO()
         archive.export_build(self.store, self.pid, f)
         self.assertEqual(zipfile.ZipFile(f).namelist(), [archive.MANIFEST])

@@ -1,4 +1,4 @@
-"""Focused 2.6.14 UX checks, using production UI and a stateful local API fixture."""
+"""Focused 2.6.15 UX checks, using production UI and a stateful local API fixture."""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ class RefinementAPI(FixtureAPI):
 
     def state(self):
         data = super().state()
-        data.update(appVersion="2.6.14", profiles=copy.deepcopy(self.profiles),
+        data.update(appVersion="2.6.15", profiles=copy.deepcopy(self.profiles),
                     deletedProfiles=copy.deepcopy(self.deleted), active=self.active)
         return data
 
@@ -81,7 +81,7 @@ class RefinementAPI(FixtureAPI):
         if action == "careState":
             result["snapshots"] = copy.deepcopy(self.snapshots)
         if action == "updateState":
-            result.update(current="2.6.14", rollback={"version": "2.6.13"})
+            result.update(current="2.6.15", rollback={"version": "2.6.14"})
         return result
 
     def start_job(self, action, data):
@@ -400,6 +400,47 @@ def effective_background(locator):
     }""")
 
 
+def pagination_position(page, catalog):
+    """Compare real control positions against the 2.6.14 spacing on the same DOM."""
+    result = page.evaluate("""kind => {
+      const dialog = document.querySelector('#dialog');
+      const footer = dialog.querySelector(kind === 'addons' ? '.catalog-pager' : '.pack-pagination');
+      const row = kind === 'addons' ? footer : footer.querySelector('.pack-page-host .pack-pager');
+      const buttons = [...row.querySelectorAll(':scope > button')];
+      const read = () => {
+        const d = dialog.getBoundingClientRect(), f = footer.getBoundingClientRect(), r = row.getBoundingClientRect();
+        const a = buttons[0].getBoundingClientRect(), b = buttons.at(-1).getBoundingClientRect(), s = getComputedStyle(row);
+        const contentCenter = (r.top + parseFloat(s.paddingTop) + r.bottom - parseFloat(s.paddingBottom)) / 2;
+        return {centerY: (a.top + a.bottom) / 2, dialogBottom: d.bottom, footerTop: f.top,
+          bottomGap: d.bottom - Math.max(a.bottom, b.bottom), topGap: Math.min(a.top, b.top) - f.top,
+          horizontalOffset: Math.abs((a.left + b.right) / 2 - (r.left + r.right) / 2),
+          verticalOffset: Math.abs((a.top + a.bottom) / 2 - contentCenter),
+          reachable: buttons.every(el => {const p=el.getBoundingClientRect();
+            return document.elementFromPoint(p.x+p.width/2, p.y+p.height/2)?.closest('button') === el;})};
+      };
+      const current = read(), rows = [...footer.querySelectorAll('.pack-pager')];
+      const elements = [dialog, footer, ...rows], styles = elements.map(el => el.getAttribute('style'));
+      try {
+        dialog.style.paddingBottom = kind === 'addons' && matchMedia('(max-width: 480px), (max-height: 560px)').matches ? '16px' : '24px';
+        footer.style.padding = kind === 'addons' ? '12px 0' : '10px 0 0';
+        footer.style.minHeight = kind === 'addons' ? '60px' : '0px';
+        for (const item of rows) item.style.minHeight = '0px';
+        const previous = read();
+        return {current, previous, movedDown: current.centerY - previous.centerY};
+      } finally {
+        elements.forEach((el, i) => styles[i] === null ? el.removeAttribute('style') : el.setAttribute('style', styles[i]));
+      }
+    }""", catalog)
+    current, previous = result["current"], result["previous"]
+    assert abs(current["dialogBottom"] - previous["dialogBottom"]) <= 1, result
+    assert result["movedDown"] >= (16 if catalog == "addons" else 8), result
+    assert 12 <= current["bottomGap"] <= 18, result
+    assert current["topGap"] >= 18, result
+    assert current["horizontalOffset"] <= 1 and current["verticalOffset"] <= 1, result
+    assert current["reachable"], result
+    return result
+
+
 def notice_in_history(page, api, message, level):
     page.wait_for_function("!savingNotice && pendingNotices.length === 0")
     assert any(row["message"] == message and row["level"] == level for row in api.notifications), api.notifications
@@ -407,6 +448,41 @@ def notice_in_history(page, api, message, level):
 
 
 def check_screens(page, api, output, width, height, case):
+    case["stage"] = "download-progress"
+    previous_job = copy.deepcopy(api.job)
+    api.job.update(id="progress-check", action="packInstall", busy=True, ok=True,
+                   message="Скачиваем модпак…", contentTransfers={"tasks": [{
+                       "id": "progress-file", "category": "modpack", "state": "downloading",
+                       "title": "example.jar", "bytes": 25, "total": 100, "rate": 5,
+                   }]})
+    page.evaluate("tick(true)")
+    progress = page.locator("#downloadProgress")
+    progress.wait_for(state="visible")
+    assert progress.locator("progress").evaluate("el => el.value === 25 && el.max === 100")
+    assert "25%" in progress.locator("[data-download-metric]").inner_text()
+    assert page.locator("#notice").is_hidden()
+    page.evaluate("modal('Ход установки', '<p>Проверяем постоянную панель загрузки.</p>')")
+    settle(page)
+    assert progress.evaluate("el => el.parentElement.id === 'dialog' && el.matches(':popover-open')"), "Download panel is hidden behind a modal"
+    rect = progress.bounding_box()
+    assert abs(width - rect["x"] - rect["width"] - 18) <= 1, rect
+    assert abs(height - rect["y"] - rect["height"] - 20) <= 1, rect
+    assert progress.locator("[data-download-cancel]").evaluate("""el => {
+      const r=el.getBoundingClientRect();
+      return document.elementFromPoint(r.x+r.width/2, r.y+r.height/2)?.closest('button') === el;
+    }"""), "Download cancellation is not reachable over the modal"
+    page.evaluate("notice('Параметры сохранены во время загрузки.')")
+    notice_in_history(page, api, "Параметры сохранены во время загрузки.", "success")
+    assert progress.is_visible(), "An ordinary notification hid ongoing download progress"
+    page.screenshot(path=str(output / f"{width}-download-progress.png"))
+    api.job.update(busy=False, message="Проверочные файлы установлены.", contentTransfers={"tasks": []})
+    page.evaluate("tick(true)")
+    progress.wait_for(state="hidden")
+    notice_in_history(page, api, "Проверочные файлы установлены.", "success")
+    page.evaluate("closeDialog()")
+    api.job = previous_job
+    page.evaluate("tick(true)")
+
     case["stage"] = "updates"
     navigate(page, "settings", "#settingsDownloadsTab")
     page.locator("#settingsDownloadsTab").click()
@@ -534,8 +610,7 @@ def check_screens(page, api, output, width, height, case):
     pager = page.locator(".catalog-pager")
     case["addonPagerBackground"] = effective_background(pager)
     case["addonPager"] = row_metrics(pager, ":scope > button, :scope > span")
-    assert pager.evaluate("""el => {const r=el.getBoundingClientRect(), a=el.firstElementChild.getBoundingClientRect(), b=el.lastElementChild.getBoundingClientRect();
-      return Math.abs((a.left+b.right)/2-(r.left+r.right)/2)<=1 && Math.abs((a.top+a.bottom)/2-(r.top+r.bottom)/2)<=1; }"""), "Add-on pagination is not centered"
+    case["addonPagerPosition"] = pagination_position(page, "addons")
     page.locator("[data-catalog-filters]").click()
     footer = page.locator(".catalog-filter-footer")
     footer.wait_for(state="visible")
@@ -729,6 +804,10 @@ def check_screens(page, api, output, width, height, case):
     settle(page)
     pager = page.locator(".pack-pagination")
     pager_top = pager.bounding_box()["y"]
+    case["packPagerPosition"] = pagination_position(page, "packs")
+    for row in pager.locator(".pack-pager").all():
+        assert row.evaluate("""el => {const r=el.getBoundingClientRect(), a=el.firstElementChild.getBoundingClientRect(), b=el.lastElementChild.getBoundingClientRect();
+          return Math.abs((a.left+b.right)/2-(r.left+r.right)/2)<=1 && Math.abs((a.top+a.bottom)/2-(r.top+r.bottom)/2)<=1; }"""), "Pack pagination is not centered"
     assert effective_background(pager) == case["addonPagerBackground"], "Pack pager background differs from the add-on catalog"
     results = page.locator(".pack-results")
     assert results.bounding_box()["y"] + results.bounding_box()["height"] <= pager_top + 1, "Pack results overlap pagination"
@@ -837,7 +916,7 @@ def main():
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
-                    print(f"PASS: 2.6.14 UX at {width}x{height}", flush=True)
+                    print(f"PASS: 2.6.15 UX at {width}x{height}", flush=True)
                 except Exception as error:
                     case["error"] = type(error).__name__ + ": " + str(error)
                     case["traceback"] = traceback.format_exc()

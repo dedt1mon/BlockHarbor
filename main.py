@@ -86,6 +86,8 @@ STATIC = {
     "/build-care.css": "build-care.css",
     "/updates.js": "updates.js",
     "/updates.css": "updates.css",
+    "/download-progress.js": "download-progress.js",
+    "/download-progress.css": "download-progress.css",
     "/pack-hub.js": "pack-hub.js",
     "/pack-hub.css": "pack-hub.css",
     "/catalog-ux.css": "catalog-ux.css",
@@ -167,7 +169,7 @@ class App:
         self.parked_for_game = False
         self.pending_world_backups = set()
         self.shutdown = None
-        self.experience = Experience(self.store)
+        self.experience = Experience(self.store, running=self.profile_running)
         self.transfers = TransferManager(self.store.root, namespace=self.coordinator.namespace)
         self.care = BuildCare(self.store, self.transfers, on_clone=self._clone_details, owner=self.coordinator.owner, recover=False)
         self.metrics = SessionMetrics(self.store)
@@ -462,7 +464,8 @@ class App:
                 self.require_profile_idle(pid)
             if action in service.JOBS:
                 guarded = pid if (service in (self.care, self.performance, self.sharing) and action != "careCheckUpdates") or action == "communityPublish" else None
-                return self.start_job(lambda status: service.handle(action, params, status), profile=guarded)
+                return self.start_job(lambda status: service.handle(action, params, status), profile=guarded,
+                                      job_data={"action": action, "profileId": pid if isinstance(pid, str) else ""})
             result = service.handle(action, params)
             if action not in concurrent and not (isinstance(result, dict) and result.get("review")):
                 self.experience.notify((result or {}).get("message", "Изменения сохранены."), "success")
@@ -755,12 +758,19 @@ class App:
         progress = {key: updates.get(key) for key in keys}
         release = updates.get("release")
         progress["release"] = {key: release.get(key) for key in ("version", "compatible")} if release else None
-        tasks = [row for row in updates.get("transfers", {}).get("tasks", [])
+        all_tasks = updates.get("transfers", {}).get("tasks", [])
+        tasks = [row for row in all_tasks
                  if row.get("category") == "launcher-update"]
         active = {"queued", "downloading", "verifying"}
         progress["transfers"] = {"tasks": [row for row in tasks if row.get("state") in active]
                                  + [row for row in tasks if row.get("state") not in active][:6]}
         snapshot["updater"] = progress
+        transfer_fields = ("id", "title", "category", "state", "bytes", "total", "rate", "message")
+        snapshot["contentTransfers"] = {"tasks": [
+            {key: row.get(key) for key in transfer_fields}
+            for row in all_tasks
+            if row.get("category") in {"content", "modpack", "community"} and row.get("state") in active
+        ]}
         snapshot["notificationUnread"] = self.experience.notification_unread()
         snapshot["startupNotice"] = ({"id": self.coordinator.session + ":bootstrap", "ok": True,
                                       "message": "Компоненты BlockHarbor подготовлены. Лаунчер готов к работе."}
@@ -881,6 +891,7 @@ class App:
             def save_for_java(status):
                 digest = skins.save_texture(store.root, pixels)
                 store.set_many({"skinDigest": digest, "model": model})
+                self.experience.sync_game_wardrobes()
                 return "PNG и модель сохранены. Теперь можно установить скин в Java-профиле."
 
             return self.start_job(save_for_java)
@@ -908,6 +919,7 @@ class App:
                 if pixels:
                     values["skinDigest"] = skins.save_texture(store.root, pixels)
                 store.set_many(values)
+                self.experience.sync_game_wardrobes()
                 return "Успешно сохранено"
 
             return self.start_job(save_player)
@@ -965,6 +977,7 @@ class App:
                         )
                 db.executemany("REPLACE INTO settings VALUES (?, ?)", values.items())
             store.remember(values)
+            self.experience.sync_game_wardrobes()
             return "Успешно сохранено"
 
         return self.start_job(save, profile=profile["id"])
@@ -1382,12 +1395,9 @@ class App:
                     cache_dir=s.root / "steam-mod-cache",
                 ):
                     room_bridge.prepare(folder, pro["version"], pro["loader"])
-                skin_sync.prepare(
-                    folder,
-                    pro["version"],
-                    pro["loader"],
-                    image if image.is_file() else None,
-                    s.get("model", "classic"),
+                self.experience.prepare_game_wardrobe(
+                    pro["id"], status=status, player_name=target,
+                    player_id=game._java_offline_uuid(target) if mode == "local" else (session or {}).get("id") if mode == "direct" else None,
                 )
                 if mode == "prism":
                     from launcher import prism
@@ -1418,7 +1428,7 @@ class App:
                 self._track_game(process, pro)
                 return f"Запущен Minecraft {pro['version']} · {pro['name']}."
 
-            return self.start_job(play, profile=pro["id"])
+            return self.start_job(play, profile=pro["id"], job_data={"action": "play", "profileId": pro["id"]})
         elif action == "folder":
             folder = s.folder(p["id"])
             if sys.platform == "win32":
@@ -1859,6 +1869,7 @@ class Handler(BaseHTTPRequestHandler):
                             skins.validate_skin(tmp)
                             digest = skins.save_texture(self.app.store.root, skins.normalized_skin(tmp))
                             self.app.store.set("skinDigest", digest)
+                            self.app.experience.sync_game_wardrobes()
                         else:
                             if self.app.job_snapshot()["busy"]:
                                 raise ValueError("Дождись завершения текущей операции.")

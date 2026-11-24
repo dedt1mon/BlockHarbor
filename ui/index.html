@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/updates.css" />
     <link rel="stylesheet" href="/pack-hub.css" />
     <link rel="stylesheet" href="/catalog-ux.css" />
+    <link rel="stylesheet" href="/download-progress.css" />
   </head>
   <body>
     <aside>
@@ -34,7 +35,7 @@
         <button class="nav" data-view="settings">
           <i data-icon="settings"></i><span>Настройки</span>
         </button>
-        <div class="appversion"><b></b> BlockHarbor <span>2.6.14</span></div>
+        <div class="appversion"><b></b> BlockHarbor <span>2.6.15</span></div>
       </div>
     </aside>
     <main>
@@ -68,6 +69,14 @@
       aria-atomic="true"
       hidden
     ></div>
+    <section id="downloadProgress" popover="manual" aria-label="Текущая загрузка" hidden>
+      <div class="download-progress-heading"><i data-icon="download"></i><strong data-download-title></strong></div>
+      <p class="download-progress-message" data-download-message role="status" aria-live="polite"></p>
+      <progress max="1" aria-label="Загрузка файлов"></progress>
+      <p class="download-progress-metric" data-download-metric hidden></p>
+      <p class="download-progress-summary" data-download-summary hidden></p>
+      <div class="download-progress-actions"><button type="button" class="btn" data-download-details>Открыть загрузки</button><button type="button" class="btn" data-download-cancel>Отменить загрузку</button></div>
+    </section>
     <dialog id="dialog" aria-labelledby="dialogTitle">
       <div class="dialog-top">
         <h2 id="dialogTitle"></h2>
@@ -92,6 +101,7 @@
     <script src="/catalog.js"></script>
     <script src="/batch-install.js"></script>
     <script src="/app.js"></script>
+    <script src="/download-progress.js"></script>
     <script src="/experience.js"></script>
     <script src="/build-care.js"></script>
     <script src="/updates.js"></script>

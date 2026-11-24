@@ -154,7 +154,7 @@ def prepare(instance_dir, version, loader, image=None, model="classic"):
                 raise ValueError("Файл настроек Skinss+ слишком велик.")
             try:
                 data = json.loads(settings.read_text(encoding="utf-8-sig"))
-            except (ValueError, UnicodeError) as error:
+            except (ValueError, UnicodeError, RecursionError) as error:
                 raise ValueError(
                     "Не удалось прочитать настройки Skinss+. Проверь config/skinss/settings.json."
                 ) from error

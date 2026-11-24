@@ -160,7 +160,7 @@ class OptionalSteamAppTests(unittest.TestCase):
         with (
             patch.object(e4steam, "ensure", return_value=[Path("verified.jar")]) as ensure,
             patch.object(room_bridge, "prepare") as bridge,
-            patch.object(skin_sync, "prepare"),
+            patch.object(skin_sync, "prepare", return_value=Path("verified-skinss.jar")),
             patch.object(game, "install"),
             patch.object(game, "launch_local", return_value=child),
         ):

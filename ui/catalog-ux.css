@@ -2,7 +2,10 @@
 .catalog-browse { grid-template-rows: auto minmax(0, 1fr) auto; }
 .catalog-search { align-items: stretch; }
 .catalog-search > .btn { flex: none; }
-.catalog-pager { justify-content: center; align-items: center; gap: 16px; min-height: 60px; padding-block: 12px; }
+/* Keep more room above the navigation while bringing its controls closer to
+   the dialog bottom. Symmetric padding would move a bottom-anchored row up. */
+dialog:has(.catalog[data-catalog-view="browse"]) { padding-bottom: 10px; }
+.catalog-pager { justify-content: center; align-items: center; gap: 16px; min-height: 64px; padding: 24px 0 4px; }
 .catalog-pager > .btn { flex: none; }
 .catalog-pager > span { min-width: 0; text-align: center; overflow-wrap: anywhere; }
 .catalog-installed { display: inline-flex; align-items: center; gap: 5px; color: var(--lime); font-size: 12px; }
@@ -26,7 +29,7 @@ dialog:has(.catalog[data-catalog-view="detail"]) #dialogBody { flex: 0 1 auto; o
 }
 @media (max-height: 560px) {
   .catalog-browse { grid-template-rows: auto minmax(160px, 40dvh) auto; }
-  .catalog-pager { position: sticky; bottom: 0; background: var(--bg); }
+  .catalog-pager { position: sticky; bottom: 0; background: var(--bg); min-height: 58px; padding-top: 18px; }
 }
 
 .catalog-filter-footer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

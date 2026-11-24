@@ -173,7 +173,7 @@ class GameProcessLifecycleTests(unittest.TestCase):
         self.app.window.native = self.frame
         self.app.window.url = "http://127.0.0.1:7001/#test"
         self.enterContext(patch("launcher.e4steam.ensure"))
-        self.enterContext(patch("launcher.skin_sync.prepare"))
+        self.enterContext(patch("launcher.skin_sync.prepare", return_value=self.app.store.folder(self.pid) / "mods/verified-skinss.jar"))
         self.prepare = self.enterContext(patch.object(game, "install"))
 
     def play(self):

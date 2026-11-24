@@ -158,6 +158,32 @@ class CommunityCatalogTests(unittest.TestCase):
         with patch.object(self.reader.mirror, "search", side_effect=AssertionError("No stale resurrection")):
             self.assertEqual(self.reader.search({"q": listing["id"]})["hits"], [])
 
+    def test_shared_archive_link_uses_exact_id_without_publisher_credentials(self):
+        listing = self.publish()
+        receipt = self.publisher.publications(self.pid)["publications"][0]
+        url = self.server.origin + "/v1/builds/" + listing["id"] + "/archive"
+        self.assertEqual(receipt["shareUrl"], url)
+        self.assertNotIn("b" * 64, url)
+        with patch.object(self.server, "json", wraps=self.server.json) as remote:
+            page = self.reader.search({"q": url, "version": "1.21.1", "loader": "neoforge",
+                                       "category": "magic", "offset": 20})
+        self.assertEqual(page["hits"], [listing])
+        self.assertEqual(page["offset"], 0)
+        remote.assert_called_once_with("GET", "builds/" + listing["id"])
+
+    def test_shared_link_rejects_foreign_hosts_and_query_credentials_before_network(self):
+        path = "/v1/builds/" + self.server.public_id + "/archive"
+        invalid = ["http://catalog.example" + path, "https://other.example" + path,
+                   "https://catalog.example.other.example" + path,
+                   "https://user:pass@catalog.example" + path,
+                   "https://catalog.example:443" + path,
+                   "https://catalog.example" + path + "?token=private",
+                   "https://catalog.example" + path + "#fragment"]
+        with patch.object(self.server, "json", side_effect=AssertionError("Must not request an untrusted link")):
+            for url in invalid:
+                with self.subTest(url=url), self.assertRaisesRegex(ValueError, "ссылку из BlockHarbor"):
+                    self.reader.search({"q": url})
+
     def test_empty_legacy_mirror_does_not_claim_the_current_catalog_is_empty(self):
         with patch.object(self.server, "json", side_effect=catalog.CatalogError(503, "offline")), \
                 patch.object(self.reader.mirror, "search", return_value={"hits": [], "total": 0, "source": "github"}):

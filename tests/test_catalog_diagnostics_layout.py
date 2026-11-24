@@ -115,11 +115,11 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         details = self.pack_ui.split('function publicationRows(', 1)[1].split('async function readPublications(', 1)[0]
         self.assertNotIn('<details', details)
         self.assertNotIn('<summary', details)
-        self.assertIn('class="community-code-label">Код сборки</label>', details)
+        self.assertIn('class="community-code-label">Код или ссылка на сборку</label>', details)
         self.assertIn('data-pack-copy-id', details)
         self.assertIn('Удалить публикацию', details)
         self.assertNotIn('Закрыть', details)
-        self.assertLess(details.index('Код сборки</label>'), details.index('Скопировать ID'))
+        self.assertLess(details.index('Код или ссылка на сборку</label>'), details.index('Скопировать ID'))
         self.assertLess(details.index('Скопировать ID'), details.index('Удалить публикацию'))
         self.assertIn('data-pack-withdraw=', details)
         self.assertNotIn('data-pack-withdraw-confirm', details)

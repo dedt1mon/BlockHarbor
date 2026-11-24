@@ -1,5 +1,6 @@
 .pack-hub { padding: 22px; }
 dialog[open]:has(.pack-dialog) { display: flex; flex-direction: column; width: min(940px,94vw); height: min(700px,89dvh); max-height: 89dvh; overflow: hidden; }
+dialog:has(.pack-dialog[data-pack-view="catalog"]) { padding-bottom: 10px; }
 dialog:has(.pack-dialog) .dialog-top { flex: none; }
 dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden; scrollbar-gutter: auto; }
 .pack-dialog { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
@@ -41,14 +42,16 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .pack-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pack-card-footer .btn { font-size: 12px; padding: 8px 10px; min-height: var(--control-compact); }
 .pack-card-footer .meta { font-size: 11px; }
-.pack-pagination { flex: none; background: transparent; padding-top: 10px; }
+.pack-pagination { flex: none; background: transparent; padding: 24px 0 4px; }
 .pack-pagination:has(.pack-pager) { border-top: 0; }
 .pack-pagination > :empty { display: none; }
-.pack-pager { display: flex; justify-content: center; gap: 16px; align-items: center; min-width: 0; }
+.pack-pager { display: flex; justify-content: center; gap: 16px; align-items: center; min-width: 0; min-height: 36px; }
 .pack-pager .meta { min-width: 0; text-align: center; overflow-wrap: anywhere; }
 .pack-pager > .btn { flex: none; }
 .pack-pagination > div + div:not(:empty) { margin-top: 8px; }
 .pack-pagination > :empty + div { margin-top: 0; }
+@media(max-height:560px) { .pack-pagination { padding-top: 18px; } }
+@media(max-width:480px) { .pack-pager { gap: 8px; } }
 .pack-release label,.pack-preview > label { display: grid; gap: 8px; margin: 18px 0; }
 .pack-preview .tags { margin: 16px 0; }
 .pack-optional { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
@@ -79,6 +82,11 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .community-receipt strong { overflow-wrap: anywhere; }
 .community-feedback { font-size: 13px; }
 .community-feedback:empty { display: none; }
+.community-file-share { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.community-file-share > h3 { margin: 0 0 8px; }
+.community-file-share > .actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.community-file-share > .actions > .btn { width: 100%; min-width: 0; white-space: normal; }
+@media(max-width:480px) { .community-file-share > .actions { grid-template-columns: minmax(0,1fr); } }
 
 .community-published-actions,
 .community-confirm-actions,
@@ -134,7 +142,7 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .community-id > .btn { width: 100%; min-width: 0; }
 .community-confirm { margin-top: 3px; }
 .community-confirm p { margin: 0; font-size: 13px; line-height: 1.5; }
-.community-published-actions, .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
+.community-retry-actions { grid-template-columns: minmax(0, 1fr); }
 .community-retry-actions { margin-top: 12px; }
 .build-settings.is-published { color: var(--lime); border-color: var(--selection-border); background: var(--selection-fill); }
 

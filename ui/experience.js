@@ -118,12 +118,19 @@
     return `<section class="panel stack settings-card"><h3>Оформление</h3><label>Масштаб текста<select class="field" id="uiScale">${[85,90,100,110,120].map(v=>`<option value="${v}" ${(p.scale||100)===v?"selected":""}>${v}%</option>`).join("")}</select></label><label class="inline-check"><input type="checkbox" id="reducedMotion" ${p.reducedMotion?"checked":""}>Уменьшить анимацию</label><div class="actions">${expButton("savePreferences","Сохранить оформление","check")}</div></section>`;
   }
   function wardrobe() {
-    return `<section class="panel wardrobe-panel"><div class="wardrobe-heading"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
+    return `<section class="panel wardrobe-panel"><div class="wardrobe-heading"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><p id="gameWardrobeHint" class="note" hidden></p><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
   }
   async function loadWardrobe() {
     const el = $("#wardrobe"); if (!el) return;
     try {
-      const data = await query("experienceState"); if (!el.isConnected) return;
+      const data = await query("experienceState", {id:active()?.id}); if (!el.isConnected) return;
+      const hint = $("#gameWardrobeHint"), game = data.gameWardrobe;
+      if (hint && game) {
+        hint.hidden = false;
+        hint.textContent = game.supported
+          ? `${game.ready ? "" : game.running ? "Для подключения гардероба один раз перезапусти сборку. " : "Гардероб подключится при запуске сборки. "}${game.hint} Выбор в игровом меню меняет скин сразу, без выхода из мира.`
+          : game.hint;
+      }
       el.innerHTML = data.wardrobe.length ? data.wardrobe.map(s=>`<article class="wardrobe-card">${media(s.preview)?`<img src="${media(s.preview)}" alt="" loading="lazy">`:ic("user")}<strong>${esc(s.name)}</strong><small>${s.model==="slim"?"Slim":"Classic"}</small><div class="wardrobe-actions">${expButton("useSkin","Надеть","check",`data-skin="${s.id}"`)}${expButton("deleteSkin","Удалить","trash",`data-skin="${s.id}" ${wardrobeDeletes.has(s.id) ? "disabled" : ""}`)}</div></article>`).join("") : '<p class="note">В гардеробе пока пусто. Сначала выбери и сохрани скин в профиле.</p>';
     } catch(e) { if(el.isConnected) el.textContent = e.message; }
   }
@@ -319,7 +326,7 @@
     if (action === "useSkin") {
       if (profileJob || profileSubmission) return notice("Дождись сохранения параметров профиля.", true);
       const draft = characterDraft(), file = draft.file, revision = draft.revisions.model;
-      await act("experienceUseSkin", {skin:el.dataset.skin});
+      const result = await act("experienceUseSkin", {skin:el.dataset.skin});
       state = await api("/api/state");
       // Choosing a saved skin must not discard an edited player name.
       if (draft.file === file && draft.revisions.model === revision) {
@@ -328,7 +335,7 @@
         draft.dirty.model = false;
       }
       render();
-      return notice("Скин выбран. Он будет применён при следующем запуске игры.");
+      return notice(result.message || "Скин выбран для следующего запуска.");
     }
     if (action === "deleteSkin") {
       const id = el.dataset.skin;

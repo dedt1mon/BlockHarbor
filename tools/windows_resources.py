@@ -9,7 +9,7 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-VERSION = (2, 6, 14, 0)
+VERSION = (2, 6, 15, 0)
 
 
 def _aligned(data):

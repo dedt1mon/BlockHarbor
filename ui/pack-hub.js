@@ -5,14 +5,15 @@
 (() => {
   const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const categories = {adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"};
-  const community = {page: null, fetchedAt: 0, busy: false, error: "", needsSearch: true, controller: null};
+  const community = {page: null, fetchedAt: 0, attemptedAt: 0, busy: false, error: "", needsSearch: true, controller: null};
   const publicationCache = new Map();
   const publicationRequests = new Map();
   const publicationEpochs = new Map();
   const communityDownloads = new Set();
   let publicationRequest = 0;
   let pendingPublication = null, selectedCommunity = null;
-  const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim());
+  const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim())
+    || /^https:\/\/blockharbor-community-catalog\.ded8timon\.chatgpt\.site\/v1\/builds\/BH-[0-9A-F]{12}(?:\/archive)?$/i.test(catalog.q.trim());
   const choices = new Map();
   const releaseRows = new Map();
   const releaseInstalls = new Map();
@@ -123,6 +124,7 @@
     const controller = new AbortController();
     community.controller = controller;
     community.busy = true;
+    community.attemptedAt = Date.now();
     community.needsSearch = true;
     community.error = "";
     const host = document.querySelector(".community-results");
@@ -199,7 +201,7 @@
 
   function refreshOpenCommunity() {
     if (!document.hidden && document.querySelector('.pack-dialog[data-pack-view="catalog"]') &&
-        !community.busy && !community.error && Date.now() - community.fetchedAt >= 15000)
+        !community.busy && Date.now() - community.attemptedAt >= 15000)
       searchCommunity(community.page?.offset || 0, true);
   }
 
@@ -223,15 +225,17 @@
     if (!list.length) return "";
     return `<div class="community-publications">${list.map(row => `<section class="community-receipt">
       ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
-      <label class="community-code-label">Код сборки</label>
+      <label class="community-code-label">Код или ссылка на сборку</label>
       <p class="community-expiry">${row.expiresAt
         ? (row.statusUnverified ? "Последний подтверждённый срок: " : "Публикация доступна до ") + esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})) + ", затем автоматически удалится из каталога."
         : "Сервер не подтвердил срок автоматического удаления. Когда публикация станет не нужна, удали её вручную."} Локальная сборка сохранится.</p>
-      <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
+      <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" data-publication-id="${esc(row.build)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
       <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">
+        ${row.shareUrl ? button(`data-pack-copy-link="${esc(row.shareUrl)}"`, "Скопировать ссылку", "copy") : ""}
         ${button(`data-pack-withdraw="${esc(row.build)}"`, "Удалить публикацию", "trash", "danger")}
       </div>
+      <p class="note">Друг может вставить ID или ссылку в «Каталог сборок». Ссылка также скачивает ZIP в браузере, пока публикация доступна.</p>
     </section>`).join("")}</div>`;
   }
 
@@ -318,7 +322,10 @@
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
       <div class="community-publish-footer"><button id="communityPublishSubmit" class="btn main" type="submit" data-pack-publish-submit disabled>${ic("share")}Опубликовать</button><p role="status" class="community-publication-status">Проверяем статус публикации…</p></div>
-    </form>`, {contentSized: true});
+    </form><section class="community-file-share"><h3>Передать другу ZIP</h3>
+      <p class="note">Можно отправить ZIP другу любым удобным способом. В архиве будут моды и настройки, без миров. Получатель выбирает этот ZIP через «Получить сборку». Публикация в каталоге для этого не нужна.</p>
+      <div class="actions">${button(`data-export-build="${esc(id)}"`, "Передать ZIP", "share")}${button("data-pack-receive", "Получить сборку", "download")}</div>
+    </section>`, {contentSized: true});
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
     readPublicationCapabilities(form);
@@ -397,7 +404,7 @@
   }
 
   function renderPacks() {
-    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Название сборки или ID" aria-label="Название сборки или ID" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
+    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Название сборки, ID или ссылка" aria-label="Название сборки, ID или ссылка" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
       <label>Загрузчик<select class="field" data-pack-filter="loader">${option("", "Любой", catalog.loader)}${Object.entries(loaders).map(([v, label]) => option(v, label, catalog.loader)).join("")}</select></label>
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", ...categories}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
@@ -550,6 +557,7 @@
     feedback.classList.remove("pack-error");
     updateReleaseSelection();
     let failure = null;
+    window.DownloadProgressUI?.begin("pack-preview:" + key, "Загрузка сборки", "Загружаем и проверяем модпак…");
     try {
       const data = await act("packPreview", {project, version});
       request.token = data.token;
@@ -565,6 +573,7 @@
       failure = error;
       if (isCurrent()) notice(error.message, true);
     } finally {
+      window.DownloadProgressUI?.end("pack-preview:" + key);
       // This token is deliberately separate from the manual-import preview:
       // closing a dialog during job acceptance must not discard its archive.
       if (request.token && !request.accepted) await act("packDiscard", {token: request.token}).catch(() => {});
@@ -628,11 +637,25 @@
     if (!Object.keys(d).some(key => key.startsWith("pack"))) return;
     try {
       if (d.packShare) return showPublish(d.packShare);
+      if ("packReceive" in d) {
+        closeDialog();
+        document.querySelector("#buildZipPick")?.click();
+        return;
+      }
       if ("packCopyId" in d) {
         const input = target.closest(".community-id").querySelector("input");
+        input.value = input.dataset.publicationId || input.value;
         input.focus(); input.select();
         try {await navigator.clipboard.writeText(input.value); notice("ID сборки скопирован.");}
         catch {notice("ID выделен. Нажми Ctrl+C, чтобы скопировать.");}
+        return;
+      }
+      if (d.packCopyLink) {
+        const input = target.closest(".community-receipt").querySelector(".community-id input");
+        input.value = d.packCopyLink;
+        input.focus(); input.select();
+        try {await navigator.clipboard.writeText(input.value); notice("Ссылка на сборку скопирована.");}
+        catch {notice("Ссылка выделена. Нажми Ctrl+C, чтобы скопировать.");}
         return;
       }
       if (d.packWithdraw) return await publicationAction(target.closest("form"), "communityUnpublish", {build: d.packWithdraw});

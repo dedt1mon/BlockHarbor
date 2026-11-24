@@ -140,7 +140,7 @@ function observeBuildRequests(job) {
     setBuildBusy(id, false);
   }
 }
-// Operation results are kept in the bell history. Progress stays in its own view.
+// Results stay in the bell history. Active downloads have their own persistent panel.
 const deliveredBackgroundNotices = new Set();
 const pendingNotices = [];
 const recentNotices = new Map();
@@ -202,6 +202,7 @@ async function flushBackgroundNotices() {
 }
 function observeProgress(job) {
   observeBuildRequests(job);
+  window.DownloadProgressUI?.observe(job);
   // A completed app update already includes preparing its embedded components.
   const startup = job.updater?.startupResult ? null : job.startupNotice;
   backgroundNotice("bootstrap", startup ? {...startup, persist: true} : null);
@@ -998,10 +999,12 @@ function modal(title, body, options = {}) {
   $("#dialogBody").scrollTop = 0;
   if (!d.open) d.showModal();
   moveNotice();
+  window.DownloadProgressUI?.relocate();
 }
 function closeDialog() {
   $("#dialog").close();
   moveNotice();
+  window.DownloadProgressUI?.relocate();
 }
 function whenDialogClosed(dialog, scope, callback) {
   const onClose = () => {
@@ -1208,6 +1211,7 @@ async function runJob(action, data = {}) {
   const j = await act(action, data);
   acceptedJobGeneration++;
   lastJob = j.job;
+  window.DownloadProgressUI?.remember(j.job, action);
   if (action === "purgeBuild") buildPurgeJobs.set(data.id, j.job);
   if (action === "play") lastPlayJob = j.job;
   if (action === "installModrinth") window.BatchUI?.start(j.job, data);
@@ -1250,7 +1254,7 @@ function schedulePoll() {
   // Hidden pages still need an occasional heartbeat for the local server's idle timeout.
   const delay = document.hidden
     ? 60000
-    : state.job?.busy || lastJob || window.UpdatesUI?.isActive()
+    : state.job?.busy || lastJob || window.UpdatesUI?.isActive() || window.DownloadProgressUI?.isActive()
       ? 900
       : state.job?.updater?.autoEnabled ? 3000 : 15000;
   pollTimer = setTimeout(tick, delay);
@@ -1341,11 +1345,16 @@ async function putFile(file, type, id, check = false, dependencies = "", acknowl
   if (check) q.set("check", "1");
   if (dependencies) q.set("dependencies", dependencies);
   if (acknowledgement) q.set("acknowledgement", acknowledgement);
-  return api("/api/file?" + q, {
-    method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: file,
-  });
+  const progressId = !check && ["mods", "shaderpacks", "resourcepacks"].includes(type)
+    ? "file-import:" + id + ":" + type + ":" + file.name : "";
+  if (progressId) window.DownloadProgressUI?.begin(progressId, "Установка дополнения", "Загружаем и проверяем " + file.name + "…");
+  try {
+    return await api("/api/file?" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+  } finally { if (progressId) window.DownloadProgressUI?.end(progressId); }
 }
 let uploadTarget = null;
 async function downloadPlayerFile(path, filename) {
@@ -1665,22 +1674,22 @@ document.addEventListener("click", async (e) => {
       const build = state.profiles.find((p) => p.id === el.dataset.exportBuild);
       if (!build) return;
       return await withBuildRequest(build.id, async () => {
-        notice("Готовим ZIP сборки…", false, true);
-        const result = await api("/api/build-export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: build.id,
-            worlds: false,
-          }),
-        });
-        const link = document.createElement("a");
-        link.href = result.download;
-        link.download = result.name;
-        document.body.append(link);
-        link.click();
-        link.remove();
-        notice("ZIP готов. Скачивание началось.");
+        const progressId = "build-export:" + build.id;
+        window.DownloadProgressUI?.begin(progressId, "Подготовка ZIP", "Собираем файлы «" + build.name + "»…");
+        try {
+          const result = await api("/api/build-export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({id: build.id, worlds: false}),
+          });
+          const link = document.createElement("a");
+          link.href = result.download;
+          link.download = result.name;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          notice("ZIP готов. Скачивание началось.");
+        } finally { window.DownloadProgressUI?.end(progressId); }
       });
     }
     if (el.dataset.purgeBuild) {
@@ -1770,6 +1779,7 @@ document.addEventListener("submit", async (e) => {
       pendingBuild = { id: result.job, form, destination };
       acceptedJobGeneration++;
       lastJob = result.job;
+      window.DownloadProgressUI?.remember(result.job, "create");
       notice("Создаём сборку…", false, true);
       await tick();
     } else {
@@ -1837,6 +1847,7 @@ $("#buildZipPick").addEventListener("change", async (event) => {
   if (!file.size || file.size > 8 * 1024 ** 3)
     return notice("Выбери ZIP сборки размером до 8 ГБ.", true);
   picker.disabled = true;
+  window.DownloadProgressUI?.begin("build-import", "Загрузка сборки", "Загружаем и распаковываем " + file.name + "…");
   try {
     notice("Загружаем и распаковываем сборку…", false, true);
     const build = await api("/api/build-import", {
@@ -1853,6 +1864,7 @@ $("#buildZipPick").addEventListener("change", async (event) => {
     notice(error.message, true);
   } finally {
     picker.disabled = false;
+    window.DownloadProgressUI?.end("build-import");
   }
 });
 $("#skinPick").addEventListener("change", async (e) => {

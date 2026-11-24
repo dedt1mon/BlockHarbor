@@ -42,7 +42,11 @@ class ProgressApiTests(unittest.TestCase):
     def test_progress_snapshot_is_private_and_excludes_unrelated_transfer_history(self):
         tasks = [{"id": str(i), "category": "launcher-update", "state": "completed"} for i in range(10)]
         tasks += [{"id": "active", "category": "launcher-update", "state": "downloading", "bytes": 25, "total": 100},
-                  {"id": "mod", "category": "mods", "state": "downloading"}]
+                  {"id": "mod", "title": "Совместимый мод", "category": "content", "state": "downloading",
+                   "bytes": 17, "total": 100, "rate": 5, "message": "Скачиваем",
+                   "config": {"url": "https://example.invalid/private", "destination": "private-path"}},
+                  {"id": "pack", "category": "community", "state": "verifying"},
+                  {"id": "old-pack", "category": "modpack", "state": "completed"}]
         update = {
             "current": "2.3.0", "channel": "stable", "autoEnabled": True,
             "release": {"version": "2.4.0", "compatible": True, "download": "https://example.invalid/installer", "notes": "Long release notes"},
@@ -51,12 +55,20 @@ class ProgressApiTests(unittest.TestCase):
             "startupResult": {"id": "completed-handoff", "ok": True, "message": "BlockHarbor обновлён."},
         }
         with patch.object(self.app.updates, "state", return_value=update):
-            result = self.call()["updater"]
+            snapshot = self.call()
+            result = snapshot["updater"]
             self.assertEqual(result["release"], {"version": "2.4.0", "compatible": True})
             self.assertEqual(len(result["transfers"]["tasks"]), 7)
             self.assertEqual(result["transfers"]["tasks"][0]["id"], "active")
             self.assertEqual(result["checkStatus"], update["checkStatus"])
             self.assertEqual(result["startupResult"], update["startupResult"])
+            content = snapshot["contentTransfers"]["tasks"]
+            self.assertEqual([row["id"] for row in content], ["mod", "pack"])
+            self.assertEqual(content[0]["bytes"], 17)
+            self.assertEqual(content[0]["total"], 100)
+            self.assertEqual(content[0]["message"], "Скачиваем")
+            self.assertNotIn("config", content[0])
+            self.assertNotIn("private-path", json.dumps(content))
             with self.assertRaises(HTTPError) as error:
                 self.call(authenticated=False)
             self.assertEqual(error.exception.code, 403)

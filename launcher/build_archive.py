@@ -13,7 +13,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
-from . import lifecycle
+from . import lifecycle, modfiles
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
 
 MANIFEST = "blockharbor.json"
@@ -37,7 +37,7 @@ _CONFIG_EXT = {
     ".xml",
 }
 _PRIVATE = re.compile(
-    r"account|auth(?:me|entication|orization|lib)?|credential|passw(?:or)?d|passwd|token|secret|webhook|api[_.-]?key|private|session|nickname|nameprotect|skin(?:ss|loader|restorer)|e4steam|^skins?$|^player(?:data|profiles?|skins?)$|^steam$|^logs?$|^cache$|^user(?:s|cache|name)?$",
+    r"account|auth(?:me|entication|orization|lib)?|credential|passw(?:or)?d|passwd|token|secret|webhook|api[_.-]?key|private|session|nickname|nameprotect|quickskin|skin[_.-]?preferences|skin(?:ss|loader|restorer)|e4steam|^skins?$|^player(?:data|profiles?|skins?)$|^steam$|^logs?$|^cache$|^user(?:s|cache|name)?$",
     re.IGNORECASE,
 )
 _SECRET = re.compile(
@@ -201,6 +201,24 @@ def _walk(folder, sections, worlds, *, catalog_folders=None, configs=False):
             yield path, parts, st
 
 
+def _reference_only_mod(path, parts, profile):
+    if parts[0] != "mods" or "quickskin" not in modfiles.mod_info(path, modfiles.file_stamp(path))[0]:
+        return False
+    # Quick Skin allows resolving an official dependency, but not shipping its
+    # JAR in ZIPs. The launcher restores this exact supported release at startup.
+    # Other releases or disabled mods must never be silently replaced/enabled.
+    from . import game_wardrobe
+    if (game_wardrobe.provider(profile["version"], profile["loader"]) == "quickskin"
+            and path.suffix.lower() == ".jar"
+            and game_wardrobe._matches(path, game_wardrobe._QUICKSKIN)):
+        return True
+    raise ValueError(
+        "Quick Skin нельзя включать в ZIP: мод разрешено получать только из официального источника. "
+        "Эту версию или отключённый файл BlockHarbor не сможет точно восстановить при запуске. "
+        "Удали Quick Skin из отдельной копии сборки перед выгрузкой; исходный файл сохранён."
+    )
+
+
 def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes=MAX_ZIP, include_configs=False):
     lifecycle.check()
     profile = store.profile(pid)
@@ -257,6 +275,8 @@ def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes
                 raise ValueError(
                     "В сборке есть пути, отличающиеся только регистром или написанием Unicode."
                 )
+            if _reference_only_mod(path, parts, profile):
+                continue
             if catalog and file.tell() + st.st_size > max_bytes:
                 raise ValueError("Публичная сборка превышает лимит каталога по размеру.")
             if (

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from . import build_errors, skins
+from . import build_errors, game_wardrobe, skins
 from .diagnostics import redact
 from .modfiles import file_stamp
 from .store import clean_filename, input_profile
@@ -32,8 +32,9 @@ class Experience:
     ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceNotify", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots", "experienceClearBuildErrors"}
     JOBS = set()
 
-    def __init__(self, store):
+    def __init__(self, store, *, running=None):
         self.store = store
+        self._running = running or (lambda _pid: False)
         self.media_root = store.root / "media-cache"
         if self.media_root.resolve() != store.root.resolve() / "media-cache":
             raise ValueError("Папка изображений перенаправлена за пределы данных лаунчера.")
@@ -72,6 +73,54 @@ class Experience:
             wardrobe = [dict(row) for row in db.execute("SELECT * FROM wardrobe ORDER BY created DESC LIMIT 80")]
         return {"details": self.metadata(), "preferences": self.preferences(), "wardrobe": wardrobe,
                 "notificationUnread": self.notification_unread()}
+
+    def _wardrobe_entries(self):
+        with self.store.connection() as db:
+            entries = [dict(row) for row in db.execute("SELECT * FROM wardrobe ORDER BY created DESC LIMIT 80")]
+        digest = self.store.get("skinDigest")
+        current = {"digest": digest, "model": self.store.get("model", "classic")} if re.fullmatch(r"[a-f0-9]{64}", digest) else None
+        return entries, current
+
+    def prepare_game_wardrobe(self, pid, *, status=lambda _: None, player_name=None, player_id=None):
+        """Launch hook only: prepare the selector and publish all saved choices."""
+        profile = self.store.profile(pid)
+        try:
+            entries, current = self._wardrobe_entries()
+            return game_wardrobe.sync(self.store.root, self.store.folder(pid), profile["version"], profile["loader"],
+                                      entries, current=current, install=True, status=status,
+                                      player_name=player_name, player_id=player_id)
+        except (OSError, ValueError) as error:
+            message = "Гардероб в игре не подготовлен: " + str(error)
+            self.notify(message, "error", event_key="wardrobe-prepare:" + pid + ":" + hashlib.sha256(message.encode()).hexdigest()[:16])
+            return {"supported": bool(game_wardrobe.provider(profile["version"], profile["loader"])),
+                    "ready": False, "warning": message}
+
+    def sync_game_wardrobes(self):
+        """Event hook: publish PNG choices to existing selectors, never install mods."""
+        entries, current = self._wardrobe_entries()
+        results = []
+        for profile in self.store.all():
+            if not game_wardrobe.provider(profile["version"], profile["loader"]):
+                continue
+            try:
+                result = game_wardrobe.sync(self.store.root, self.store.folder(profile["id"]), profile["version"], profile["loader"],
+                                            entries, current=current, running=self._running(profile["id"]))
+                results.append({"id": profile["id"], **result})
+            except (OSError, ValueError) as error:
+                message = "Гардероб сохранён, но не обновлён в сборке «" + profile["name"] + "»: " + str(error)
+                self.notify(message, "error", event_key="wardrobe-sync:" + profile["id"] + ":" + hashlib.sha256(message.encode()).hexdigest()[:16])
+                results.append({"id": profile["id"], "ready": False, "warning": message})
+        return results
+
+    def game_wardrobe_state(self, pid=None):
+        profiles = self.store.all()
+        pid = pid or self.store.get("active")
+        profile = next((row for row in profiles if row["id"] == pid), profiles[0] if profiles else None)
+        if profile is None:
+            return {"supported": False, "ready": False, "hint": "Выбери сборку, чтобы пользоваться гардеробом в игре."}
+        result = game_wardrobe.describe(self.store.folder(profile["id"]), profile["version"], profile["loader"])
+        result.update(id=profile["id"], name=profile["name"], running=self._running(profile["id"]))
+        return result
 
     def notification_unread(self):
         with self.store.connection() as db:
@@ -585,7 +634,8 @@ class Experience:
                 raise ValueError("В гардеробе уже 80 скинов. Удали ненужные и повтори.")
             db.execute("INSERT INTO wardrobe VALUES(?,?,?,?,?)", (sid, name.strip(), digest, model, time.time()))
         self.store.set("wardrobePreview:" + sid, image)
-        return {"ok": True}
+        self.sync_game_wardrobes()
+        return {"ok": True, "message": "Скин добавлен в гардероб."}
 
     def shortcut(self, pid):
         profile = self.store.profile(pid)
@@ -611,6 +661,9 @@ class Experience:
             data = self.state(p.get("id"))
             for skin in data["wardrobe"]:
                 skin["preview"] = self.store.get("wardrobePreview:" + skin["id"])
+            # The main state polling path never scans mods or copies textures.
+            # This is read only and requested when the wardrobe is opened.
+            data["gameWardrobe"] = self.game_wardrobe_state(p.get("id"))
             return data
         if action == "experienceGallery":
             return self.gallery(p["id"])
@@ -666,7 +719,14 @@ class Experience:
                     db.executemany("REPLACE INTO settings VALUES (?,?)", [("skinDigest", skin["digest"]), ("model", skin["model"])])
             if action == "experienceUseSkin" and hasattr(self.store, "remember"):
                 self.store.remember({"skinDigest": skin["digest"], "model": skin["model"]})
-            return {"ok": True}
+            self.sync_game_wardrobes()
+            wardrobe = self.game_wardrobe_state()
+            message = "Скин удалён из гардероба."
+            if action == "experienceUseSkin":
+                message = "Скин выбран для следующего запуска."
+                if wardrobe.get("ready") and wardrobe.get("running"):
+                    message = "Скин добавлен в гардероб игры. " + wardrobe["hint"] + " Выбор в игровом меню применяется сразу."
+            return {"ok": True, "message": message, "gameWardrobe": wardrobe}
         if action == "experienceShortcut":
             return self.shortcut(p["id"])
         raise ValueError("Неизвестное действие оформления.")

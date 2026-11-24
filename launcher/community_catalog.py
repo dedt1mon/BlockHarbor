@@ -50,6 +50,20 @@ def _build_id(value):
     return value.upper()
 
 
+def _build_reference(value, origin):
+    """Resolve our public ID or archive link without following supplied URLs."""
+    if ID.fullmatch(value.upper()):
+        return value.upper()
+    if not re.match(r"https?://", value, re.I):
+        return None
+    parsed, expected = urlsplit(value), urlsplit(origin)
+    match = re.fullmatch(r"/v1/builds/(BH-[A-F0-9]{12})(?:/archive)?", parsed.path, re.I)
+    if (parsed.scheme != "https" or parsed.netloc.lower() != expected.netloc.lower()
+            or parsed.query or parsed.fragment or not match):
+        raise ValueError("Вставь ID сборки или ссылку из BlockHarbor. Ссылки на другие сайты здесь не открываются.")
+    return _build_id(match[1])
+
+
 def _listing(value):
     if not isinstance(value, dict):
         raise ValueError("Каталог вернул некорректное описание сборки.")
@@ -405,11 +419,12 @@ class CommunityCatalog:
             raise ValueError("Неизвестный загрузчик сборки.")
         filters = {"q": query.strip(), "offset": offset, "category": _category(params.get("category", ""), True),
                    "version": version, "loader": loader}
-        exact = ID.fullmatch(filters["q"].upper()) is not None
+        reference = _build_reference(filters["q"], self.api.origin)
+        exact = reference is not None
         if exact:
             # A copied invite code names one immutable publication, regardless
             # of the filters or page left over from browsing another modpack.
-            filters.update(offset=0, category="", version="", loader="")
+            filters.update(q=reference, offset=0, category="", version="", loader="")
             offset = 0
         try:
             if exact:
@@ -639,6 +654,7 @@ class CommunityCatalog:
                 retired.append(item["id"])
                 continue
             item["build"] = item["id"]
+            item["shareUrl"] = self.api.origin + "/v1/builds/" + _build_id(item["id"]) + "/archive"
             items.append(item)
         if retired:
             with self.store.connection() as db:

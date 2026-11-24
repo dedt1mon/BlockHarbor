@@ -3,15 +3,21 @@ from __future__ import annotations
 
 import argparse
 import copy
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
+import threading
+import traceback
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 import zipfile
 
-from smoke_ui_browser import FixtureAPI, ORIGIN, TOKEN, geometry, settle
+from smoke_ui_browser import FixtureAPI, TOKEN, geometry, settle
 
 
 class RefinementAPI(FixtureAPI):
@@ -30,6 +36,7 @@ class RefinementAPI(FixtureAPI):
         self.trash_counter = 0
         self.exports = []
         self.downloads = {}
+        self.download_receipts = []
         self.pending_job = None
         self.publications = {"profile-b": [
             {"build": "BH-0123456789AB", "name": "Вторая сборка", "expiresAt": 9999999999}]}
@@ -144,11 +151,17 @@ class RefinementAPI(FixtureAPI):
             return super().route(route)
         self.requests.append({"path": url.path, "query": query})
         try:
-            assert url.netloc == "blockharbor.test", "Unexpected external request: " + request.url
+            assert url.netloc == urlsplit(self.origin).netloc, "Unexpected external request: " + request.url
+            response_headers = {}
             if download:
-                # Browser attachment navigation uses the issued ticket, not fetch's auth header.
-                name, archive = self.downloads[url.path]
+                # Browser attachment navigation uses the issued ticket and cookie,
+                # while API fetches carry the Authorization header.
+                name, archive, expected_cookie = self.downloads[url.path]
                 assert request.method == "GET"
+                cookie = SimpleCookie(request.headers.get("cookie", "")).get("bh_export")
+                assert cookie and cookie.value == expected_cookie, "Download lost its export cookie"
+                self.download_receipts.append({"path": url.path, "name": name,
+                                               "bytes": len(archive), "cookieValidated": True})
                 route.fulfill(body=archive, content_type="application/zip",
                               headers={"Content-Disposition": 'attachment; filename="' + name + '"'})
                 return
@@ -174,12 +187,72 @@ class RefinementAPI(FixtureAPI):
                 contents = io.BytesIO()
                 with zipfile.ZipFile(contents, "w") as archive:
                     archive.writestr("fixture.json", json.dumps(payload))
-                self.downloads[ticket] = (name, contents.getvalue())
+                cookie = "fixture-export-" + str(len(self.exports))
+                self.downloads[ticket] = (name, contents.getvalue(), cookie)
+                response_headers["Set-Cookie"] = "bh_export=" + cookie + "; Path=" + ticket + "; Max-Age=300; HttpOnly; SameSite=Strict"
                 result = {"download": ticket, "name": name}
-            route.fulfill(json=result)
+            route.fulfill(json=result, headers=response_headers)
         except Exception as error:
             self.errors.append(str(error))
             route.fulfill(status=500, json={"error": str(error)})
+
+
+class LoopbackFixture:
+    """Serve the fixture through HTTP, including genuine attachment responses.
+
+    Avoid route.fulfill's attachment interception: the production app also
+    serves its downloads from a loopback HTTP server.
+    """
+    def __init__(self, api):
+        encode_json = json.dumps
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def handle_fixture(self):
+                if self.headers.get("Host") != urlsplit(api.origin).netloc:
+                    self.send_error(403)
+                    return
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                request = SimpleNamespace(url=api.origin + self.path, method=self.command,
+                                          headers={key.lower(): value for key, value in self.headers.items()},
+                                          post_data_json=json.loads(body) if body else None)
+                handler = self
+
+                class Response:
+                    def fulfill(self, *, status=200, body=b"", json=None, content_type=None, headers=None):
+                        if json is not None:
+                            body = encode_json(json, ensure_ascii=False).encode("utf-8")
+                            content_type = "application/json; charset=utf-8"
+                        elif isinstance(body, str):
+                            body = body.encode("utf-8")
+                        handler.send_response(status)
+                        handler.send_header("Content-Type", content_type or "application/octet-stream")
+                        handler.send_header("Content-Length", str(len(body)))
+                        for key, value in (headers or {}).items():
+                            handler.send_header(key, value)
+                        handler.end_headers()
+                        handler.wfile.write(body)
+
+                response = Response()
+                response.request = request
+                api.route(response)
+
+            do_GET = handle_fixture
+            do_POST = handle_fixture
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.origin = "http://127.0.0.1:" + str(self.server.server_port)
+        api.origin = self.origin
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.05}, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
 
 
 def check_layout(page, *, dialog=False):
@@ -313,12 +386,21 @@ def check_screens(page, api, output, width, height, case):
 
     case["stage"] = "build-actions"
     navigate(page, "builds", '[data-export-build="profile-a"]')
+    case["download"] = {"expectedFilename": "blockharbor-profile-a.zip", "status": "waiting-for-browser"}
+    print(f"DOWNLOAD: {width}x{height}: requesting ZIP export without worlds", flush=True)
     with page.expect_download() as download_event:
         page.locator('[data-export-build="profile-a"]').click()
     download = download_event.value
-    assert download.failure() is None and download.suggested_filename == "blockharbor-profile-a.zip"
+    case["download"].update(url=download.url, suggestedFilename=download.suggested_filename, status="started")
+    case["download"]["failure"] = download.failure()
+    case["download"]["status"] = "failed" if case["download"]["failure"] else "completed"
+    print("DOWNLOAD: " + json.dumps(case["download"], ensure_ascii=False), flush=True)
+    assert case["download"]["failure"] is None, "Browser download failed: " + repr(case["download"])
+    assert download.suggested_filename == "blockharbor-profile-a.zip", "Wrong attachment name: " + repr(case["download"])
     with zipfile.ZipFile(download.path()) as archive:
-        assert json.loads(archive.read("fixture.json")) == {"id": "profile-a", "worlds": False}
+        case["download"]["zipEntries"] = archive.namelist()
+        case["download"]["exportPayload"] = json.loads(archive.read("fixture.json"))
+        assert case["download"]["exportPayload"] == {"id": "profile-a", "worlds": False}, case["download"]
     settle(page)
     assert api.exports == [{"id": "profile-a", "worlds": False}]
     no_confirmation(page)
@@ -448,29 +530,46 @@ def main():
                 context = browser.new_context(viewport={"width": width, "height": height},
                                               reduced_motion="reduce", accept_downloads=True)
                 page = context.new_page()
+                server = LoopbackFixture(api)
+                case["origin"] = server.origin
                 errors = []
+                case["requestFailures"] = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
+                page.on("requestfailed", lambda request: case["requestFailures"].append(
+                    {"url": request.url, "method": request.method, "failure": request.failure}))
                 page.add_init_script("""window.__pendingRequests = 0;
                   const originalFetch = window.fetch;
                   window.fetch = async (...args) => { window.__pendingRequests++;
                     try { return await originalFetch(...args); } finally { window.__pendingRequests--; } };""")
-                page.route("**/*", api.route)
+                def block_external(route):
+                    api.errors.append("Unexpected external request: " + route.request.url)
+                    route.abort()
+                # The page's HTTP requests, especially downloads, reach the real
+                # fixture server. Intercept only traffic outside this origin.
+                page.route(re.compile(r"^(?!" + re.escape(server.origin + "/") + r")"), block_external)
                 try:
-                    page.goto(ORIGIN + "/#" + TOKEN)
+                    page.goto(server.origin + "/#" + TOKEN)
                     page.wait_for_function("typeof state !== 'undefined' && state && window.ExperienceUI")
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
                     print(f"PASS: 2.6.11 UX at {width}x{height}", flush=True)
                 except Exception as error:
-                    case["error"] = str(error)
-                    page.screenshot(path=str(args.output / f"{width}-failure.png"))
-                    (args.output / f"{width}-failure.html").write_text(page.content(), encoding="utf-8")
+                    case["error"] = type(error).__name__ + ": " + str(error)
+                    case["traceback"] = traceback.format_exc()
+                    try:
+                        page.screenshot(path=str(args.output / f"{width}-failure.png"))
+                        (args.output / f"{width}-failure.html").write_text(page.content(), encoding="utf-8")
+                    except Exception as capture_error:
+                        case["captureError"] = repr(capture_error)
                     print(f"FAIL: {width}x{height}, {case['stage']}: {error}", flush=True)
+                    print(case["traceback"], flush=True)
                 finally:
                     case["pageErrors"], case["apiErrors"] = errors, api.errors
                     case["actions"], case["exports"] = api.actions, api.exports
+                    case["requests"], case["downloadReceipts"] = api.requests, api.download_receipts
                     context.close()
+                    server.close()
         finally:
             browser.close()
             (args.output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -29,7 +29,8 @@ SETTINGS_CASES = {(1920, 1080, 1), (1280, 720, 2)}
 
 
 class FixtureAPI:
-    def __init__(self):
+    def __init__(self, origin=ORIGIN):
+        self.origin = origin
         self.errors = []
         self.actions = []
         self.requests = []
@@ -125,7 +126,7 @@ class FixtureAPI:
         self.requests.append({"path": path, "query": query})
         first = lambda key, default="": query.get(key, [default])[0]
         try:
-            if url.netloc != "blockharbor.test":
+            if url.netloc != urlsplit(self.origin).netloc:
                 raise AssertionError("Unexpected external request: " + request.url)
             if path.startswith("/api/media/"):
                 route.fulfill(body=(UI / "icon.png").read_bytes(), content_type="image/png")

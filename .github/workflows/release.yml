@@ -47,7 +47,7 @@ jobs:
           node --test community-registry/worker.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py
-      - name: Check changed screens and dialog actions
+      - name: Check changed screens, content-sized dialogs and header actions
         run: python tools/smoke_ui_refinements.py --output artifacts/ui-refinements
       - name: Save focused UI preview
         if: always()

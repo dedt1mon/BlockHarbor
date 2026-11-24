@@ -986,7 +986,9 @@ dialog {
 #dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
 #dialog > .dialog-top { flex: none; }
 #dialog.dialog-large { width: min(1120px, calc(100vw - 24px)); }
-#dialog.dialog-content-sized { height: auto; min-height: 0; }
+/* A modal has opposing block insets in the browser stylesheet. `auto` stretches
+   between them; fit-content keeps the panel sized to its actual contents. */
+#dialog.dialog-content-sized { height: fit-content; min-height: 0; }
 .dialog-top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
 .dialog-top h2 { margin: 0; }
 .dialog-header-actions {

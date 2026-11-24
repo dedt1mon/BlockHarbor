@@ -201,8 +201,8 @@ def geometry(page, dialog=False):
 
 
 def controls_fixture(page, css):
-    page.set_content('<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>')
     page.bring_to_front()
+    page.set_content('<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>')
     page.wait_for_function("document.body.dataset.layoutResult")
     assert page.locator("body").get_attribute("data-layout-result") == "PASS", page.locator("body").get_attribute("data-layout-errors")
 

@@ -1,13 +1,13 @@
 """Render representative production UI controls in a real Chromium browser.
 
 The fixture loads every production stylesheet in the index's cascade order.
-No server, account, mod download, or browser library is required.
+Requires Playwright and an installed Chromium, as does the production UI matrix.
+No server, account or mod download is required.
 """
+import json
 from pathlib import Path
 import re
 import shutil
-import subprocess
-import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 UI = ROOT / "ui"
@@ -42,8 +42,7 @@ FIXTURE = r"""
 </main>
 <script>
 window.addEventListener("load", async () => {
-// The geometry reads below flush layout. A headless DOM dump need not paint
-// a frame before its virtual-time budget expires, so do not gate on rAF.
+// Geometry reads flush layout; these assertions do not require a painted frame.
 const errors = [];
 const check = (value, message) => { if (!value) errors.push(message); };
 const q = s => document.querySelector(s);
@@ -60,7 +59,9 @@ for (const selector of fields) {
 check(equal(rect("#primary").height, 44), "primary button height");
 check(equal(rect(".catalog-mark").height, rect(".catalog-mark").width), "catalog + button is square");
 const before=rect("#name"); q("#name").focus({preventScroll:true});
-await new Promise(resolve => setTimeout(resolve, 200));
+// Reduced motion still gives CSS transitions a 0.01ms duration. getAnimations
+// flushes the focus style change; wait for its actual completion, not a timer.
+await Promise.all(q("#name").getAnimations().map(animation => animation.finished));
 check(css("#name","outlineStyle")==="none", "duplicate outer input outline");
 check(q("#name").matches(":focus"), "input focus selector inactive: documentFocus="+document.hasFocus());
 check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable: focused="+document.activeElement?.id+", input="+css("#name","borderTopColor")+", idle="+css("#loader","borderTopColor")+", hover="+q("#name").matches(":hover")+", focus="+q("#name").matches(":focus")+", documentFocus="+document.hasFocus()+", shadow="+css("#name","boxShadow"));
@@ -84,36 +85,55 @@ document.body.dataset.layoutErrors=errors.join("; ");
 
 
 def main():
-    browser = next((p for name in ("google-chrome", "chromium", "chromium-browser") if (p := shutil.which(name))), None)
-    if not browser:
+    from playwright.sync_api import sync_playwright
+
+    browser_path = next((p for name in ("google-chrome", "chromium", "chromium-browser") if (p := shutil.which(name))), None)
+    if not browser_path:
         raise RuntimeError("Chromium is required for the layout smoke test")
     index = (UI / "index.html").read_text(encoding="utf-8")
     names = re.findall(r'<link rel="stylesheet" href="/([^"]+)"', index)
     assert len(names) >= 5
     css = "\n".join((UI / name).read_text(encoding="utf-8") for name in names)
     html = '<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>'
-    with tempfile.TemporaryDirectory(prefix="bh-layout-") as tmp:
-        root = Path(tmp)
-        page = root / "layout.html"
-        page.write_text(html, encoding="utf-8")
-        for width, height in ((1440, 900), (900, 700), (520, 760)):
-            result = subprocess.run(
-                [browser, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
-                 "--disable-gpu", "--disable-background-networking", "--no-first-run",
-                 "--force-device-scale-factor=1", "--user-data-dir=" + str(root / str(width)),
-                 f"--window-size={width},{height}", "--virtual-time-budget=1500", "--dump-dom", page.as_uri()],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=45, check=True,
-            )
-            if 'data-layout-result="PASS"' not in result.stdout:
-                evidence = ROOT / "artifacts" / "ui-audit"
-                evidence.mkdir(parents=True, exist_ok=True)
-                stem = f"controls-layout-{width}x{height}"
-                (evidence / (stem + ".html")).write_text(result.stdout, encoding="utf-8")
-                (evidence / (stem + "-stderr.txt")).write_text(result.stderr, encoding="utf-8")
-                errors = re.search(r'data-layout-errors="([^"]*)"', result.stdout)
-                raise AssertionError(f"Layout {width}x{height}: " + (errors[1] if errors else "no browser result"))
-            print(f"PASS: Chromium layout {width}x{height}, controls, focus, selection, responsive widths")
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch(executable_path=browser_path, headless=True,
+                                        args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            for width, height in ((1440, 900), (900, 700), (520, 760)):
+                context = browser.new_context(viewport={"width": width, "height": height},
+                                              device_scale_factor=1, color_scheme="dark", reduced_motion="reduce")
+                page = context.new_page()
+                errors = []
+                observed = None
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                try:
+                    page.bring_to_front()
+                    page.set_content(html, wait_until="load", timeout=30000)
+                    observed = page.evaluate("[innerWidth, innerHeight, devicePixelRatio]")
+                    assert observed == [width, height, 1], f"Unexpected layout viewport: {observed}"
+                    # Await the assertion result under the browser's real clock;
+                    # a virtual-time DOM dump can finish before focus styles settle.
+                    page.wait_for_function("['PASS', 'FAIL'].includes(document.body.dataset.layoutResult)",
+                                           polling=50, timeout=10000)
+                    assert not errors, "Browser script errors: " + "; ".join(errors)
+                    body = page.locator("body")
+                    assert body.get_attribute("data-layout-result") == "PASS", f"Layout {width}x{height}: " + (body.get_attribute("data-layout-errors") or "no browser result")
+                    print(f"PASS: Chromium layout {width}x{height}, controls, focus, selection, responsive widths")
+                except Exception as error:
+                    evidence = ROOT / "artifacts" / "ui-audit"
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    stem = f"controls-layout-{width}x{height}"
+                    try:
+                        (evidence / (stem + "-diagnostics.json")).write_text(json.dumps({"error": str(error), "javascript": errors, "viewport": observed}, ensure_ascii=False, indent=2), encoding="utf-8")
+                        (evidence / (stem + ".html")).write_text(page.content(), encoding="utf-8")
+                        page.screenshot(path=str(evidence / (stem + ".png")))
+                    except Exception as capture_error:
+                        print(f"Could not save layout diagnostics: {capture_error}")
+                    raise
+                finally:
+                    context.close()
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":

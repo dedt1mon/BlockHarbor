@@ -1,0 +1,100 @@
+{
+  "tests": 672,
+  "passed": 671,
+  "failedCases": 0,
+  "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
+  "failed": 0,
+  "errors": 0,
+  "skipped": 1,
+  "expectedFailures": 0,
+  "unexpectedSuccesses": 0,
+  "failures": [],
+  "skips": [
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_native_windows_short_path_cannot_hang_destination_validation",
+      "reason": "Requires actual Windows short-path aliases"
+    }
+  ],
+  "slowest": [
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_but_game_survives",
+      "seconds": 2.0364
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_and_owned_preparation_process",
+      "seconds": 1.8414
+    },
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_real_http_disconnect_resumes_with_range_and_validator",
+      "seconds": 1.5093
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_download_resumes_after_interruption_before_import",
+      "seconds": 1.0918
+    },
+    {
+      "test": "test_lifecycle.AppLifecycleTests.test_manual_x_wins_over_acknowledged_update_handoff_timer",
+      "seconds": 0.8124
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_failed_pack_download_does_not_create_build_or_receipt",
+      "seconds": 0.6422
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_loader_endpoint_is_authenticated_validated_and_reads_local_cache",
+      "seconds": 0.5809
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_closing_launcher_cancels_loader_refresh_without_late_cache_publication",
+      "seconds": 0.576
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_compatibility_http_preflight_is_read_only_and_uses_actual_build_pair",
+      "seconds": 0.5756
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_auto_world_backup_is_deferred_outside_state_poll",
+      "seconds": 0.5755
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_refresh_exposes_and_persists_full_catalog_with_release_only_legacy_field",
+      "seconds": 0.5706
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_real_job_stage_and_final_error_are_delivered_alongside_update_progress",
+      "seconds": 0.5688
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_all_feature_reads_and_static_modules_are_accessible",
+      "seconds": 0.5651
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_mutations_are_blocked_during_game_but_cancel_controls_work",
+      "seconds": 0.5636
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_deferred_world_backup_waits_if_a_game_has_relaunched",
+      "seconds": 0.5591
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_endpoint_keeps_all_categories_available_when_refresh_is_offline",
+      "seconds": 0.5568
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_unsupported_create_preserves_existing_profiles_and_stops_before_steam",
+      "seconds": 0.5536
+    },
+    {
+      "test": "test_content_icons.ContentIconsTests.test_endpoint_serves_only_cached_png_with_local_origin_and_rejects_escape",
+      "seconds": 0.5533
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_progress_snapshot_is_private_and_excludes_unrelated_transfer_history",
+      "seconds": 0.553
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_mrpack_export_download_cookie_and_import_preview_roundtrip",
+      "seconds": 0.5514
+    }
+  ]
+}

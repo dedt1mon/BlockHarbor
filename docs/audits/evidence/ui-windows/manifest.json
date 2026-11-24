@@ -1,0 +1,61 @@
+{
+  "sourceHead": "6a0a1a97a1f7a07fe7023814f23ec01d8e7758f0",
+  "workflowRun": 45430303954,
+  "workflowUrl": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45430303954",
+  "job": 138573446257,
+  "artifact": 14937613416,
+  "artifactName": "audit-windows-validation",
+  "artifactSha256": "69a5edc04e78d2442d591e4f19ecfae0d4c491f880cefab5ff4cfc59505db566",
+  "platform": "win32",
+  "browser": "157.0.8103.79",
+  "imagesUnmodified": true,
+  "coverage": "Production UI running in headless Chrome on Windows with deterministic API fixtures. CSS viewport/deviceScaleFactor emulation; no native system DPI change, WebView2 window measurement or real Minecraft installation. All 24 cases include an assertion that a complete first batch row and its status fit within the effective scroll viewport.",
+  "additionalVisuallyReviewedOriginals": [
+    "1280x720-200pct-batch.png",
+    "1280x720-200pct-batch-busy.png",
+    "1366x768-100pct-batch-result.png"
+  ],
+  "files": [
+    {
+      "file": "catalog-small.png",
+      "originalFilename": "1280x720-200pct-catalog.png",
+      "sourceCase": "1280x720-200pct",
+      "display": [
+        1280,
+        720
+      ],
+      "scale": 2,
+      "cssViewport": [
+        640,
+        360
+      ],
+      "sha256": "726cf9a550c25cfb26f553257d65e9f2451306d2f8205c31f5065580dd17bf6e",
+      "bytes": 74139,
+      "note": "Small CSS viewport with readable build context, bounded descriptions, focused search and a complete first result card; additional results use internal scrolling."
+    },
+    {
+      "file": "builds-wide.png",
+      "originalFilename": "3440x1440-100pct-builds.png",
+      "sourceCase": "3440x1440-100pct",
+      "display": [
+        3440,
+        1440
+      ],
+      "scale": 1,
+      "cssViewport": [
+        3440,
+        1440
+      ],
+      "sha256": "7bd5e9830e50a0470624c308e5d5461a3d45e41e5658bc6cfcb8fcc1c04ff75f",
+      "bytes": 75588,
+      "note": "Fluid build list in an ultrawide viewport; long names and row actions remain within the available width."
+    },
+    {
+      "file": "report.json",
+      "originalFilename": "report.json",
+      "sourceCase": "all 24 display/scale combinations",
+      "sha256": "484bedb78fbeed7410d80b7e1f13868d7f0120af187cfbbcfe62fcfa7d017c26",
+      "bytes": 5465
+    }
+  ]
+}

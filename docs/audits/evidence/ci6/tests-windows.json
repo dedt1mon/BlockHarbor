@@ -1,0 +1,100 @@
+{
+  "tests": 669,
+  "passed": 668,
+  "failedCases": 0,
+  "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
+  "failed": 0,
+  "errors": 0,
+  "skipped": 1,
+  "expectedFailures": 0,
+  "unexpectedSuccesses": 0,
+  "failures": [],
+  "skips": [
+    {
+      "test": "test_build_archive.BuildArchiveTests.test_privacy_links_in_instance_are_not_exported",
+      "reason": "symlink creation can require developer mode"
+    }
+  ],
+  "slowest": [
+    {
+      "test": "test_notifications.NotificationTests.test_history_remains_bounded_and_ids_remain_increasing",
+      "seconds": 5.0688
+    },
+    {
+      "test": "test_content_icons.ContentIconsTests.test_corrupt_deflate_artwork_does_not_break_the_state",
+      "seconds": 4.1622
+    },
+    {
+      "test": "test_game.GameTests.test_browser_login_checks_state_and_returns_only_java_credentials",
+      "seconds": 4.0637
+    },
+    {
+      "test": "test_content_icons.ContentIconsTests.test_modrinth_fallback_is_cached_at_install_and_its_failure_is_optional",
+      "seconds": 2.8895
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_and_owned_preparation_process",
+      "seconds": 2.3408
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_but_game_survives",
+      "seconds": 2.3104
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_fallback_only_after_transport_failure_and_matching_manifest",
+      "seconds": 1.8472
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_mirror_archive_fallback_verifies_same_primary_digest",
+      "seconds": 1.588
+    },
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_real_http_disconnect_resumes_with_range_and_validator",
+      "seconds": 1.5639
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_download_resumes_after_interruption_before_import",
+      "seconds": 1.5452
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_cold_bootstrap_result_is_consumed_from_environment_per_app",
+      "seconds": 1.4768
+    },
+    {
+      "test": "test_content_icons.ContentIconsTests.test_endpoint_serves_only_cached_png_with_local_origin_and_rejects_escape",
+      "seconds": 1.2839
+    },
+    {
+      "test": "test_session_record_races.SessionRecordRaceTests.test_real_concurrent_polling_and_replacement_keep_records_valid",
+      "seconds": 1.2392
+    },
+    {
+      "test": "test_lifecycle.AppLifecycleTests.test_manual_x_wins_over_acknowledged_update_handoff_timer",
+      "seconds": 1.2057
+    },
+    {
+      "test": "test_build_errors.BuildErrorsTest.test_profile_isolation_grouping_redaction_retention_and_reopen",
+      "seconds": 1.1952
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_unsupported_create_and_play_keep_selected_version_and_user_files",
+      "seconds": 1.1873
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_compatibility_http_preflight_is_read_only_and_uses_actual_build_pair",
+      "seconds": 1.1052
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_unfinished_purge_never_restores_an_incomplete_world",
+      "seconds": 1.0746
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_purge_only_archived_instance_and_idempotent_retry",
+      "seconds": 1.0681
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_closing_launcher_cancels_loader_refresh_without_late_cache_publication",
+      "seconds": 1.0591
+    }
+  ]
+}

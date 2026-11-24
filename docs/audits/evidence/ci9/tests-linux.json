@@ -1,0 +1,100 @@
+{
+  "tests": 672,
+  "passed": 671,
+  "failedCases": 0,
+  "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
+  "failed": 0,
+  "errors": 0,
+  "skipped": 1,
+  "expectedFailures": 0,
+  "unexpectedSuccesses": 0,
+  "failures": [],
+  "skips": [
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_native_windows_short_path_cannot_hang_destination_validation",
+      "reason": "Requires actual Windows short-path aliases"
+    }
+  ],
+  "slowest": [
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_but_game_survives",
+      "seconds": 1.7681
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_and_owned_preparation_process",
+      "seconds": 1.767
+    },
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_real_http_disconnect_resumes_with_range_and_validator",
+      "seconds": 1.5078
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_download_resumes_after_interruption_before_import",
+      "seconds": 1.0279
+    },
+    {
+      "test": "test_lifecycle.AppLifecycleTests.test_manual_x_wins_over_acknowledged_update_handoff_timer",
+      "seconds": 0.7834
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_real_job_stage_and_final_error_are_delivered_alongside_update_progress",
+      "seconds": 0.5536
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_all_feature_reads_and_static_modules_are_accessible",
+      "seconds": 0.545
+    },
+    {
+      "test": "test_modrinth.ModrinthTests.test_job_returns_review_request_and_resets_on_next_new_job",
+      "seconds": 0.5447
+    },
+    {
+      "test": "test_preparation_deadline.PreparationDeadlineTests.test_both_transports_bound_an_actual_slow_trickle",
+      "seconds": 0.5439
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_compatibility_http_preflight_is_read_only_and_uses_actual_build_pair",
+      "seconds": 0.5406
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_mrpack_export_download_cookie_and_import_preview_roundtrip",
+      "seconds": 0.5326
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_mutations_are_blocked_during_game_but_cancel_controls_work",
+      "seconds": 0.5314
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_updater_read_never_holds_jobs_lock_or_recurses_from_install_guard",
+      "seconds": 0.5303
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_endpoint_keeps_all_categories_available_when_refresh_is_offline",
+      "seconds": 0.5301
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_get_cannot_mutate_and_cross_origin_is_blocked",
+      "seconds": 0.5287
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_progress_snapshot_is_private_and_excludes_unrelated_transfer_history",
+      "seconds": 0.528
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_loader_endpoint_is_authenticated_validated_and_reads_local_cache",
+      "seconds": 0.5277
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_picker_can_read_all_categories_without_waiting_for_network",
+      "seconds": 0.5276
+    },
+    {
+      "test": "test_feature_api.FeatureApiTests.test_old_exit_code_is_not_attached_to_another_build",
+      "seconds": 0.5273
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_refresh_exposes_and_persists_full_catalog_with_release_only_legacy_field",
+      "seconds": 0.5273
+    }
+  ]
+}

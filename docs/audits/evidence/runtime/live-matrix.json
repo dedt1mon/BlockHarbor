@@ -1,0 +1,1718 @@
+{
+  "format": 1,
+  "updatedAt": "2026-11-24T15:37:45.765605+00:00",
+  "scope": "Real public artifact installation and bounded launches; no Microsoft credentials; no gameplay claim",
+  "environment": {
+    "os": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "python": "3.12.14",
+    "display": "isolated Xorg dummy over loopback TCP in the same process namespace",
+    "graphics": "software; 26.3 GLX/Vulkan backend unavailable",
+    "java": "managed Java 17/21/25 selected from Mojang manifests",
+    "installerNetwork": "For later Forge/NeoForge experiments, explicit existing credential-free proxy and existing OS Java truststore only in the test environment; TLS validation retained",
+    "audio": "No physical audio device; not verified",
+    "windows": "Native regression CI separately recorded; these game launches are Linux"
+  },
+  "interpretation": {
+    "running-observed": "Process remained alive for observation; not itself graphics or gameplay proof",
+    "black-frame-unverified": "Captured pixels were black; successful UI not demonstrated",
+    "retainedCapture": "Relative path in this evidence folder; visually reviewed",
+    "gameplayVerified": false,
+    "earlierAttempts": "Failures are preserved; success in a later attempt does not erase them"
+  },
+  "interruptedAssetPreparation": {
+    "date": "2026-11-24",
+    "minecraft": "1.20.1",
+    "loader": "vanilla",
+    "firstAttempt": "Actually interrupted with exit code 130",
+    "initialObservation": {
+      "objects": 625,
+      "secondsIncludingEarlierPreparation": 487.41
+    },
+    "resumeObservation": {
+      "remainingObjects": 2952,
+      "receivedBytes": 530494545,
+      "seconds": 51.2
+    },
+    "interpretation": "Different phases and cache contents; not a controlled universal speed comparison. Correct files survived and were reused."
+  },
+  "attempts": [
+    {
+      "loader": "fabric",
+      "minecraft": "1.18.2",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 23.17,
+          "gameplayVerified": false,
+          "launchIndex": 1
+        },
+        {
+          "state": "running-observed",
+          "seconds": 23.2,
+          "gameplayVerified": false,
+          "launchIndex": 2
+        }
+      ],
+      "deletion": "passed",
+      "id": "fabric-loader-0.20.1-1.18.2",
+      "platform": {
+        "loader_version": "0.20.1",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.178,
+      "seconds": 86.64,
+      "attempt": "fabric-1.18.2",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[17:29:11] [main/INFO]: Loading Minecraft 1.18.2 with Fabric Loader 0.20.1",
+        "[17:29:11] [main/INFO]: Loading 4 mods:",
+        "[17:29:15] [Render thread/INFO]: Backend library: LWJGL version 3.2.2 build 10",
+        "[17:29:19] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:29:19] [Render thread/INFO]: Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:29:19] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[17:29:19] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[17:29:19] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas"
+      ]
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "exited",
+          "exitCode": 255,
+          "seconds": 11.12,
+          "launchIndex": 1,
+          "gameplayVerified": false
+        },
+        {
+          "state": "exited",
+          "exitCode": 255,
+          "seconds": 7.52,
+          "launchIndex": 2,
+          "gameplayVerified": false
+        }
+      ],
+      "deletion": "passed",
+      "id": "fabric-loader-0.20.1-1.20.1",
+      "platform": {
+        "loader_version": "0.20.1",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.569,
+      "seconds": 98.87,
+      "attempt": "fabric-1.20.1-20261124T145550603668Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[17:16:55] [main/INFO]: Loading Minecraft 1.20.1 with Fabric Loader 0.20.1",
+        "[17:16:55] [main/INFO]: Loading 4 mods:",
+        "[17:16:59] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 SNAPSHOT"
+      ]
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T14:55:50.604218+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.94,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.11,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "fabric-loader-0.20.1-1.20.1",
+      "platform": {
+        "loader_version": "0.20.1",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.758,
+      "seconds": 63.81,
+      "attempt": "fabric-1.20.1",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[17:56:28] [main/INFO]: Loading Minecraft 1.20.1 with Fabric Loader 0.20.1",
+        "[17:56:29] [main/INFO]: Loading 4 mods:",
+        "[17:56:33] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 SNAPSHOT",
+        "[17:56:36] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:56:36] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:56:36] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[17:56:36] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[17:56:36] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/armor_trims.png-atlas"
+      ]
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T15:17:01.870755+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.94,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.23,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://meta.fabricmc.net/v2/versions/game",
+        "origin": "live",
+        "versions": 538,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "fabric-loader-0.20.1-1.21.11",
+      "platform": {
+        "loader_version": "0.20.1",
+        "java_major": 21
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 69
+      },
+      "repeatSeconds": 2.678,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "installed",
+        "slug": "ferrite-core",
+        "project": "uXXizFIs",
+        "release": "Ii0gP3D8",
+        "version": "8.2.0-fabric",
+        "filename": "ferritecore-8.2.0-fabric.jar",
+        "preflight": {
+          "blocked": false,
+          "conflicts": [],
+          "warnings": [],
+          "required": []
+        },
+        "recovery": {
+          "firstAttempt": "cancelled-during-download",
+          "receivedBytes": 16384,
+          "partialFilesPreserved": 1,
+          "publishedFilesAfterCancel": 0,
+          "retry": "passed",
+          "rangeResumed": true
+        },
+        "files": [
+          {
+            "filename": "ferritecore-8.2.0-fabric.jar",
+            "bytes": 80138,
+            "sha512": "3210926a82eb32efd9bcebabe2f6c053daf5c4337eebc6d5bacba96d283510afbde646e7e195751de795ec70a2ea44fef77cb54bf22c8e57bb832d6217418869",
+            "modIds": [
+              "ferritecore"
+            ],
+            "version": "8.2.0"
+          }
+        ],
+        "installedCompatibility": {
+          "blocked": false,
+          "warnings": [],
+          "conflicts": [],
+          "required": []
+        },
+        "loaderLogMentions": {
+          "ferritecore": [
+            "\t- ferritecore 8.2.0"
+          ]
+        },
+        "transferEvidence": [
+          {
+            "title": "ferritecore-8.2.0-fabric.jar",
+            "state": "cancelled",
+            "bytes": 16384,
+            "total": 80138,
+            "resumed": false
+          },
+          {
+            "title": "ferritecore-8.2.0-fabric.jar",
+            "state": "completed",
+            "bytes": 80138,
+            "total": 80138,
+            "resumed": true
+          }
+        ]
+      },
+      "seconds": 148.34,
+      "attempt": "fabric-1.21.11",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:19:04] [main/INFO]: Loading Minecraft 1.21.11 with Fabric Loader 0.20.1",
+        "[18:19:04] [main/INFO]: Loading 5 mods:",
+        "[18:19:11] [Render thread/INFO]: Backend library: LWJGL version 3.3.3-snapshot",
+        "[18:19:13] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas",
+        "[18:19:13] [Render thread/INFO]: Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas",
+        "[18:19:13] [Render thread/INFO]: Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas",
+        "[18:19:13] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/paintings.png-atlas",
+        "[18:19:13] [Render thread/INFO]: Created: 1024x512x0 minecraft:textures/atlas/shield_patterns.png-atlas"
+      ]
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "26.3",
+      "started": "2026-11-24T14:51:16.359637+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.12,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.06,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog",
+          "retainedCapture": "fabric-26.3-graphics-error.png"
+        }
+      ],
+      "deletion": "passed",
+      "id": "fabric-loader-0.20.1-26.3",
+      "platform": {
+        "loader_version": "0.20.1",
+        "java_major": 25
+      },
+      "repeatSeconds": 3.214,
+      "seconds": 106.4,
+      "attempt": "fabric-26.3",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "graphicsAssessment": {
+        "state": "blocked-environment",
+        "diagnostic": [
+          "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+          "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+        ]
+      },
+      "selectedLogEvidence": [
+        "[17:52:36] [main/INFO]: Loading Minecraft 26.3 with Fabric Loader 0.20.1",
+        "[17:52:37] [main/INFO]: Loading 4 mods:",
+        "[17:52:42] [Render thread/INFO]: Backend library: LWJGL version 3.4.3-snapshot"
+      ]
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.18.2",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "FileExistsError: [Errno 17] File exists: '$AUDIT_ROOT/game-cache/versions/1.18.2-forge-40.3.0/natives/META-INF'",
+      "seconds": 62.07,
+      "attempt": "forge-1.18.2-20261124T144447556099Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.18.2",
+      "started": "2026-11-24T14:44:47.556484+00:00",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "DownloadError: Установщик указал путь mappings вне каталога игры.",
+      "seconds": 41.98,
+      "attempt": "forge-1.18.2-20261124T150229528505Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.18.2",
+      "started": "2026-11-24T15:02:29.528599+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.11,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "d7e5bbc305c651917601008803df7b70706b8c1668cb7e1b169460519ac79284",
+          "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.2,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "4b533217b0b289d9cb6ccc4d0833a8da7665ee460e519c3ad1a45608738c733e",
+          "visualAssessment": "Minecraft main menu",
+          "retainedCapture": "forge-1.18.2-main-menu.png"
+        }
+      ],
+      "deletion": "passed",
+      "id": "1.18.2-forge-40.3.0",
+      "platform": {
+        "loader_version": "40.3.0",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.69,
+      "seconds": 149.09,
+      "attempt": "forge-1.18.2",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:04:40] [Render thread/INFO]: Backend library: LWJGL version 3.2.2 SNAPSHOT",
+        "[18:04:50] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 512x256x4 minecraft:textures/atlas/beds.png-atlas",
+        "[18:04:50] [Render thread/INFO]: Created: 512x256x4 minecraft:textures/atlas/shulker_boxes.png-atlas"
+      ]
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "RuntimeError: Установщик forge завершился с кодом 1 (DOWNLOAD_MOJMAPS). Проверь доступ Java к интернету и снова нажми «Играть».",
+      "seconds": 132.67,
+      "attempt": "forge-1.20.1-20261124T144352243018Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T14:43:52.243409+00:00",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "DownloadError: Установщик указал путь mappings вне каталога игры.",
+      "seconds": 55.31,
+      "attempt": "forge-1.20.1-20261124T145936466268Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T14:59:36.466341+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.56,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.64,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "1.20.1-forge-47.4.28",
+      "platform": {
+        "loader_version": "47.4.28",
+        "java_major": 17
+      },
+      "repeatSeconds": 3.505,
+      "seconds": 173.06,
+      "attempt": "forge-1.20.1-20261124T151930209614Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[18:02:04] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[18:02:09] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 build 7",
+        "[18:02:14] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[18:02:14] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        "[18:02:14] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[18:02:14] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[18:02:14] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/armor_trims.png-atlas",
+        "[18:02:14] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas"
+      ]
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T15:19:30.209744+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.56,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.91,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "2423178947626129074ca1a9edc730cc47847db383436c678f9bd9cd2cc04d6e",
+          "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+        "origin": "cache",
+        "versions": 63,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "1.20.1-forge-47.4.28",
+      "platform": {
+        "loader_version": "47.4.28",
+        "java_major": 17
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 81
+      },
+      "repeatSeconds": 3.306,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "installed",
+        "slug": "ferrite-core",
+        "project": "uXXizFIs",
+        "release": "DG5Fn9Sz",
+        "version": "6.0.1",
+        "filename": "ferritecore-6.0.1-forge.jar",
+        "preflight": {
+          "blocked": false,
+          "conflicts": [],
+          "warnings": [],
+          "required": []
+        },
+        "recovery": {
+          "firstAttempt": "cancelled-during-download",
+          "receivedBytes": 16384,
+          "partialFilesPreserved": 1,
+          "publishedFilesAfterCancel": 0,
+          "retry": "passed",
+          "rangeResumed": true,
+          "originalAggregateQueueBytes": 80138,
+          "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window"
+        },
+        "files": [
+          {
+            "filename": "ferritecore-6.0.1-forge.jar",
+            "bytes": 123034,
+            "sha512": "a1960a7c03dc32d4ccaccaf28afdd9b078758bbd62d15a91d4039a83fa9397a098e89b69591f6bd5190254d9ee97e502504154b9aec764adb8c65f000b75ba2c",
+            "modIds": [
+              "ferritecore"
+            ],
+            "version": ""
+          }
+        ],
+        "installedCompatibility": {
+          "blocked": false,
+          "warnings": [],
+          "conflicts": [],
+          "required": []
+        },
+        "loaderLogMentions": {
+          "ferritecore": [
+            "[18:22:20] [main/INFO]: Found mod file ferritecore-6.0.1-forge.jar of type MOD with provider {mods folder locator at $AUDIT_ROOT/instances/$PROFILE/mods}"
+          ]
+        },
+        "transferEvidence": [
+          {
+            "title": "ferritecore-6.0.1-forge.jar",
+            "state": "cancelled",
+            "bytes": 16384,
+            "total": 123034,
+            "resumed": false
+          },
+          {
+            "title": "ferritecore-6.0.1-forge.jar",
+            "state": "completed",
+            "bytes": 123034,
+            "total": 123034,
+            "resumed": true
+          }
+        ]
+      },
+      "seconds": 194.41,
+      "attempt": "forge-1.20.1",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:22:19] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[18:22:26] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 build 7",
+        "[18:22:31] [Render thread/INFO]: Created: 1024x512x2 minecraft:textures/atlas/blocks.png-atlas",
+        "[18:22:31] [Render thread/INFO]: Created: 256x256x2 minecraft:textures/atlas/signs.png-atlas",
+        "[18:22:31] [Render thread/INFO]: Created: 512x512x2 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[18:22:31] [Render thread/INFO]: Created: 512x512x2 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[18:22:31] [Render thread/INFO]: Created: 1024x1024x2 minecraft:textures/atlas/armor_trims.png-atlas",
+        "[18:22:31] [Render thread/INFO]: Created: 128x64x2 minecraft:textures/atlas/decorated_pot.png-atlas"
+      ]
+    },
+    {
+      "loader": "forge",
+      "minecraft": "26.3",
+      "started": "2026-11-24T15:04:58.616694+00:00",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "DownloadError: Загрузка с launchermeta.mojang.com не завершена. Проверь подключение и снова нажми «Играть». Скачанные файлы сохраняются.",
+      "seconds": 137.77,
+      "attempt": "forge-26.3-20261124T152759327206Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "forge",
+      "minecraft": "26.3",
+      "started": "2026-11-24T15:27:59.327711+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "graphics-blocked",
+          "seconds": 30.35,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "graphicsDiagnostic": [
+            "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+            "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+          ],
+          "launchIndex": 1,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        },
+        {
+          "state": "graphics-blocked",
+          "seconds": 31.13,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "graphicsDiagnostic": [
+            "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+            "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+          ],
+          "launchIndex": 2,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        }
+      ],
+      "deletion": "passed",
+      "id": "26.3-forge-66.1.9",
+      "platform": {
+        "loader_version": "66.1.9",
+        "java_major": 25
+      },
+      "repeatSeconds": 4.56,
+      "seconds": 206.52,
+      "attempt": "forge-26.3",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "graphicsAssessment": {
+        "state": "blocked-environment",
+        "diagnostic": [
+          "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+          "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+        ]
+      },
+      "selectedLogEvidence": [
+        "[18:31:01] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[18:31:08] [Render thread/INFO]: Backend library: LWJGL version 3.4.3+4"
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.1",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "RuntimeError: Установщик neoforge завершился с кодом 1. Проверь доступ Java к интернету и снова нажми «Играть».",
+      "seconds": 355.31,
+      "attempt": "neoforge-1.21.1-20261124T144529541648Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.1",
+      "started": "2026-11-24T14:45:29.542809+00:00",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "RuntimeError: Установщик neoforge завершился с кодом 1. Java не смогла скачать файлы. Проверь подключение, DNS и настройки прокси, затем повтори подготовку.",
+      "seconds": 38.28,
+      "attempt": "neoforge-1.21.1-20261124T150716392061Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.1",
+      "started": "2026-11-24T15:07:16.392724+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 30.09,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "d0c33a6c8846c18f97d2cd8f94315f2bbf530d4e060853206eaa1aaf2fdc1b24",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 30.07,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "d0c33a6c8846c18f97d2cd8f94315f2bbf530d4e060853206eaa1aaf2fdc1b24",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "neoforge-21.1.267",
+      "platform": {
+        "loader_version": "21.1.267",
+        "java_major": 21
+      },
+      "repeatSeconds": 3.687,
+      "seconds": 150.37,
+      "attempt": "neoforge-1.21.1",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:09:21] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[24Nov2026 18:09:28.747] [Render thread/INFO] [net.minecraft.client.Minecraft/]: Backend library: LWJGL version 3.3.3+5",
+        "[24Nov2026 18:09:28.930] [modloading-worker-0/INFO] [net.neoforged.neoforge.common.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 21.1.267, for MC 1.21.1",
+        "[24Nov2026 18:09:31.743] [Render thread/INFO] [net.minecraft.client.renderer.texture.TextureAtlas/]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[24Nov2026 18:09:31.765] [Render thread/INFO] [net.minecraft.client.renderer.texture.TextureAtlas/]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        "[24Nov2026 18:09:31.767] [Render thread/INFO] [net.minecraft.client.renderer.texture.TextureAtlas/]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[24Nov2026 18:09:31.772] [Render thread/INFO] [net.minecraft.client.renderer.texture.TextureAtlas/]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[24Nov2026 18:09:31.777] [Render thread/INFO] [net.minecraft.client.renderer.texture.TextureAtlas/]: Created: 1024x1024x4 minecraft:textures/atlas/armor_trims.png-atlas"
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "created": true,
+      "install": "failed",
+      "repeatInstall": "not-run",
+      "launches": [],
+      "deletion": "not-run",
+      "error": "RuntimeError: Установщик neoforge завершился с кодом 1. Проверь доступ Java к интернету и снова нажми «Играть».",
+      "seconds": 317.72,
+      "attempt": "neoforge-1.21.11-20261124T144607831461Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T14:46:07.831875+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.51,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.6,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "neoforge-21.11.48",
+      "platform": {
+        "loader_version": "21.11.48",
+        "java_major": 21
+      },
+      "repeatSeconds": 3.096,
+      "seconds": 148.92,
+      "attempt": "neoforge-1.21.11-20261124T152244625825Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[17:48:10] [main/INFO]: Loading FML Early Services:",
+        "[17:48:10] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[17:48:11] [main/INFO]: Loading FML Plugins:",
+        "[17:48:17] [modloading-worker-0/INFO]: NeoForge mod loading, version 21.11.48, for MC 1.21.11",
+        "[17:48:18] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+        "[17:48:20] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas",
+        "[17:48:20] [Render thread/INFO]: Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas",
+        "[17:48:20] [Render thread/INFO]: Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas"
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T15:22:44.625943+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.8,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.87,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+        "origin": "cache",
+        "versions": 32,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "neoforge-21.11.48",
+      "platform": {
+        "loader_version": "21.11.48",
+        "java_major": 21
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 87
+      },
+      "repeatSeconds": 3.586,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "needs-review",
+        "slug": "ferrite-core",
+        "project": "uXXizFIs",
+        "release": "mLI5k2Gi",
+        "version": "8.2.0-neoforge",
+        "filename": "ferritecore-8.2.0-neoforge.jar",
+        "preflight": {
+          "blocked": false,
+          "conflicts": [],
+          "warnings": [],
+          "required": []
+        },
+        "recovery": {
+          "firstAttempt": "cancelled-during-download",
+          "receivedBytes": 1378,
+          "partialFilesPreserved": 1,
+          "publishedFilesAfterCancel": 0,
+          "originalAggregateQueueBytes": 123034,
+          "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window",
+          "rangeResumed": true
+        },
+        "warnings": [
+          "ferritecore-8.2.0-neoforge.jar требует neoforge [21.11.37-beta,). Версия этой части сборки пока не подтверждена. Подготовь игру и повтори проверку."
+        ],
+        "transferEvidence": [
+          {
+            "title": "ferritecore-8.2.0-neoforge.jar",
+            "state": "cancelled",
+            "bytes": 1378,
+            "total": 79272,
+            "resumed": false
+          },
+          {
+            "title": "ferritecore-8.2.0-neoforge.jar",
+            "state": "completed",
+            "bytes": 79272,
+            "total": 79272,
+            "resumed": true
+          }
+        ]
+      },
+      "seconds": 171.47,
+      "attempt": "neoforge-1.21.11-20261124T153221743335Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[18:25:10] [main/INFO]: Loading FML Early Services:",
+        "[18:25:10] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[18:25:10] [main/INFO]: Loading FML Plugins:",
+        "[18:25:16] [modloading-worker-0/INFO]: NeoForge mod loading, version 21.11.48, for MC 1.21.11",
+        "[18:25:17] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+        "[18:25:19] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas",
+        "[18:25:19] [Render thread/INFO]: Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas",
+        "[18:25:19] [Render thread/INFO]: Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas"
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T15:32:21.743408+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.56,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.93,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen",
+          "retainedCapture": "neoforge-1.21.11-welcome.png"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+        "origin": "cache",
+        "versions": 32,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "neoforge-21.11.48",
+      "platform": {
+        "loader_version": "21.11.48",
+        "java_major": 21
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 87
+      },
+      "repeatSeconds": 3.358,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "installed",
+        "slug": "entityculling",
+        "project": "NNAgCjsB",
+        "release": "hBfQAlMs",
+        "version": "1.12.2",
+        "filename": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+        "preflight": {
+          "blocked": false,
+          "conflicts": [],
+          "warnings": [],
+          "required": []
+        },
+        "recovery": {
+          "firstAttempt": "cancelled-during-download",
+          "receivedBytes": 7533,
+          "partialFilesPreserved": 1,
+          "publishedFilesAfterCancel": 0,
+          "retry": "passed",
+          "rangeResumed": true
+        },
+        "transferEvidence": [
+          {
+            "title": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+            "state": "cancelled",
+            "bytes": 7533,
+            "total": 1535395,
+            "resumed": false
+          },
+          {
+            "title": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+            "state": "completed",
+            "bytes": 1535395,
+            "total": 1535395,
+            "resumed": true
+          }
+        ],
+        "files": [
+          {
+            "filename": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+            "bytes": 1535395,
+            "sha512": "6d14518559275cf2a5a2e003a6b2b75594a97df6ec6b61adf047b490811e52e0c656d7472511478a51383c76437f298d6f4d67ac967181069ace87bf11eab1e5",
+            "modIds": [
+              "entityculling"
+            ],
+            "version": ""
+          }
+        ],
+        "installedCompatibility": {
+          "blocked": false,
+          "warnings": [],
+          "conflicts": [],
+          "required": []
+        },
+        "loaderLogMentions": {
+          "entityculling": [
+            "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"entityculling-neoforge-1.12.2-mc1.21.11.jar\" [locator: {mods folder locator at $AUDIT_ROOT/instances/$PROFILE/mods}, reader: mod manifest]",
+            "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"TRender-1.0.17-1.21.11-neoforge-SNAPSHOT.jar\" [parent: entityculling-neoforge-1.12.2-mc1.21.11.jar, locator: jarinjar, reader: mod manifest]",
+            "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"TRansition-1.0.28-1.21.11-neoforge-SNAPSHOT.jar\" [parent: entityculling-neoforge-1.12.2-mc1.21.11.jar, locator: jarinjar, reader: mod manifest]",
+            "\t\tEntityCulling 1.12.2 (entityculling)",
+            " - entityculling (jar(mods/entityculling-neoforge-1.12.2-mc1.21.11.jar))"
+          ]
+        }
+      },
+      "seconds": 191.53,
+      "attempt": "neoforge-1.21.11",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:35:07] [main/INFO]: Loading FML Early Services:",
+        "[18:35:07] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow",
+        "[18:35:08] [main/INFO]: Loading FML Plugins:",
+        "[18:35:14] [modloading-worker-0/INFO]: NeoForge mod loading, version 21.11.48, for MC 1.21.11",
+        "[18:35:15] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+        "[18:35:18] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas",
+        "[18:35:18] [Render thread/INFO]: Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas",
+        "[18:35:18] [Render thread/INFO]: Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas"
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "26.3",
+      "started": "2026-11-24T15:09:46.766123+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.99,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "d366e42799aaeddad57f4a0c1b877d1eb4cf4fb9af960bd962608bccef616cce",
+          "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 30.1,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "d366e42799aaeddad57f4a0c1b877d1eb4cf4fb9af960bd962608bccef616cce",
+          "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+        }
+      ],
+      "deletion": "passed",
+      "id": "neoforge-26.3.0.113",
+      "platform": {
+        "loader_version": "26.3.0.113",
+        "java_major": 25
+      },
+      "repeatSeconds": 4.427,
+      "seconds": 141.42,
+      "attempt": "neoforge-26.3",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "graphicsAssessment": {
+        "state": "blocked-environment",
+        "diagnostic": [
+          "[18:11:43] [main/ERROR]: Failed to create window: Couldn't find matching GLX visual",
+          "Couldn't find matching GLX visual"
+        ]
+      },
+      "selectedLogEvidence": [
+        "[18:11:42] [main/INFO]: Loading FML Early Services:",
+        "[18:11:42] [main/INFO]: Loading ImmediateWindowProvider fmlearlywindow"
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "1.18.2",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 23.39,
+          "gameplayVerified": false,
+          "launchIndex": 1
+        },
+        {
+          "state": "running-observed",
+          "seconds": 23.53,
+          "gameplayVerified": false,
+          "launchIndex": 2
+        }
+      ],
+      "deletion": "passed",
+      "id": "quilt-loader-0.30.2-1.18.2",
+      "platform": {
+        "loader_version": "0.30.2",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.182,
+      "seconds": 85.54,
+      "attempt": "quilt-1.18.2",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[17:30:36] [main/INFO]: Loading Minecraft 1.18.2 with Quilt Loader 0.30.2",
+        "[17:30:36] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/org/quiltmc/hashed/1.18.2/hashed-1.18.2.jar!/mappings/mappings.tiny",
+        "[17:30:36] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/net/fabricmc/intermediary/1.18.2/intermediary-1.18.2.jar!/mappings/mappings.tiny",
+        "[17:30:36] [main/INFO]: Loading 4 mods:",
+        "[17:30:41] [Render thread/INFO]: Backend library: LWJGL version 3.2.2 build 10",
+        "[17:30:47] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:30:47] [Render thread/INFO]: Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:30:47] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/banner_patterns.png-atlas"
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "1.20.1",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 14.15,
+          "gameplayVerified": false,
+          "launchIndex": 1
+        },
+        {
+          "state": "exited",
+          "exitCode": 255,
+          "seconds": 10.09,
+          "launchIndex": 2,
+          "gameplayVerified": false
+        }
+      ],
+      "deletion": "passed",
+      "id": "quilt-loader-0.30.2-1.20.1",
+      "platform": {
+        "loader_version": "0.30.2",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.553,
+      "seconds": 93.75,
+      "attempt": "quilt-1.20.1-20261124T145654421852Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[17:18:26] [main/INFO]: Loading Minecraft 1.20.1 with Quilt Loader 0.30.2",
+        "[17:18:26] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/org/quiltmc/hashed/1.20.1/hashed-1.20.1.jar!/mappings/mappings.tiny",
+        "[17:18:26] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar!/mappings/mappings.tiny",
+        "[17:18:27] [main/INFO]: Loading 4 mods:",
+        "[17:18:33] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 SNAPSHOT"
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T14:56:54.422547+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.15,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.59,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "quilt-loader-0.30.2-1.20.1",
+      "platform": {
+        "loader_version": "0.30.2",
+        "java_major": 17
+      },
+      "repeatSeconds": 2.625,
+      "seconds": 64.33,
+      "attempt": "quilt-1.20.1-20261124T152536104360Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[17:57:33] [main/INFO]: Loading Minecraft 1.20.1 with Quilt Loader 0.30.2",
+        "[17:57:33] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/org/quiltmc/hashed/1.20.1/hashed-1.20.1.jar!/mappings/mappings.tiny",
+        "[17:57:33] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar!/mappings/mappings.tiny",
+        "[17:57:33] [main/INFO]: Loading 4 mods:",
+        "[17:57:39] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 SNAPSHOT",
+        "[17:57:41] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:57:41] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:57:41] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas"
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T15:25:36.105048+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.8,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.05,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "d39cd3edcc83f987f7f16c5262c6cef0c53035cf1489330f045a8e41cc374db1",
+          "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://meta.quiltmc.org/v3/versions/game",
+        "origin": "cache",
+        "versions": 451,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "quilt-loader-0.30.2-1.20.1",
+      "platform": {
+        "loader_version": "0.30.2",
+        "java_major": 17
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 63
+      },
+      "repeatSeconds": 2.83,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "needs-review",
+        "slug": "qsl",
+        "project": "qvIfYCYJ",
+        "release": "s8dfz9Xa",
+        "version": "7.7.0+0.92.2-1.20.1",
+        "filename": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+        "preflight": {
+          "blocked": false,
+          "conflicts": [],
+          "warnings": [],
+          "required": []
+        },
+        "recovery": {
+          "firstAttempt": "cancelled-during-download",
+          "receivedBytes": 16384,
+          "partialFilesPreserved": 1,
+          "publishedFilesAfterCancel": 0,
+          "originalAggregateQueueBytes": 123034,
+          "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window",
+          "rangeResumed": true
+        },
+        "warnings": [
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.37.a. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.38.b. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.39.a. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.16-rc.3. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_base >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_data_callback >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_entity >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_entity_events >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_lifecycle_events >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_lifecycle_events >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_networking >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_registry >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_registry_entry_attachment >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_resource_loader >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+          "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_resource_loader >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла."
+        ],
+        "transferEvidence": [
+          {
+            "title": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+            "state": "cancelled",
+            "bytes": 16384,
+            "total": 2755789,
+            "resumed": false
+          },
+          {
+            "title": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+            "state": "completed",
+            "bytes": 2755789,
+            "total": 2755789,
+            "resumed": true
+          }
+        ]
+      },
+      "seconds": 94.44,
+      "attempt": "quilt-1.20.1",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:26:44] [main/INFO]: Loading Minecraft 1.20.1 with Quilt Loader 0.30.2",
+        "[18:26:44] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/org/quiltmc/hashed/1.20.1/hashed-1.20.1.jar!/mappings/mappings.tiny",
+        "[18:26:44] [main/INFO]: Loading mappings: jar:file:$AUDIT_ROOT/game-cache/libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar!/mappings/mappings.tiny",
+        "[18:26:45] [main/INFO]: Loading 4 mods:",
+        "[18:26:51] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 SNAPSHOT",
+        "[18:26:53] [Render thread/INFO]: Created: 1024x512x2 minecraft:textures/atlas/blocks.png-atlas",
+        "[18:26:53] [Render thread/INFO]: Created: 256x256x2 minecraft:textures/atlas/signs.png-atlas",
+        "[18:26:53] [Render thread/INFO]: Created: 512x512x2 minecraft:textures/atlas/banner_patterns.png-atlas"
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "26.3",
+      "started": "2026-11-24T14:53:02.765932+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 29.32,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.69,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        }
+      ],
+      "deletion": "passed",
+      "id": "quilt-loader-0.30.2-26.3",
+      "platform": {
+        "loader_version": "0.30.2",
+        "java_major": 25
+      },
+      "repeatSeconds": 3.133,
+      "seconds": 105.97,
+      "attempt": "quilt-26.3",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "graphicsAssessment": {
+        "state": "blocked-environment",
+        "diagnostic": [
+          "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+          "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+        ]
+      },
+      "selectedLogEvidence": [
+        "[17:54:22] [main/INFO]: Loading Minecraft 26.3 with Quilt Loader 0.30.2",
+        "[17:54:23] [main/INFO]: Loading 4 mods:",
+        "[17:54:31] [Render thread/INFO]: Backend library: LWJGL version 3.4.3-snapshot"
+      ]
+    },
+    {
+      "loader": "vanilla",
+      "minecraft": "1.18.2",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 23.14,
+          "gameplayVerified": false,
+          "launchIndex": 1
+        },
+        {
+          "state": "running-observed",
+          "seconds": 23.28,
+          "gameplayVerified": false,
+          "launchIndex": 2
+        }
+      ],
+      "deletion": "passed",
+      "id": "1.18.2",
+      "platform": {
+        "loader_version": null,
+        "java_major": 17
+      },
+      "repeatSeconds": 1.605,
+      "seconds": 118.42,
+      "attempt": "vanilla-1.18.2",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[17:27:48] [Render thread/INFO]: Backend library: LWJGL version 3.2.2 build 10",
+        "[17:27:52] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 512x256x4 minecraft:textures/atlas/beds.png-atlas",
+        "[17:27:52] [Render thread/INFO]: Created: 512x256x4 minecraft:textures/atlas/shulker_boxes.png-atlas"
+      ]
+    },
+    {
+      "loader": "vanilla",
+      "minecraft": "1.20.1",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "exited",
+          "exitCode": 255,
+          "seconds": 6.2,
+          "launchIndex": 1,
+          "gameplayVerified": false
+        },
+        {
+          "state": "exited",
+          "exitCode": 255,
+          "seconds": 6.61,
+          "launchIndex": 2,
+          "gameplayVerified": false
+        }
+      ],
+      "deletion": "passed",
+      "id": "1.20.1",
+      "platform": {
+        "loader_version": null,
+        "java_major": 17
+      },
+      "repeatSeconds": 1.931,
+      "seconds": 184.29,
+      "attempt": "vanilla-1.20.1-20261124T145448738010Z",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": true,
+      "selectedLogEvidence": [
+        "[17:15:20] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 build 7"
+      ]
+    },
+    {
+      "loader": "vanilla",
+      "minecraft": "1.20.1",
+      "started": "2026-11-24T14:54:48.738435+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.25,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 28.57,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "id": "1.20.1",
+      "platform": {
+        "loader_version": null,
+        "java_major": 17
+      },
+      "repeatSeconds": 2.082,
+      "seconds": 61.86,
+      "attempt": "vanilla-1.20.1",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[17:55:28] [Render thread/INFO]: Backend library: LWJGL version 3.3.1 build 7",
+        "[17:55:31] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/banner_patterns.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 512x512x4 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 1024x1024x4 minecraft:textures/atlas/armor_trims.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas",
+        "[17:55:31] [Render thread/INFO]: Created: 128x64x4 minecraft:textures/atlas/decorated_pot.png-atlas"
+      ]
+    },
+    {
+      "loader": "vanilla",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T15:15:49.148150+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.67,
+          "heapMiB": 2048,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 28.74,
+          "heapMiB": 3072,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+          "visualAssessment": "Minecraft welcome/accessibility screen"
+        }
+      ],
+      "deletion": "passed",
+      "catalog": {
+        "source": "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+        "origin": "live",
+        "versions": 926,
+        "selectedListed": true
+      },
+      "interruption": "cancelled-and-will-retry",
+      "id": "1.21.11",
+      "platform": {
+        "loader_version": null,
+        "java_major": 21
+      },
+      "libraries": {
+        "state": "passed",
+        "declaredLaunchFiles": 61
+      },
+      "repeatSeconds": 2.41,
+      "settings": {
+        "state": "passed",
+        "renamed": true,
+        "preset": "economy",
+        "optionsReadBack": {
+          "renderDistance": "6",
+          "simulationDistance": "5",
+          "graphicsMode": "0",
+          "particles": "2",
+          "maxFps": "60",
+          "mipmapLevels": "2"
+        },
+        "memoryReadBack": "3072",
+        "effectiveHeapMiB": 3072
+      },
+      "mod": {
+        "state": "not-applicable"
+      },
+      "seconds": 72.72,
+      "attempt": "vanilla-1.21.11",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "selectedLogEvidence": [
+        "[18:16:41] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+        "[18:16:43] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas",
+        "[18:16:43] [Render thread/INFO]: Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas",
+        "[18:16:43] [Render thread/INFO]: Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas",
+        "[18:16:43] [Render thread/INFO]: Created: 512x256x0 minecraft:textures/atlas/paintings.png-atlas",
+        "[18:16:43] [Render thread/INFO]: Created: 1024x512x0 minecraft:textures/atlas/shield_patterns.png-atlas",
+        "[18:16:43] [Render thread/INFO]: Created: 2048x2048x4 minecraft:textures/atlas/blocks.png-atlas",
+        "[18:16:44] [Render thread/INFO]: Created: 512x512x0 minecraft:textures/atlas/chest.png-atlas"
+      ]
+    },
+    {
+      "loader": "vanilla",
+      "minecraft": "26.3",
+      "started": "2026-11-24T14:48:36.760544+00:00",
+      "created": true,
+      "install": "passed",
+      "repeatInstall": "passed",
+      "launches": [
+        {
+          "state": "running-observed",
+          "seconds": 28.76,
+          "gameplayVerified": false,
+          "launchIndex": 1,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        },
+        {
+          "state": "running-observed",
+          "seconds": 29.02,
+          "gameplayVerified": false,
+          "launchIndex": 2,
+          "captureSha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+          "visualAssessment": "Graphics-backend error dialog"
+        }
+      ],
+      "deletion": "passed",
+      "id": "26.3",
+      "platform": {
+        "loader_version": null,
+        "java_major": 25
+      },
+      "repeatSeconds": 2.517,
+      "seconds": 159.59,
+      "attempt": "vanilla-26.3",
+      "recordedUtcDate": "2026-11-24",
+      "supersededByLaterAttempt": false,
+      "graphicsAssessment": {
+        "state": "blocked-environment",
+        "diagnostic": [
+          "com.mojang.renderpearl.api.device.BackendCreationException: Failed to create window for OpenGL context: Couldn't find matching GLX visual",
+          "com.mojang.renderpearl.api.device.BackendCreationException: Vulkan is not supported: Installed Vulkan doesn't implement the VK_KHR_surface extension"
+        ]
+      },
+      "selectedLogEvidence": [
+        "[17:50:56] [Render thread/INFO]: Backend library: LWJGL version 3.4.3+4"
+      ]
+    }
+  ]
+}

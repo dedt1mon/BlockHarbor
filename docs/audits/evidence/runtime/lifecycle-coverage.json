@@ -1,0 +1,868 @@
+{
+  "scope": "Real Linux execution with isolated local account; actual UI rendering is described in each launch. No gameplay, online services or Windows game-launch claim.",
+  "date": "2026-11-24",
+  "cases": [
+    {
+      "loader": "vanilla",
+      "minecraft": "1.21.11",
+      "attemptStarted": "2026-11-24T15:15:49.148150+00:00",
+      "steps": [
+        {
+          "number": 1,
+          "operation": "create profile",
+          "observed": true
+        },
+        {
+          "number": 2,
+          "operation": "version catalogue",
+          "observed": {
+            "source": "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+            "origin": "live",
+            "versions": 926,
+            "selectedListed": true
+          }
+        },
+        {
+          "number": 3,
+          "operation": "compatible selected version listed",
+          "observed": true
+        },
+        {
+          "number": 4,
+          "operation": "prepare verified game files",
+          "observed": "passed"
+        },
+        {
+          "number": 5,
+          "operation": "install loader",
+          "observed": "1.21.11"
+        },
+        {
+          "number": 6,
+          "operation": "required launch libraries",
+          "observed": {
+            "state": "passed",
+            "declaredLaunchFiles": 61
+          }
+        },
+        {
+          "number": 7,
+          "operation": "select managed Java",
+          "observed": {
+            "loader_version": null,
+            "java_major": 21
+          }
+        },
+        {
+          "number": 8,
+          "operation": "first actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 28.67,
+            "heapMiB": 2048,
+            "gameplayVerified": false,
+            "launchIndex": 1,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 9,
+          "operation": "second actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 28.74,
+            "heapMiB": 3072,
+            "gameplayVerified": false,
+            "launchIndex": 2,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 10,
+          "operation": "change settings and read them back",
+          "observed": {
+            "state": "passed",
+            "renamed": true,
+            "preset": "economy",
+            "optionsReadBack": {
+              "renderDistance": "6",
+              "simulationDistance": "5",
+              "graphicsMode": "0",
+              "particles": "2",
+              "maxFps": "60",
+              "mipmapLevels": "2"
+            },
+            "memoryReadBack": "3072",
+            "effectiveHeapMiB": 3072
+          }
+        },
+        {
+          "number": 11,
+          "operation": "compatible mod installation and loader log",
+          "observed": {
+            "state": "not-applicable"
+          }
+        },
+        {
+          "number": 12,
+          "operation": "remove profile",
+          "observed": "passed"
+        },
+        {
+          "number": 13,
+          "operation": "recover interrupted preparation/download",
+          "observed": {
+            "preparation": "cancelled-and-will-retry",
+            "subsequentPreparation": "passed",
+            "modTransfer": null
+          }
+        }
+      ]
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "1.21.11",
+      "attemptStarted": "2026-11-24T15:17:01.870755+00:00",
+      "steps": [
+        {
+          "number": 1,
+          "operation": "create profile",
+          "observed": true
+        },
+        {
+          "number": 2,
+          "operation": "version catalogue",
+          "observed": {
+            "source": "https://meta.fabricmc.net/v2/versions/game",
+            "origin": "live",
+            "versions": 538,
+            "selectedListed": true
+          }
+        },
+        {
+          "number": 3,
+          "operation": "compatible selected version listed",
+          "observed": true
+        },
+        {
+          "number": 4,
+          "operation": "prepare verified game files",
+          "observed": "passed"
+        },
+        {
+          "number": 5,
+          "operation": "install loader",
+          "observed": "fabric-loader-0.20.1-1.21.11"
+        },
+        {
+          "number": 6,
+          "operation": "required launch libraries",
+          "observed": {
+            "state": "passed",
+            "declaredLaunchFiles": 69
+          }
+        },
+        {
+          "number": 7,
+          "operation": "select managed Java",
+          "observed": {
+            "loader_version": "0.20.1",
+            "java_major": 21
+          }
+        },
+        {
+          "number": 8,
+          "operation": "first actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 28.94,
+            "heapMiB": 2048,
+            "gameplayVerified": false,
+            "launchIndex": 1,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 9,
+          "operation": "second actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.23,
+            "heapMiB": 3072,
+            "gameplayVerified": false,
+            "launchIndex": 2,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 10,
+          "operation": "change settings and read them back",
+          "observed": {
+            "state": "passed",
+            "renamed": true,
+            "preset": "economy",
+            "optionsReadBack": {
+              "renderDistance": "6",
+              "simulationDistance": "5",
+              "graphicsMode": "0",
+              "particles": "2",
+              "maxFps": "60",
+              "mipmapLevels": "2"
+            },
+            "memoryReadBack": "3072",
+            "effectiveHeapMiB": 3072
+          }
+        },
+        {
+          "number": 11,
+          "operation": "compatible mod installation and loader log",
+          "observed": {
+            "state": "installed",
+            "slug": "ferrite-core",
+            "project": "uXXizFIs",
+            "release": "Ii0gP3D8",
+            "version": "8.2.0-fabric",
+            "filename": "ferritecore-8.2.0-fabric.jar",
+            "preflight": {
+              "blocked": false,
+              "conflicts": [],
+              "warnings": [],
+              "required": []
+            },
+            "recovery": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true
+            },
+            "files": [
+              {
+                "filename": "ferritecore-8.2.0-fabric.jar",
+                "bytes": 80138,
+                "sha512": "3210926a82eb32efd9bcebabe2f6c053daf5c4337eebc6d5bacba96d283510afbde646e7e195751de795ec70a2ea44fef77cb54bf22c8e57bb832d6217418869",
+                "modIds": [
+                  "ferritecore"
+                ],
+                "version": "8.2.0"
+              }
+            ],
+            "installedCompatibility": {
+              "blocked": false,
+              "warnings": [],
+              "conflicts": [],
+              "required": []
+            },
+            "loaderLogMentions": {
+              "ferritecore": [
+                "\t- ferritecore 8.2.0"
+              ]
+            },
+            "transferEvidence": [
+              {
+                "title": "ferritecore-8.2.0-fabric.jar",
+                "state": "cancelled",
+                "bytes": 16384,
+                "total": 80138,
+                "resumed": false
+              },
+              {
+                "title": "ferritecore-8.2.0-fabric.jar",
+                "state": "completed",
+                "bytes": 80138,
+                "total": 80138,
+                "resumed": true
+              }
+            ]
+          }
+        },
+        {
+          "number": 12,
+          "operation": "remove profile",
+          "observed": "passed"
+        },
+        {
+          "number": 13,
+          "operation": "recover interrupted preparation/download",
+          "observed": {
+            "preparation": "cancelled-and-will-retry",
+            "subsequentPreparation": "passed",
+            "modTransfer": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "attemptStarted": "2026-11-24T15:19:30.209744+00:00",
+      "steps": [
+        {
+          "number": 1,
+          "operation": "create profile",
+          "observed": true
+        },
+        {
+          "number": 2,
+          "operation": "version catalogue",
+          "observed": {
+            "source": "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+            "origin": "cache",
+            "versions": 63,
+            "selectedListed": true
+          }
+        },
+        {
+          "number": 3,
+          "operation": "compatible selected version listed",
+          "observed": true
+        },
+        {
+          "number": 4,
+          "operation": "prepare verified game files",
+          "observed": "passed"
+        },
+        {
+          "number": 5,
+          "operation": "install loader",
+          "observed": "1.20.1-forge-47.4.28"
+        },
+        {
+          "number": 6,
+          "operation": "required launch libraries",
+          "observed": {
+            "state": "passed",
+            "declaredLaunchFiles": 81
+          }
+        },
+        {
+          "number": 7,
+          "operation": "select managed Java",
+          "observed": {
+            "loader_version": "47.4.28",
+            "java_major": 17
+          }
+        },
+        {
+          "number": 8,
+          "operation": "first actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.56,
+            "heapMiB": 2048,
+            "gameplayVerified": false,
+            "launchIndex": 1,
+            "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 9,
+          "operation": "second actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.91,
+            "heapMiB": 3072,
+            "gameplayVerified": false,
+            "launchIndex": 2,
+            "captureSha256": "2423178947626129074ca1a9edc730cc47847db383436c678f9bd9cd2cc04d6e",
+            "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+          }
+        },
+        {
+          "number": 10,
+          "operation": "change settings and read them back",
+          "observed": {
+            "state": "passed",
+            "renamed": true,
+            "preset": "economy",
+            "optionsReadBack": {
+              "renderDistance": "6",
+              "simulationDistance": "5",
+              "graphicsMode": "0",
+              "particles": "2",
+              "maxFps": "60",
+              "mipmapLevels": "2"
+            },
+            "memoryReadBack": "3072",
+            "effectiveHeapMiB": 3072
+          }
+        },
+        {
+          "number": 11,
+          "operation": "compatible mod installation and loader log",
+          "observed": {
+            "state": "installed",
+            "slug": "ferrite-core",
+            "project": "uXXizFIs",
+            "release": "DG5Fn9Sz",
+            "version": "6.0.1",
+            "filename": "ferritecore-6.0.1-forge.jar",
+            "preflight": {
+              "blocked": false,
+              "conflicts": [],
+              "warnings": [],
+              "required": []
+            },
+            "recovery": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true,
+              "originalAggregateQueueBytes": 80138,
+              "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window"
+            },
+            "files": [
+              {
+                "filename": "ferritecore-6.0.1-forge.jar",
+                "bytes": 123034,
+                "sha512": "a1960a7c03dc32d4ccaccaf28afdd9b078758bbd62d15a91d4039a83fa9397a098e89b69591f6bd5190254d9ee97e502504154b9aec764adb8c65f000b75ba2c",
+                "modIds": [
+                  "ferritecore"
+                ],
+                "version": ""
+              }
+            ],
+            "installedCompatibility": {
+              "blocked": false,
+              "warnings": [],
+              "conflicts": [],
+              "required": []
+            },
+            "loaderLogMentions": {
+              "ferritecore": [
+                "[18:22:20] [main/INFO]: Found mod file ferritecore-6.0.1-forge.jar of type MOD with provider {mods folder locator at $AUDIT_ROOT/instances/$PROFILE/mods}"
+              ]
+            },
+            "transferEvidence": [
+              {
+                "title": "ferritecore-6.0.1-forge.jar",
+                "state": "cancelled",
+                "bytes": 16384,
+                "total": 123034,
+                "resumed": false
+              },
+              {
+                "title": "ferritecore-6.0.1-forge.jar",
+                "state": "completed",
+                "bytes": 123034,
+                "total": 123034,
+                "resumed": true
+              }
+            ]
+          }
+        },
+        {
+          "number": 12,
+          "operation": "remove profile",
+          "observed": "passed"
+        },
+        {
+          "number": 13,
+          "operation": "recover interrupted preparation/download",
+          "observed": {
+            "preparation": "cancelled-and-will-retry",
+            "subsequentPreparation": "passed",
+            "modTransfer": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true,
+              "originalAggregateQueueBytes": 80138,
+              "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "attemptStarted": "2026-11-24T15:32:21.743408+00:00",
+      "steps": [
+        {
+          "number": 1,
+          "operation": "create profile",
+          "observed": true
+        },
+        {
+          "number": 2,
+          "operation": "version catalogue",
+          "observed": {
+            "source": "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+            "origin": "cache",
+            "versions": 32,
+            "selectedListed": true
+          }
+        },
+        {
+          "number": 3,
+          "operation": "compatible selected version listed",
+          "observed": true
+        },
+        {
+          "number": 4,
+          "operation": "prepare verified game files",
+          "observed": "passed"
+        },
+        {
+          "number": 5,
+          "operation": "install loader",
+          "observed": "neoforge-21.11.48"
+        },
+        {
+          "number": 6,
+          "operation": "required launch libraries",
+          "observed": {
+            "state": "passed",
+            "declaredLaunchFiles": 87
+          }
+        },
+        {
+          "number": 7,
+          "operation": "select managed Java",
+          "observed": {
+            "loader_version": "21.11.48",
+            "java_major": 21
+          }
+        },
+        {
+          "number": 8,
+          "operation": "first actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.56,
+            "heapMiB": 2048,
+            "gameplayVerified": false,
+            "launchIndex": 1,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 9,
+          "operation": "second actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.93,
+            "heapMiB": 3072,
+            "gameplayVerified": false,
+            "launchIndex": 2,
+            "captureSha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+            "visualAssessment": "Minecraft welcome/accessibility screen",
+            "retainedCapture": "neoforge-1.21.11-welcome.png"
+          }
+        },
+        {
+          "number": 10,
+          "operation": "change settings and read them back",
+          "observed": {
+            "state": "passed",
+            "renamed": true,
+            "preset": "economy",
+            "optionsReadBack": {
+              "renderDistance": "6",
+              "simulationDistance": "5",
+              "graphicsMode": "0",
+              "particles": "2",
+              "maxFps": "60",
+              "mipmapLevels": "2"
+            },
+            "memoryReadBack": "3072",
+            "effectiveHeapMiB": 3072
+          }
+        },
+        {
+          "number": 11,
+          "operation": "compatible mod installation and loader log",
+          "observed": {
+            "state": "installed",
+            "slug": "entityculling",
+            "project": "NNAgCjsB",
+            "release": "hBfQAlMs",
+            "version": "1.12.2",
+            "filename": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+            "preflight": {
+              "blocked": false,
+              "conflicts": [],
+              "warnings": [],
+              "required": []
+            },
+            "recovery": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 7533,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true
+            },
+            "transferEvidence": [
+              {
+                "title": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+                "state": "cancelled",
+                "bytes": 7533,
+                "total": 1535395,
+                "resumed": false
+              },
+              {
+                "title": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+                "state": "completed",
+                "bytes": 1535395,
+                "total": 1535395,
+                "resumed": true
+              }
+            ],
+            "files": [
+              {
+                "filename": "entityculling-neoforge-1.12.2-mc1.21.11.jar",
+                "bytes": 1535395,
+                "sha512": "6d14518559275cf2a5a2e003a6b2b75594a97df6ec6b61adf047b490811e52e0c656d7472511478a51383c76437f298d6f4d67ac967181069ace87bf11eab1e5",
+                "modIds": [
+                  "entityculling"
+                ],
+                "version": ""
+              }
+            ],
+            "installedCompatibility": {
+              "blocked": false,
+              "warnings": [],
+              "conflicts": [],
+              "required": []
+            },
+            "loaderLogMentions": {
+              "entityculling": [
+                "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"entityculling-neoforge-1.12.2-mc1.21.11.jar\" [locator: {mods folder locator at $AUDIT_ROOT/instances/$PROFILE/mods}, reader: mod manifest]",
+                "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"TRender-1.0.17-1.21.11-neoforge-SNAPSHOT.jar\" [parent: entityculling-neoforge-1.12.2-mc1.21.11.jar, locator: jarinjar, reader: mod manifest]",
+                "[18:35:07] [ForkJoinPool.commonPool-worker-7/INFO]: Found mod file \"TRansition-1.0.28-1.21.11-neoforge-SNAPSHOT.jar\" [parent: entityculling-neoforge-1.12.2-mc1.21.11.jar, locator: jarinjar, reader: mod manifest]",
+                "\t\tEntityCulling 1.12.2 (entityculling)",
+                " - entityculling (jar(mods/entityculling-neoforge-1.12.2-mc1.21.11.jar))"
+              ]
+            }
+          }
+        },
+        {
+          "number": 12,
+          "operation": "remove profile",
+          "observed": "passed"
+        },
+        {
+          "number": 13,
+          "operation": "recover interrupted preparation/download",
+          "observed": {
+            "preparation": "cancelled-and-will-retry",
+            "subsequentPreparation": "passed",
+            "modTransfer": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 7533,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "retry": "passed",
+              "rangeResumed": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "loader": "quilt",
+      "minecraft": "1.20.1",
+      "attemptStarted": "2026-11-24T15:25:36.105048+00:00",
+      "steps": [
+        {
+          "number": 1,
+          "operation": "create profile",
+          "observed": true
+        },
+        {
+          "number": 2,
+          "operation": "version catalogue",
+          "observed": {
+            "source": "https://meta.quiltmc.org/v3/versions/game",
+            "origin": "cache",
+            "versions": 451,
+            "selectedListed": true
+          }
+        },
+        {
+          "number": 3,
+          "operation": "compatible selected version listed",
+          "observed": true
+        },
+        {
+          "number": 4,
+          "operation": "prepare verified game files",
+          "observed": "passed"
+        },
+        {
+          "number": 5,
+          "operation": "install loader",
+          "observed": "quilt-loader-0.30.2-1.20.1"
+        },
+        {
+          "number": 6,
+          "operation": "required launch libraries",
+          "observed": {
+            "state": "passed",
+            "declaredLaunchFiles": 63
+          }
+        },
+        {
+          "number": 7,
+          "operation": "select managed Java",
+          "observed": {
+            "loader_version": "0.30.2",
+            "java_major": 17
+          }
+        },
+        {
+          "number": 8,
+          "operation": "first actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 28.8,
+            "heapMiB": 2048,
+            "gameplayVerified": false,
+            "launchIndex": 1,
+            "captureSha256": "3cd41581ab33cdb48f1a6d1a7971da194a5a662a356d3abc742876a6efea5569",
+            "visualAssessment": "Minecraft welcome/accessibility screen"
+          }
+        },
+        {
+          "number": 9,
+          "operation": "second actual launch",
+          "observed": {
+            "state": "running-observed",
+            "seconds": 29.05,
+            "heapMiB": 3072,
+            "gameplayVerified": false,
+            "launchIndex": 2,
+            "captureSha256": "d39cd3edcc83f987f7f16c5262c6cef0c53035cf1489330f045a8e41cc374db1",
+            "visualAssessment": "frame-present-not-classified-in-retained-evidence"
+          }
+        },
+        {
+          "number": 10,
+          "operation": "change settings and read them back",
+          "observed": {
+            "state": "passed",
+            "renamed": true,
+            "preset": "economy",
+            "optionsReadBack": {
+              "renderDistance": "6",
+              "simulationDistance": "5",
+              "graphicsMode": "0",
+              "particles": "2",
+              "maxFps": "60",
+              "mipmapLevels": "2"
+            },
+            "memoryReadBack": "3072",
+            "effectiveHeapMiB": 3072
+          }
+        },
+        {
+          "number": 11,
+          "operation": "compatible mod installation and loader log",
+          "observed": {
+            "state": "needs-review",
+            "slug": "qsl",
+            "project": "qvIfYCYJ",
+            "release": "s8dfz9Xa",
+            "version": "7.7.0+0.92.2-1.20.1",
+            "filename": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+            "preflight": {
+              "blocked": false,
+              "conflicts": [],
+              "warnings": [],
+              "required": []
+            },
+            "recovery": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "originalAggregateQueueBytes": 123034,
+              "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window",
+              "rangeResumed": true
+            },
+            "warnings": [
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.37.a. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.38.b. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.15-alpha.19.39.a. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует minecraft >=1.16-rc.3. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_base >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_data_callback >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_entity >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_entity_events >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_lifecycle_events >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_lifecycle_events >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_networking >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_registry >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_registry_entry_attachment >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_resource_loader >=4.0.0-. Не удалось подтвердить соответствие версии по описанию файла.",
+              "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar требует quilt_resource_loader >=6.3.0+1.20.1. Не удалось подтвердить соответствие версии по описанию файла."
+            ],
+            "transferEvidence": [
+              {
+                "title": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+                "state": "cancelled",
+                "bytes": 16384,
+                "total": 2755789,
+                "resumed": false
+              },
+              {
+                "title": "qfapi-7.7.0_qsl-6.3.0_fapi-0.92.2_mc-1.20.1.jar",
+                "state": "completed",
+                "bytes": 2755789,
+                "total": 2755789,
+                "resumed": true
+              }
+            ]
+          }
+        },
+        {
+          "number": 12,
+          "operation": "remove profile",
+          "observed": "passed"
+        },
+        {
+          "number": 13,
+          "operation": "recover interrupted preparation/download",
+          "observed": {
+            "preparation": "cancelled-and-will-retry",
+            "subsequentPreparation": "passed",
+            "modTransfer": {
+              "firstAttempt": "cancelled-during-download",
+              "receivedBytes": 16384,
+              "partialFilesPreserved": 1,
+              "publishedFilesAfterCancel": 0,
+              "originalAggregateQueueBytes": 123034,
+              "measurementCorrection": "Earlier harness counted previous completed tasks; corrected from the matching cancelled artifact task in this attempt window",
+              "rangeResumed": true
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "unclosedRequirement": {
+    "loader": "quilt",
+    "step": 11,
+    "reason": "Downloaded QSL requires explicit compatibility review for unsupported expression grammar; no automatic acknowledgement or mod publication."
+  }
+}

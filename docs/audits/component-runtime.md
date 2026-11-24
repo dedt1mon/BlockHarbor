@@ -1,93 +1,131 @@
 # Runtime, installation and transfer audit
 
-Audit date: 2026-11-24. Base: `9a8b93c0ffa98c44c6340841c3db6a49e78dcfb1` (2.6.8).
-These changes do not change the release version or publish a release.
+Audit date: **2026-11-24**. Original comparison base: `9a8b93c0ffa98c44c6340841c3db6a49e78dcfb1`, release version **2.6.8**. Actual runs used the **modified shared working tree**, not that unchanged base. No version change or production release is part of this component work. [Source provenance](evidence/runtime/source-provenance.json) records final file hashes captured **after** the attempts, with explicit timing and retained-checkpoint comparisons; it is not presented as a per-launch source snapshot.
 
-## Confirmed defects and changes
+This report distinguishes real publisher downloads, verified installed artifacts, running Java processes, visible Minecraft screens, and gameplay. They are separate observations. The retained [live matrix](evidence/runtime/live-matrix.json) contains **32 completed attempts across 17 loader/game-version pairs**, including earlier failures and later recovery; [catalog evidence](evidence/runtime/latest-supported-metadata.json) records the actual current release and loader metadata.
 
-| Defect | Root cause | Implemented correction |
+## Confirmed defects and implemented changes
+
+| Defect and evidence | Root cause | Correction |
 | --- | --- | --- |
-| Disk-full and access errors were reported as broken internet and retried | `TransferManager` caught every `OSError` in the network retry branch | Shared storage diagnostics distinguish full disk/quota, permission/read-only storage, path length and file-descriptor exhaustion; these errors do not enter network retries |
-| A server could keep a transfer alive indefinitely by trickling bytes | Only socket timeout and maximum size were bounded | One 30-minute transfer budget spans retries; `read1` permits checks between received chunks; cancellation and partial-file recovery remain available |
-| Downloading an already correct destination required network again | Only partial files were considered reusable | All declared sizes/hashes are checked before reusing the destination, with no network request when it is correct |
-| One malformed saved transfer erased the entire recovered queue | Exception handling surrounded the whole record loop | Each saved record is validated independently; bad records cannot discard unrelated resumable tasks |
-| Same-size corruption of a game/client/library JAR escaped pre-launch validation | Readiness checked size alone | Declared SHA-1/SHA-256 is checked using the existing bounded cache keyed by size, mtime and ctime; changed corrupt files trigger repair; unchanged files are not rehashed |
-| Java verification could overlook same-size changes with a restored mtime | Durable Java index retained only size and mtime | ctime joins the verification stamp |
-| Thousands of game objects caused repeated HTTPS handshakes | The preparation adapter ignored launcher-lib's supplied session and used a new `urlopen` per object | A separate bounded session per download worker reuses connections to checksum-pinned Mojang asset/runtime hosts, preserves proxy/TLS verification and closes with the job |
-| A hard process interruption could leave private scratch downloads indefinitely | Only normal stack unwinding removed scratch files | The next installation, under its exclusive install lock, removes only the exact private temporary-file naming patterns; published files and unrelated files are preserved |
-| Java and loader constraints in mod metadata were silently ignored | All platform IDs were excluded from dependency checks | Known incompatible platform versions block installation; unknown declared bounds require explicit review; platform dependencies are not sent to a mod search |
-| Dedicated-server Fabric/Quilt files were presented as merely unreadable metadata | Environment-specific descriptors returned an empty dependency set | Explicit `fabric.mod.json` `environment=server` and Quilt `minecraft.environment=dedicated_server` block client installation |
+| A real Windows CI run hung for seven minutes in destination validation | `Path.resolve()` expanded a short `RUNNER~1` alias in the root, while the destination retained its short spelling. A lexical parent loop could never reach the resolved root and repeated the drive root forever | Finite ancestor traversal, canonical ancestor comparison, and symlink/junction rejection. Native Windows short-path regression has an eight-second subprocess bound |
+| Parent cancellation did not cancel the active catalog transfer | The transfer manager rebound its own cancellation scope and lost the enclosing operation | The parent scope is captured before rebinding; its callback cancels only the owned task and aborts its response. The manager remains usable for a subsequent request |
+| Windows stalled-body cancellation still waited in `SocketIO.recv_into` after `shutdown` | `HTTPResponse` retained a `makefile()` reference. Python's socket wrapper was logically closed while its native handle remained open | Abort invalidates and closes the owned Python socket through `_real_close()`, after shutdown. No bare OS descriptor close is used. A regression verifies that a later stream close cannot close an unrelated reused socket. Native verification is tracked separately below |
+| Same-size corruption with restored mtime could evade cached hashes on Windows | `st_ctime` is creation time on Windows; a first attempted `FILE_BASIC_INFO.ChangeTime` fix also collided in actual rapid-write CI | The shared file stamp reads a supported file USN plus file-reference identity. Unsupported filesystems/API responses use a real SHA-256 fingerprint. Typed 64-bit Windows handles and bounded V2/V3 record parsing are used; no journal is created or changed |
+| Client/library corruption escaped readiness checks | Presence and matching file size were treated as readiness | Declared hashes are verified with the common file stamp. Corruption triggers repair, while correct unchanged files reuse the verification cache |
+| Java and content-icon caches used incompatible or weak stamps | Java retained size/mtime only; several callers constructed raw-stat tuples | Managed/legacy Java cache and Store content icons use the common stamp. BuildCare caller migration is covered by the main audit |
+| Disk-full, permissions and path errors were retried as network failures | Transfer code caught broad `OSError` in its retry branch | Specific storage diagnostics separate disk/quota, permissions/read-only storage, long paths and descriptor exhaustion. A typed `TransferNetworkError` identifies exhausted transport/HTTP failures for narrowly allowed fallback |
+| A trickling peer could keep a download alive indefinitely | Per-read socket timeout did not bound total receiving time | Transfers have one 30-minute deadline across attempts; preparation downloads have a 20-minute receive budget. `read1` allows cancellation/deadline checks between received chunks for both urllib and requests |
+| Correct final files were downloaded again; one bad queue record discarded unrelated recovery state | Reuse considered only partial files; queue parsing had an outer exception handler | Declared hashes/size are checked before offline reuse. Saved queue records are validated independently |
+| Asset/runtime preparation repeatedly established HTTPS connections | The adapter ignored the supplied session | Bounded sessions per worker reuse connections only for checksum-pinned Mojang asset/runtime hosts, preserve system TLS/proxy settings, and close with the job |
+| Interrupted preparation left private scratch downloads | Cleanup depended on normal stack unwinding | The next exclusive installation removes only exact private temporary-file patterns inside the cache; unrelated and published files remain |
+| Actual Forge 1.18.2 installation failed with `FileExistsError` at `natives/META-INF` | Parallel JAR extraction raced between an existence check and directory creation in the upstream library | Only native extraction is serialized with a cancellation-aware scoped lock; downloads remain parallel. An actual parallel ZIP regression reproduces the old race |
+| Forge's Java `DOWNLOAD_MOJMAPS` processor failed behind the execution environment's proxy | The simple mapping download occurred inside Java rather than the launcher's verified transport | A narrow adapter recognizes only two known main classes and the exact client mapping-download argument shape. It uses the official base manifest's HTTPS URL, SHA-1 and size, checks the exact Maven target path, and publishes through the existing verified downloader. Other processor tasks still run Java |
+| Mod Java/loader constraints were skipped | Platform dependency IDs were excluded from checks | Known incompatible bounds block; unknown declared bounds require review. Dedicated-server Fabric/Quilt descriptors block client installation |
 
-The scoped NeoForge primary/alternate transport and authoritative-checksum mirror rules from 2.6.8 remain in place. No TLS verification, checksum validation or existing loader support was disabled.
+The mapping adapter was corrected after actual Forge installer metadata exposed timestamped Maven coordinates such as `1.20.1-20230612.114412`. Both the ordinary and timestamped official forms are checked; arbitrary paths remain rejected. The initial failed guard is retained in the matrix. SHA-1 is normalized after validating its shape. The adapter does not produce transformed JARs, skip arbitrary processors, or trust a mirror without an authoritative checksum.
 
-`compatibility.installation_profile(store, pid)` returns a copy of a stored profile, enriched with loader and managed-Java versions only when the local install marker, base manifest and installed manifest agree. It does not change the database or execute Java paths from imported metadata. Quilt's version is deliberately not treated as its exported Fabric compatibility version.
+`compatibility.installation_profile(store, pid)` returns a copy, enriched only when the local install marker, cache location, base manifest and installed manifest agree. It neither changes the Store schema nor executes imported Java paths. A custom Java path leaves its major version unknown. Quilt's loader version is not substituted for its exported Fabric compatibility version. Physical JAR `environment=server` is distinct from Modrinth's new `server_only` label, which can support singleplayer.
 
-## Automated runtime checks
+The 2.6.8 NeoForge primary/alternate transport and official-checksum mirror rules remain in place. TLS verification and artifact integrity checks remain enabled.
 
-The following focused suites were run with the repository's pinned dependencies in Python 3.12.14:
+## Automated regression evidence
 
-| Suite | Passed | Failed | Skipped |
-| --- | ---: | ---: | ---: |
-| `test_game*.py` | 34 | 0 | 0 |
-| `test_direct.py` | 9 | 0 | 0 |
-| `test_loader*.py` | 36 | 0 | 0 |
-| `test_preparation.py` | 18 | 0 | 0 |
-| `test_asset_pooling.py` | 2 | 0 | 0 |
-| `test_transfer*.py` | 22 | 0 | 0 |
-| `test_compatibility.py` | 6 | 0 | 0 |
-| `test_platform_compatibility.py` | 7 | 0 | 0 |
-| **Focused total** | **134** | **0** | **0** |
+The most recent focused local reruns after the native socket-close change used Python 3.12.14 and the repository dependencies:
 
-The transfer integration fixture uses an actual local HTTP socket: the server drops the connection after 4096 bytes, and the next request supplies both `Range: bytes=4096-` and the original `If-Range` validator before checksum-verified publication. Another actual HTTP/1.1 fixture confirms that two requests reuse one TCP connection. These tests do not claim to simulate an arbitrary public CDN, Windows kernel, or graphics driver.
+| Suites | Run | Passed | Skipped | Failed |
+| --- | ---: | ---: | ---: | ---: |
+| `test_transfer*.py` | 26 | 25 | 1 | 0 |
+| `test_lifecycle.py`, `test_preparation*.py`, `test_asset_pooling.py` | 39 | 39 | 0 | 0 |
+| **These two reruns** | **65** | **64** | **1** | **0** |
 
-Additional regressions cover specific storage failures, TLS verification failure, a trickling response, hash-corrupt cache files, corrupted queue records, JAR repair after same-size corruption, confirmed/unknown Java and loader bounds, server-only descriptors, and installation markers that disagree with the selected build.
+The local skip requires actual Windows short-path aliases. Earlier focused passes additionally covered game/loader compatibility, direct launch, platform metadata, native extraction, processor mapping downloads and file stamps; the main audit records final whole-suite counts rather than adding overlapping runs together.
 
-## Live external-service observations
+Important tests use real local HTTP sockets: a disconnect followed by `Range` and `If-Range` recovery; a blocked body read cancelled by its parent; a slow trickle bounded by a deadline; and HTTP/1.1 connection reuse. Fault injection covers full disk, access denial, TLS verification failure, altered hashes and malformed queue records. These are meaningful mechanism tests, not evidence of arbitrary public CDN reliability or gameplay.
 
-Public publisher endpoints were queried from this execution environment without account credentials. Availability varied between attempts:
+Native Windows CI checkpoint 4 ran 668 tests and confirmed the **USN strategy** detects same-size, restored-mtime modifications. It also exposed the `recv_into` cancellation failure, which motivated the owned-socket close correction. **Checkpoint 6's actual Windows Python suite passed**, including the original stalled-body cancellation gate and the new socket ownership regression; its portable/NSIS builds also passed. Checkpoint 7 passed native cancellation again; its separate multi-session fixture failed because a Windows file was concurrently open, with follow-up owned by the main audit. Final whole-suite/package counts and any remaining intermittent failure belong in the main audit report.
 
-| Service | Observation |
-| --- | --- |
-| Mojang version manifest | HTTP 200; current manifest reported release `26.3` and snapshot `26.4-snapshot-10` |
-| Fabric | Native `_fetch_provider` succeeded: 537 game versions; stable loader `0.20.1` |
-| Quilt | Native `_fetch_provider` succeeded: 451 game versions; stable loader `0.30.2` |
-| Forge | Plain urllib probe first returned HTTP 403; the launcher's later `_fetch_provider` succeeded with 63 game versions |
-| NeoForge | Plain urllib probe returned HTTP 200; the later bounded quick catalog probe timed out at 5 seconds |
+## Actual current versions and network behavior
 
-The contradictory availability observations are preserved rather than replaced with a blanket “all services are working” claim. The bundled/cache fallback is necessary in such conditions.
+The live Mojang manifest reported release **26.3** and snapshot **26.4-snapshot-10**. All four live loader catalogs listed 26.3 as supported. Preferred Fabric/Quilt loaders were 0.20.1/0.30.2; current Forge metadata included 26.3-66.1.9; NeoForge metadata included 26.3.0.117. A successful NeoForge installation used the build selected by the production path, 26.3.0.113. These exact observations are retained in [latest-supported-metadata.json](evidence/runtime/latest-supported-metadata.json).
 
-## Actual installation evidence
+Availability varied: an early plain urllib Forge request returned 403, a NeoForge quick probe hit its five-second bound, and later production catalog requests succeeded. Forge 26.3's first preparation failed downloading from `launchermeta.mojang.com`; one bounded repeat completed installation and repeat preparation. No blanket service-availability claim is made.
 
-Real publisher files are being installed in an isolated scratch data directory with Cyrillic/spaces in instance names. Only temporary `BHAuditPlayer` local identity is used. No Microsoft session or user library is involved.
+## Real installation and graphics matrix
 
-| Configuration | First installation | Repeat preparation | Java | Actual launch observation | Removal |
-| --- | --- | --- | --- | --- | --- |
-| Vanilla 1.20.1 | Passed, after an actual interrupted first download | Passed, 1.931 s | Managed Java 17 downloaded automatically | Two real Java processes reached the render thread/LWJGL 3.3.1 and exited 255 in the initial environment without a display; successful graphics/gameplay not verified | Passed |
-| Fabric 1.20.1 / 0.20.1 | Passed | Passed, 2.569 s | Managed Java 17 | Two real Java processes exited 255 in the initial environment without a display; successful graphics/gameplay not verified | Passed |
-| Quilt 1.20.1 | In progress at this checkpoint | Pending | Pending | Pending | Pending |
-| Forge 1.20.1 | Pending at this checkpoint | Pending | Pending | Pending | Pending |
+All cases use isolated data, real publisher artifacts and a temporary local `BHAuditPlayer` identity. No Microsoft credentials are used. These are Linux launches. Java 17, 21 and 25 were selected and downloaded from Mojang runtime metadata; system Java was not assumed to satisfy all cases.
 
-This table is a checkpoint and must be updated before treating the component report as final. These runs do not establish clean Windows installation, all supported version combinations, or gameplay with arbitrary mods.
+| Configuration | Install / repeat / delete | Java | Actual startup evidence |
+| --- | --- | --- | --- |
+| Vanilla 1.18.2 | Passed / passed / passed | 17 | Two real processes reached LWJGL/texture initialization; this early run did not capture a PNG |
+| Vanilla 1.20.1 | Passed / passed / passed | 17 | Initial no-display exits 255; later real Welcome/Accessibility frame |
+| Vanilla 1.21.11 | Passed / passed / passed | 21 | Welcome/Accessibility frame, settings change and second launch completed |
+| Vanilla 26.3 | Passed / passed / passed | 25 | Actual graphics-backend error; no usable GLX/Vulkan in this environment |
+| Fabric 1.18.2 / 0.20.1 | Passed / passed / passed | 17 | Two real processes reached renderer/texture initialization; no PNG in this early run |
+| Fabric 1.20.1 / 0.20.1 | Passed / passed / passed | 17 | Real Welcome frame; initial no-display failures retained |
+| Fabric 1.21.11 / 0.20.1 | Passed / passed / passed | 21 | Welcome frame after actual FerriteCore install and settings change; loader log lists FerriteCore 8.2.0 |
+| Fabric 26.3 / 0.20.1 | Passed / passed / passed | 25 | Retained real GLX/Vulkan error dialog |
+| Forge 1.18.2 / 40.3.0 | Passed / passed / passed after fixes | 17 | Retained real main menu with Forge version and 2 mods loaded |
+| Forge 1.20.1 / 47.4.28 | Passed / passed / passed after fixes | 17 | Real Welcome frame after FerriteCore 6.0.1 installation and settings; Forge reports the actual mod JAR |
+| Forge 26.3 / 66.1.9 | Passed / passed / passed after one retry | 25 | Two actual starts report GLX/Vulkan backend failure; initial metadata-download failure is retained |
+| NeoForge 1.21.1 / 21.1.267 | Passed / passed / passed after retry | 21 | Real Welcome frame; loader initialization in log |
+| NeoForge 1.21.11 / 21.11.48 | Passed / passed / passed | 21 | Retained real Welcome frame after EntityCulling 1.12.2 installation and settings; loader log lists the mod |
+| NeoForge 26.3 / 26.3.0.113 | Passed / passed / passed | 25 | Real NeoForge error dialog: failed window creation / GLX visual |
+| Quilt 1.18.2 / 0.30.2 | Passed / passed / passed | 17 | Two real processes reached renderer/texture initialization; no PNG in this early run |
+| Quilt 1.20.1 / 0.30.2 | Passed / passed / passed | 17 | Real Welcome frame and settings readback; QSL was safely held for compatibility review |
+| Quilt 26.3 / 0.30.2 | Passed / passed / passed | 25 | Actual GLX/Vulkan backend error |
 
-### Measured download observation
+The retained [screenshots manifest](evidence/runtime/screenshots.json) ties three original screenshots to their attempt timestamps and SHA-256. Equal Welcome screens from different loaders can be byte-identical; loader identity is established by the installed manifest and loader log, not the logo alone. Earlier raw `running-observed` records are preserved, with a separate graphics assessment from logs/PNG. An alive Java process displaying an error dialog is not a successful graphical launch.
 
-Before connection reuse, the initial live preparation had downloaded 625 unique asset objects after approximately 487 seconds, including earlier library work. That run was actually interrupted. After enabling reuse and preserving those valid objects, the remaining 2952 unique objects (530,494,545 bytes) completed in 51.2 seconds in the same environment. This is one network observation, not a universal speed multiplier; object sets, cached bytes and phases differ. The deterministic connection-reuse test independently confirms the intended mechanism.
+Later Java installer experiments use an explicit existing credential-free proxy and the existing OS Java truststore **only in the isolated test environment**, retaining TLS verification. The whole NeoForge installer still runs in Java; no product proxy/truststore modification was introduced to make a sandbox test pass. The initial environment had no display, and isolated Xorg later supplied a software display for versions that it can render. Audio, account services, multiplayer and world gameplay remain unverified.
 
-## Reproducible live matrix
+## Thirteen lifecycle steps and real content
 
-`tools/smoke_loader_matrix.py` runs real creation, installation, repeat preparation and deletion in a new or explicitly marked audit directory. `--launch` additionally starts each game twice and observes its process for a bounded time. `--interrupt-first` cancels preparation through the production cancellation scope, then retries it. Per-case preparation logs, game logs and machine-readable results are saved inside that isolated directory.
+The opt-in lifecycle mode checks profile creation, production version catalogs and selected-version presence; downloads/loader/libraries and declared artifact validation; manifest-selected Java; two real starts; actual profile rename and economy settings through `Experience`/`PerformanceProfiles`; real Modrinth planning, transfer and publication; profile removal; and interruption recovery. [Lifecycle coverage](evidence/runtime/lifecycle-coverage.json) maps the actual observations to all thirteen requested steps for each loader, including the unclosed Quilt mod step.
+
+Completed extended cases:
+
+| Case | Actual settings readback | Mod and recovery | Second-start evidence |
+| --- | --- | --- | --- |
+| Vanilla 1.21.11 | Rename, distances 6/5, economy graphics, 60 FPS cap and 3072 MiB heap | Mods not applicable; real preparation cancelled at one second and recovered | Actual Welcome screen with the changed heap |
+| Fabric 1.21.11 | Same production settings/readback | FerriteCore 8.2.0-fabric from Modrinth; cancelled after 16,384 received bytes, zero JARs published, partial preserved, real range resume succeeded; SHA-512 matched, local compatibility had no conflicts/warnings | Loader log lists `ferritecore 8.2.0`; actual Welcome screen |
+| Forge 1.20.1 | Same production settings/readback | FerriteCore 6.0.1; cancelled after 16,384 bytes, zero JARs published, actual range resume and hash verification passed | Forge log reports the mod JAR; Welcome frame after installation |
+| NeoForge 1.21.11 | Same production settings/readback | EntityCulling 1.12.2 (1,535,395 bytes): cancelled after 7,533 bytes, zero JARs published, actual range resume passed, SHA-512 and local metadata verified with no warnings | NeoForge lists `EntityCulling 1.12.2`; retained actual Welcome frame after installation |
+| Quilt 1.20.1 | Same production settings/readback | QSL cancelled after 16,384 bytes, range recovery completed, then metadata required review; it was not installed | Second clean-game start completed. Successful mod installation/load is **not verified** |
+
+No unknown-bound warning is automatically acknowledged by the harness. Actual published releases and SHA-512, partial-byte counts, post-cancel publication count, retry result and loader-log mentions are retained in the machine-readable matrix. A log mention is not presented as proof of a mod's complete gameplay behavior. One harness measurement initially took the maximum byte count from the whole saved queue; the corrected harness scopes metrics to the current operation. Existing evidence explicitly records the correction from matching artifact/time-specific cancelled tasks while retaining the original reported count.
+
+**Known compatibility limitation:** the conservative version matcher does not yet implement every Maven/SemVer qualifier. Actual FerriteCore metadata declared NeoForge `[21.11.37-beta,)`; QSL's bundled modules declared snapshot/prerelease/build-metadata bounds. These produce explicit review warnings, despite a later numeric release likely satisfying the author's intent. The audit does not silently accept them or expand comparison semantics without separate validation. The actual warning strings are in the matrix.
+
+The initial NeoForge FerriteCore attempt recovered its actual transfer after 1,378 bytes, then stopped at review without publication; the later EntityCulling attempt passed. A bounded Quilt alternative inspection did not produce a complete warning-free dependency plan: candidates either declared unsupported bounds, an unconfirmed Fabric compatibility version, or dependencies on QSL/Fabric API. No confirmation was fabricated. For Quilt, requirement 11 (a successfully installed and loaded compatible mod) remains an explicit acceptance gap; the other lifecycle operations above were exercised.
+
+### Measured asset recovery
+
+The initial Vanilla 1.20.1 preparation downloaded 625 unique asset objects after approximately 487 seconds, including earlier libraries. It was actually interrupted with exit code 130. With connection reuse and existing valid objects preserved, the remaining 2952 unique objects, **530,494,545 bytes**, completed in **51.2 seconds**. This is one environment and different preparation phases/cache contents, not a universal speed ratio. The independent HTTP/1.1 fixture confirms the connection-reuse mechanism.
+
+## Reproducing the opt-in checks
+
+`tools/smoke_loader_matrix.py` refuses an existing unmarked data root, archives earlier attempts on rerun, only terminates its own game process, and never borrows account credentials. Run against an isolated directory:
 
 ```powershell
 python tools/smoke_loader_matrix.py --root C:/AI/BlockHarbor-runtime-audit --launch
 ```
 
-Default cases include two game versions per loader: Vanilla/Fabric/Quilt 1.20.1 and 26.3; Forge 1.20.1 and 1.21.11; NeoForge 1.21.1 and 26.3. `--case loader:version` selects a smaller matrix. The tool refuses an existing unmarked data directory, never borrows credentials, and only terminates the Java process it created. An observed running process is explicitly **not** reported as verified gameplay.
+For real settings, a small compatible mod, cancellation and retry:
 
-## Vendor semantics checked against primary documentation
+```powershell
+python tools/smoke_loader_matrix.py --root C:/AI/BlockHarbor-runtime-audit --case fabric:1.21.11 --launch --exercise-lifecycle --interrupt-first 1 --mod-project fabric:ferrite-core --cancel-first-mod
+```
 
-- [Fabric dependency and environment specification](https://wiki.fabricmc.net/documentation:fabric_mod_json_spec): Fabric caret ranges have no npm-style special case for major zero. Existing `^0.3` matching `0.4.2` is preserved and tested.
-- [Quilt metadata specification](https://github.com/QuiltMC/rfcs/blob/main/specification/0002-quilt.mod.json.md): dedicated-server environment is explicitly `minecraft.environment=dedicated_server`.
+`--case loader:version` is repeatable. `--capture-display` is opt-in and restricted to an isolated Linux test display; do not use it on a personal desktop. A manually visible Windows run is still needed for native desktop acceptance. Per-case JSON, preparation/game logs and optional screenshots remain under the isolated audit root; only sanitized result summaries and the representative screenshots are retained in the repository.
 
-## Remaining release gates
+## Primary technical references
 
-Actual Windows 11 x64 first-launch/gameplay, native display scaling, several real versions per loader, multiplayer, and end-to-end mod combinations still require their corresponding real environments. A passing unit suite, prepared game files, or an alive Java process does not close those gates. The overall report and CI results determine the final aggregate counts and readiness; no release is authorized by this component audit.
+- [Fabric dependency/environment specification](https://wiki.fabricmc.net/documentation:fabric_mod_json_spec): Fabric caret ranges have no npm-style major-zero special case; `^0.3` matching `0.4.2` is preserved and tested.
+- [Quilt metadata specification](https://github.com/QuiltMC/rfcs/blob/main/specification/0002-quilt.mod.json.md): dedicated-server environment is `minecraft.environment=dedicated_server`.
+- [Windows per-file USN query](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_read_file_usn_data) and [input record](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-read_file_usn_data): read-only native change evidence, with content-fingerprint fallback.
+- [CPython socket ownership](https://github.com/python/cpython/blob/3.13/Lib/socket.py) and [native close implementation](https://github.com/python/cpython/blob/3.13/Modules/socketmodule.c): deferred `makefile()` ownership and invalidating the owned descriptor before closing it.
+
+## Remaining acceptance limits
+
+The real matrix is complete for the selected cases. Remaining acceptance gaps are a warning-free Quilt mod installation/load, the broader unsupported version-expression grammar, actual clean Windows 11 game launch, native DPI, physical audio, multiplayer, authentication and world gameplay. Current 26.3 graphics remain blocked by this execution environment even though all five loaders installed and passed repeat preparation. These limits must remain explicit in release review; this component report does not authorize a release.

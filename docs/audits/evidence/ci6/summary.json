@@ -1,0 +1,50 @@
+{
+  "sourceHead": "d0f5dfdd011d16b31217e254a847b35102b53623",
+  "run": 45423970560,
+  "url": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45423970560",
+  "linux": {
+    "python": {
+      "tests": 669,
+      "passed": 668,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 43.535
+    },
+    "uiMatrix": {
+      "passed": 24,
+      "failed": 0,
+      "coverage": "production scripts with API fixtures; emulated viewport/deviceScaleFactor"
+    },
+    "nodeOrdering": 16,
+    "worker": 24,
+    "sharedControlCases": 3
+  },
+  "windows": {
+    "python": {
+      "tests": 669,
+      "passed": 668,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 169.438
+    },
+    "uiMatrix": {
+      "passed": 24,
+      "failed": 0
+    },
+    "package": [
+      "portable build",
+      "NSIS install in Unicode path",
+      "upgrade preserves unrelated file",
+      "packaged HTTP runtime and authentication",
+      "uninstall preserves unrelated file"
+    ]
+  },
+  "manualReview": {
+    "acceptedAsFinalUI": false,
+    "finding": "The 640x360 CSS batch list collapsed below a readable row despite automated bounds checks passing. Retained image is historical failure evidence, not the final UI.",
+    "image": "batch-list-collapsed.png"
+  },
+  "releasePublished": false
+}

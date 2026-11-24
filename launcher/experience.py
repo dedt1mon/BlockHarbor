@@ -28,7 +28,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
     JOBS = set()
 
     def __init__(self, store):
@@ -43,7 +43,19 @@ class Experience:
                 CREATE TABLE IF NOT EXISTS wardrobe(id TEXT PRIMARY KEY, name TEXT NOT NULL, digest TEXT NOT NULL, model TEXT NOT NULL, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY, created REAL NOT NULL, message TEXT NOT NULL, level TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS gallery_cache(key TEXT PRIMARY KEY, image TEXT NOT NULL, checksum TEXT NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS notification_events(event_key TEXT PRIMARY KEY, created REAL NOT NULL);
             """)
+            # Several launcher windows may open the same pre-migration database.
+            # Serialize the inspection and ALTER; never reset existing history.
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(notifications)")}
+            if "is_read" not in columns:
+                db.execute("ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0")
+            # Keep IDs monotonic after Clear history so a delayed acknowledgement
+            # cannot mark a newly created, reused SQLite rowid as read.
+            db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('notificationSequence','0')")
+            largest = db.execute("SELECT COALESCE(MAX(id),0) FROM notifications").fetchone()[0]
+            db.execute("UPDATE settings SET value=CAST(MAX(CAST(value AS INTEGER),?) AS TEXT) WHERE key='notificationSequence'", (largest,))
 
     def metadata(self):
         with self.store.connection() as db:
@@ -57,18 +69,53 @@ class Experience:
     def state(self, pid=None):
         with self.store.connection() as db:
             wardrobe = [dict(row) for row in db.execute("SELECT * FROM wardrobe ORDER BY created DESC LIMIT 80")]
-        return {"details": self.metadata(), "preferences": self.preferences(), "wardrobe": wardrobe}
+        return {"details": self.metadata(), "preferences": self.preferences(), "wardrobe": wardrobe,
+                "notificationUnread": self.notification_unread()}
 
-    def notify(self, message, level="info"):
+    def notification_unread(self):
+        with self.store.connection() as db:
+            return db.execute("SELECT COUNT(*) FROM notifications WHERE is_read=0").fetchone()[0]
+
+    def notifications(self):
+        with self.store.connection() as db:
+            rows = db.execute("SELECT id,created,message,level,is_read FROM notifications ORDER BY id DESC LIMIT 200").fetchall()
+        items = [{"id": row["id"], "created": row["created"], "message": row["message"],
+                  "level": row["level"], "read": bool(row["is_read"])} for row in rows]
+        return {"items": items, "unread": sum(not item["read"] for item in items),
+                "lastId": items[0]["id"] if items else 0}
+
+    def read_notifications(self, through_id):
+        if type(through_id) is not int or not 0 <= through_id <= 2**63 - 1:
+            raise ValueError("Неизвестная отметка прочтения уведомлений.")
+        with self.store.connection() as db:
+            db.execute("UPDATE notifications SET is_read=1 WHERE id<=?", (through_id,))
+            row = db.execute("SELECT COALESCE(SUM(is_read=0),0) AS unread,COALESCE(MAX(id),0) AS lastId FROM notifications").fetchone()
+        return {"ok": True, "unread": row["unread"], "lastId": row["lastId"]}
+
+    def notify(self, message, level="info", *, event_key=None, created=None):
         message = redact(str(message), self.store.root)[:1000]
         if not message:
-            return
+            return False
+        if event_key is not None and (not isinstance(event_key, str) or not 1 <= len(event_key) <= 240):
+            raise ValueError("Неизвестный ключ уведомления.")
+        moment = time.time()
+        if created is not None and (type(created) not in (int, float) or not 0 < created <= moment + 300):
+            raise ValueError("Некорректное время уведомления.")
         with self.store.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if event_key is not None:
+                inserted = db.execute("INSERT OR IGNORE INTO notification_events(event_key,created) VALUES(?,?)", (event_key, moment))
+                if not inserted.rowcount:
+                    return False
             last = db.execute("SELECT message,created FROM notifications ORDER BY id DESC LIMIT 1").fetchone()
-            if last and last["message"] == message and time.time() - last["created"] < 4:
-                return
-            db.execute("INSERT INTO notifications(created,message,level) VALUES(?,?,?)", (time.time(), message, level if level in ("info", "success", "error") else "info"))
+            if event_key is None and last and last["message"] == message and moment - last["created"] < 4:
+                return False
+            db.execute("UPDATE settings SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='notificationSequence'")
+            sequence = int(db.execute("SELECT value FROM settings WHERE key='notificationSequence'").fetchone()[0])
+            db.execute("INSERT INTO notifications(id,created,message,level,is_read) VALUES(?,?,?,?,0)",
+                       (sequence, created if created is not None else moment, message, level if level in ("info", "success", "error") else "info"))
             db.execute("DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT 200)")
+        return True
 
     def media(self, digest):
         if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
@@ -497,8 +544,9 @@ class Experience:
         if action == "experienceRestoreScreenshots":
             return self.restore_screenshots(p["id"], p.get("batch"))
         if action == "experienceNotifications":
-            with self.store.connection() as db:
-                return {"items": [dict(row) for row in db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT 200")]}
+            return self.notifications()
+        if action == "experienceReadNotifications":
+            return self.read_notifications(p.get("throughId"))
         if action == "experienceClearNotifications":
             with self.store.connection() as db:
                 db.execute("DELETE FROM notifications")

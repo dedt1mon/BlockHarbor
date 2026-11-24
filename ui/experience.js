@@ -5,6 +5,7 @@
   let diagnosticSession = null;
   const galleries = new Map();
   let galleryRequest = 0;
+  let notificationRequest = 0;
   const query = (action, p = {}) => api("/api/feature?" + new URLSearchParams({action, ...p}));
   const date = (v) => v ? new Date(v * 1000).toLocaleString("ru-RU", {dateStyle:"short",timeStyle:"short"}) : "—";
   const media = (digest) => /^[a-f0-9]{64}$/.test(digest || "") ? "/api/media/" + digest + ".png" : "";
@@ -18,6 +19,49 @@
     const p = state.experience?.preferences || {};
     document.documentElement.style.fontSize = (15 * (p.scale || 100) / 100) + "px";
     document.body.classList.toggle("reduced-motion", Boolean(p.reducedMotion));
+  }
+  function observeNotifications(value) {
+    if (!Number.isFinite(value)) return;
+    const unread = Math.max(0, Math.trunc(value));
+    const bell = document.querySelector(".notification-bell");
+    if (bell) {
+      bell.querySelector(".notification-dot").hidden = unread === 0;
+      const label = "История уведомлений" + (unread ? " · непрочитанных: " + unread : "");
+      bell.setAttribute("aria-label", label);
+      bell.title = label;
+    }
+    if (state) {
+      state.notificationUnread = unread;
+      if (state.experience) state.experience.notificationUnread = unread;
+    }
+    const refresh = document.querySelector("[data-notifications-refresh]");
+    if (refresh) refresh.hidden = unread === 0;
+  }
+  async function notifications() {
+    const request = ++notificationRequest;
+    modal("История уведомлений", '<section class="notification-panel"><p role="status">Загружаем уведомления…</p></section>');
+    const host = document.querySelector(".notification-panel");
+    const current = () => request === notificationRequest && host.isConnected && $("#dialog").open;
+    const data = await query("experienceNotifications");
+    if (!current()) return;
+    const items = data.items || [];
+    host.innerHTML = `<div class="notification-history" aria-label="Уведомления">${items.length ? items.map(n => `<article class="notification-item ${esc(n.level)}${n.read ? "" : " unread"}"><div class="notification-heading"><time datetime="${new Date(n.created * 1000).toISOString()}">${date(n.created)}</time>${n.read ? "" : '<span class="notification-new">Новое</span>'}</div><p>${esc(n.message)}</p></article>`).join("") : '<p class="note">История пока пуста.</p>'}</div><div class="dialog-actions"><button class="btn" type="button" data-notifications-refresh hidden>${ic("refresh")}Показать новые</button>${expButton("clearNotifications", "Очистить историю", "trash", items.length ? "" : "disabled")}</div><p class="notification-read-error" role="status" hidden></p>`;
+    host.querySelector("[data-notifications-refresh]").onclick = () => notifications().catch(e => notice(e.message, true));
+    observeNotifications(data.unread);
+    if (data.lastId) {
+      try {
+        // Only the snapshot actually rendered above is acknowledged. A newer server
+        // event arriving in parallel stays unread and keeps the bell indicator.
+        const read = await act("experienceReadNotifications", {throughId: data.lastId});
+        observeNotifications(read.unread);
+      } catch (error) {
+        if (current()) {
+          const message = host.querySelector(".notification-read-error");
+          message.hidden = false;
+          message.textContent = "Не удалось сохранить прочтение: " + error.message;
+        }
+      }
+    }
   }
   function filterBar() {
     return `<div class="build-filter"><label class="search-field">${ic("search")}<input class="field" id="buildSearch" placeholder="Найти сборку…" value="${esc(buildQuery)}" aria-label="Поиск сборок"></label><label class="inline-check"><input id="onlyFavorites" type="checkbox" ${onlyFavorites?"checked":""}>Избранное</label></div><p id="buildFilterEmpty" class="note" hidden>По этим условиям сборки не найдены.</p>`;
@@ -166,11 +210,12 @@
       } catch(e) {el.disabled=false; throw e;}
       return;
     }
-    if (action === "notifications") {
-      const data = await query("experienceNotifications");
-      return modal("История уведомлений", `<div class="notification-history">${data.items.length?data.items.map(n=>`<article class="notification-item ${n.level}"><small>${date(n.created)}</small><p>${esc(n.message)}</p></article>`).join(""):'<p class="note">История пока пуста.</p>'}</div>${expButton("clearNotifications","Очистить историю","trash")}`);
+    if (action === "notifications") return notifications();
+    if (action === "clearNotifications") {
+      await act("experienceClearNotifications");
+      await notifications();
+      return notice("История очищена.");
     }
-    if (action === "clearNotifications") { await act("experienceClearNotifications"); closeDialog(); return notice("История очищена."); }
     if (action === "saveSkin") {
       if (profileDraft?.file || (profileDraft && profileDraft.model !== state.model)) return notice("Сначала сохрани параметры профиля, чтобы добавить выбранный скин в гардероб.", true);
       if (!state.skin) return notice("Сначала выбери и сохрани скин игрока.", true);
@@ -227,5 +272,5 @@
   document.addEventListener("dragover",e=>{if(view==="addons"&&Object.hasOwn(kinds,kind)&&e.dataTransfer?.types.includes("Files")){e.preventDefault();if($("#filePick"))$("#view").classList.add("drop-ready");}});
   document.addEventListener("dragleave",e=>{if(!e.relatedTarget)$("#view").classList.remove("drop-ready");});
   document.addEventListener("drop",e=>{if(view!=="addons"||!e.dataTransfer?.files.length)return;e.preventDefault();if(!Object.hasOwn(kinds,kind))return notice("Открой вкладку модов, шейдеров или ресурс-паков.",true);$("#view").classList.remove("drop-ready");const input=$("#filePick");if(!input)return notice("Открой вкладку модов, шейдеров или ресурс-паков для добавления файлов.",true);input.files=e.dataTransfer.files;input.dispatchEvent(new Event("change"));});
-  window.ExperienceUI = {settingsPanel,wardrobe,gallery,filterBar,preferences,media,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();filterRows();if($("#buildErrorsPanel"))loadBuildErrors();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
+  window.ExperienceUI = {settingsPanel,wardrobe,gallery,filterBar,preferences,media,observeNotifications,sortedProfiles:ps=>[...ps].sort((a,b)=>(b.favorite||0)-(a.favorite||0)),mount(){preferences();observeNotifications(state.notificationUnread ?? state.experience?.notificationUnread ?? 0);filterRows();if($("#buildErrorsPanel"))loadBuildErrors();if(view==="gallery")loadGallery();if(view==="profile")loadWardrobe();},dispatch:async action=>{if(action==="diagnostics"){await diagnosticsBox();return true;}return false;}};
 })();

@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 import time
 import unicodedata
 from http.client import HTTPException
@@ -133,8 +134,22 @@ class CatalogAPI:
             raise CatalogError(0, "Не удалось связаться с каталогом сборок. Проверь подключение и попробуй ещё раз.") from exc
 
     def json(self, method, path, **kwargs):
-        with self.request(method, path, **kwargs) as response:
-            raw = response.read(MAX_JSON + 1)
+        # A fresh reservation is not idempotent. Part replacement, completion,
+        # reads and owner acknowledgement are safe to repeat after a lost reply.
+        repeatable = method in ("GET", "PUT", "DELETE") or (method == "POST" and path.endswith("/complete"))
+        for attempt in range(3 if repeatable else 1):
+            try:
+                with self.request(method, path, **kwargs) as response:
+                    raw = response.read(MAX_JSON + 1)
+                break
+            except (CatalogError, OSError, HTTPException) as exc:
+                lifecycle.check()
+                transient = not isinstance(exc, CatalogError) or exc.code in (0, 408, 500, 502, 503, 504, 521, 522, 523, 524)
+                if not repeatable or not transient or attempt == 2:
+                    if isinstance(exc, CatalogError):
+                        raise
+                    raise CatalogError(0, "Ответ каталога получен не полностью. Проверь подключение и повтори операцию.") from exc
+                lifecycle.wait(1 + attempt)
         if len(raw) > MAX_JSON:
             raise ValueError("Ответ каталога превышает допустимый размер.")
         if not raw:
@@ -249,10 +264,107 @@ class CommunityCatalog:
         self.store = store
         self.api = api or CatalogAPI()
         self.mirror = mirror if mirror is not None else GitHubMirror()
+        self._notification_lock = threading.Lock()
+        self._notification_thread = None
+        self._notification_next = 0
         with self.store.connection() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS community_uploads (
                 origin TEXT NOT NULL, pid TEXT NOT NULL, fingerprint TEXT NOT NULL, upload TEXT NOT NULL,
                 token TEXT NOT NULL, listing TEXT, PRIMARY KEY (origin,pid,fingerprint))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS community_receipts (
+                origin TEXT NOT NULL, public_id TEXT NOT NULL, token TEXT NOT NULL,
+                name TEXT NOT NULL, expires INTEGER NOT NULL, next_check INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(origin,public_id))""")
+            db.execute("BEGIN IMMEDIATE")
+            if "notified" not in {column["name"] for column in db.execute("PRAGMA table_info(community_receipts)")}:
+                db.execute("ALTER TABLE community_receipts ADD COLUMN notified INTEGER NOT NULL DEFAULT 0")
+            # Migrate already published records before an expired listing is
+            # pruned or an identical build is republished with a new owner token.
+            rows = db.execute("SELECT token,listing FROM community_uploads WHERE origin=? AND listing IS NOT NULL", (self.api.origin,)).fetchall()
+            for row in rows:
+                try:
+                    listing = _listing(json.loads(row["listing"]))
+                except (ValueError, TypeError):
+                    continue
+                self._remember_receipt(db, listing, row["token"])
+
+    def _remember_receipt(self, db, listing, token):
+        expiry = listing.get("expiresAt")
+        if type(expiry) is int and expiry > 0:
+            db.execute("INSERT OR IGNORE INTO community_receipts(origin,public_id,token,name,expires) VALUES(?,?,?,?,?)",
+                       (self.api.origin, listing["id"], token, listing["name"], expiry))
+
+    def tick_notifications(self, notify):
+        """Start a small owned background poll, never blocking UI/session checks."""
+        moment = time.monotonic()
+        with self._notification_lock:
+            if moment < self._notification_next or self._notification_thread and self._notification_thread.is_alive():
+                return
+            self._notification_next = moment + 60
+            scope = lifecycle.current_scope()
+
+            def run():
+                try:
+                    with lifecycle.bind(scope):
+                        self.sync_notifications(notify)
+                except lifecycle.OperationCancelled:
+                    pass
+
+            with lifecycle.guard():
+                self._notification_thread = threading.Thread(target=run, daemon=True, name="bh-publication-notifications")
+                self._notification_thread.start()
+
+    def sync_notifications(self, notify):
+        """Save before ACK: process/network crashes cannot lose an owner event."""
+        moment = int(time.time())
+        with self.store.connection() as db:
+            rows = db.execute("SELECT * FROM community_receipts WHERE origin=? AND expires<=? AND next_check<=? ORDER BY next_check,expires LIMIT 8",
+                              (self.api.origin, moment, moment)).fetchall()
+        delivered = 0
+        for row in rows:
+            lifecycle.check()
+            public_id = row["public_id"]
+            path = "publications/" + _build_id(public_id) + "/events"
+            try:
+                if not row["notified"]:
+                    payload = self.api.json("GET", path, token=row["token"])
+                    events = payload.get("events")
+                    if not isinstance(events, list) or len(events) > 1:
+                        raise ValueError("Каталог вернул неверный список уведомлений.")
+                    if not events:
+                        raise ValueError("Сервер ещё не подтвердил удаление публикации.")
+                    event = events[0]
+                    if (not isinstance(event, dict) or event.get("type") != "publicationExpired"
+                            or event.get("id") != "publication-expired:" + public_id or event.get("build") != public_id
+                            or event.get("created") != row["expires"] or type(event.get("removedAt")) is not int
+                            or not row["expires"] <= event["removedAt"] <= moment + 300):
+                        raise ValueError("Каталог вернул неверное уведомление об удалении.")
+                    event_key = "community:" + hashlib.sha256(self.api.origin.encode()).hexdigest()[:16] + ":" + event["id"]
+                    notify(f"Срок действия ссылки на сборку «{row['name']}» истёк. Сборка автоматически удалена с сервера.",
+                           "info", event_key=event_key, created=event["created"])
+                    with self.store.connection() as db:
+                        db.execute("UPDATE community_receipts SET notified=1 WHERE origin=? AND public_id=?", (self.api.origin, public_id))
+                # notify durably deduplicates across windows and restarts before
+                # this acknowledgement is sent. A lost ACK is harmless.
+                try:
+                    self.api.json("DELETE", path, token=row["token"])
+                except CatalogError as exc:
+                    if exc.code != 404:
+                        raise
+                with self.store.connection() as db:
+                    db.execute("DELETE FROM community_receipts WHERE origin=? AND public_id=?", (self.api.origin, public_id))
+                delivered += 1
+            except lifecycle.OperationCancelled:
+                raise
+            except (CatalogError, ValueError, OSError, HTTPException):
+                # Legacy servers have no receipt API. Keep the owner's journal
+                # and do not claim a server deletion which was not confirmed.
+                delay = min(3600, 60 * 2 ** min(row["attempts"], 6))
+                with self.store.connection() as db:
+                    db.execute("UPDATE community_receipts SET next_check=?,attempts=attempts+1 WHERE origin=? AND public_id=?",
+                               (moment + delay, self.api.origin, public_id))
+        return delivered
 
     def search(self, params):
         query = params.get("q", "")
@@ -324,6 +436,10 @@ class CommunityCatalog:
             db.execute("""UPDATE community_uploads SET listing=?
                 WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?""",
                 (json.dumps(current, ensure_ascii=False), self.api.origin, pid, public_id))
+            token = db.execute("SELECT token FROM community_uploads WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?",
+                               (self.api.origin, pid, public_id)).fetchone()
+            if token:
+                self._remember_receipt(db, current, token["token"])
         return current
 
     def _new_upload(self, pid, key, metadata):
@@ -384,6 +500,11 @@ class CommunityCatalog:
                 old = None
                 listing = None
 
+            policy = self.capabilities()
+            if not policy["enabled"]:
+                raise ValueError("Новая публикация недоступна: сервер не подтвердил хранение ровно 60 минут и ограничения загрузки. "
+                                 "Существующие сборки можно скачивать и снимать с публикации.")
+
             # If the completion response was lost, recover the published ID
             # before sending another byte. A changed archive gets a new session.
             if old:
@@ -414,6 +535,7 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 db.execute("UPDATE community_uploads SET listing=? WHERE origin=? AND pid=? AND fingerprint=?",
                            (json.dumps(listing, ensure_ascii=False), *args))
+                self._remember_receipt(db, listing, token)
             return listing
 
     def publications(self, pid):
@@ -464,6 +586,7 @@ class CommunityCatalog:
         with self.store.connection() as db:
             db.execute("DELETE FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?",
                        (self.api.origin, pid, row["fingerprint"]))
+            db.execute("DELETE FROM community_receipts WHERE origin=? AND public_id=?", (self.api.origin, public_id))
         return "Сборка " + public_id + " снята с публикации."
 
     def install(self, public_id, allow_without_steam, status):

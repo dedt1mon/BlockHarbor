@@ -12,6 +12,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const migration = readFileSync(new URL('drizzle/0000_catalog.sql', import.meta.url), 'utf8');
 const abuseMigration = readFileSync(new URL('drizzle/0001_abuse_guard.sql', import.meta.url), 'utf8')
   .replaceAll('--> statement-breakpoint', '');
+const notificationMigration = readFileSync(new URL('drizzle/0002_expiry_notifications.sql', import.meta.url), 'utf8')
+  .replaceAll('--> statement-breakpoint', '');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const partSize = 8 * 1024 ** 2;
 const buildName = 'Моя сборка';
@@ -64,6 +66,7 @@ class D1Fixture {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(migration);
     this.db.exec(abuseMigration);
+    this.db.exec(notificationMigration);
   }
   prepare(sql) {
     const statement = this.db.prepare(sql);
@@ -149,6 +152,8 @@ function registry(t) {
       put:(n,body) => call('PUT',`uploads/${upload}/parts/${n}`,body,token),
       finish:() => call('POST',`uploads/${upload}/complete`,undefined,token),
       remove:id => call('DELETE','builds/'+id,undefined,token),
+      events:id => call('GET',`publications/${id}/events`,undefined,token),
+      acknowledge:id => call('DELETE',`publications/${id}/events`,undefined,token),
     };
   }
   return {env,call,begin,open};
@@ -413,6 +418,7 @@ test('capabilities endpoint advertises effective one-hour and anti-spam constrai
   assert.deepEqual(policy, {
     publicRetentionSeconds:3600,
     manifestFormat:1,
+    ownerNotificationFormat:1,
     publishLimits:{
       maxArchiveBytes:256*1024*1024, maxActive:3,
       windowSeconds:600, maxAttempts:10, banSeconds:5*3600,
@@ -431,4 +437,144 @@ test('capabilities do not report an unconfigured publisher as operational',async
   api.env.DB.db.exec('DROP TABLE publisher_rate');
   assert.equal((await api.call('GET','capabilities')).status,503);
   assert.equal((await api.call('GET','builds')).status,200);
+});
+
+test('owner expiry receipt survives restart and is removed only by authenticated acknowledgement',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  assert.deepEqual(await (await upload.events(listing.id)).json(),{events:[]});
+  api.env.DB.db.prepare("UPDATE builds SET created=created-3600 WHERE id=?").run(listing.id);
+  const restarted=(await import('./worker.mjs?restart='+crypto.randomUUID())).default;
+  await restarted.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,0);
+  const expired=api.env.DB.db.prepare('SELECT * FROM publication_events WHERE id=?').get(listing.id);
+  assert.equal(expired.expired_at,listing.expiresAt-3600);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
+  assert.equal((await api.call('GET',`publications/${listing.id}/events`)).status,403);
+  assert.equal((await api.call('DELETE',`publications/${listing.id}/events`,undefined,'f'.repeat(64))).status,403);
+  const first=await (await upload.events(listing.id)).json();
+  assert.equal(first.events.length,1);
+  assert.equal(first.events[0].id,'publication-expired:'+listing.id);
+  assert.deepEqual(await (await upload.events(listing.id)).json(),first);
+  assert.equal((await upload.acknowledge(listing.id)).status,200);
+  assert.equal((await upload.events(listing.id)).status,404);
+});
+
+test('failed object deletion retries durably and does not starve another expired publication',async t => {
+  const api=registry(t), uploads=[];
+  for(let n=0;n<2;n++) {
+    const upload=await api.open(metadata(small));
+    await upload.put(1,small);
+    uploads.push({upload,listing:await (await upload.finish()).json()});
+  }
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  const failed=uploads[0].listing.id;
+  const original=api.env.BUCKET.delete.bind(api.env.BUCKET);
+  api.env.BUCKET.delete=async key => {
+    if(key===`builds/${failed}.zip`) throw new Error('Injected transient storage error');
+    await original(key);
+  };
+  await worker.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,1);
+  const pending=api.env.DB.db.prepare('SELECT * FROM builds WHERE id=?').get(failed);
+  assert.equal(pending.state,'removing');
+  assert.equal(pending.expired_at,3600);
+  assert.equal(pending.cleanup_attempts,1);
+  assert.ok(pending.cleanup_after>Math.floor(Date.now()/1000));
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,1);
+  assert.equal((await api.call('GET','builds/'+failed+'/archive')).status,404);
+  api.env.BUCKET.delete=original;
+  api.env.DB.db.exec('UPDATE builds SET cleanup_after=0');
+  const restarted=(await import('./worker.mjs?retry='+crypto.randomUUID())).default;
+  await restarted.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM parts').get().n,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,2);
+});
+
+test('a late multipart completion cannot resurrect a withdrawn archive',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const row=api.env.DB.db.prepare('SELECT * FROM builds').get();
+  const resume=api.env.BUCKET.resumeMultipartUpload.bind(api.env.BUCKET);
+  const reached=Promise.withResolvers(), proceed=Promise.withResolvers();
+  api.env.BUCKET.resumeMultipartUpload=(key,id) => {
+    const multipart=resume(key,id);
+    return {...multipart,complete:async parts => {
+      reached.resolve();
+      await proceed.promise;
+      // Simulate a delayed acknowledgement/write after withdrawal. The final
+      // state check must clean this object even if a storage adapter permits it.
+      api.env.BUCKET.objects.set(key,Buffer.from(small));
+      api.env.BUCKET.uploads.delete(id);
+    }};
+  };
+  const finishing=upload.finish();
+  await reached.promise;
+  assert.equal((await upload.remove(row.id)).status,200);
+  proceed.resolve();
+  assert.equal((await finishing).status,410);
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
+});
+
+test('logical expiry is enforced on the second even when physical cleanup is deferred',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  const original=Date.now;
+  t.after(()=>{Date.now=original;});
+  Date.now=()=>listing.expiresAt*1000-1;
+  assert.equal((await api.call('GET','builds/'+listing.id)).status,200);
+  Date.now=()=>listing.expiresAt*1000;
+  assert.equal((await api.call('GET','builds/'+listing.id)).status,404);
+  assert.equal((await api.call('GET','builds/'+listing.id+'/archive')).status,404);
+  assert.equal(api.env.BUCKET.objects.size,1);
+  await worker.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,0);
+});
+
+test('new notification capability is not advertised before its migration',async t => {
+  const api=registry(t);
+  api.env.DB.db.exec('DROP TABLE publication_events');
+  assert.equal((await api.call('GET','capabilities')).status,503);
+});
+
+test('concurrent janitors cannot recreate an owner receipt after its acknowledgement',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  api.env.DB.db.exec("UPDATE builds SET created=0 WHERE state='ready'");
+  const reached=Promise.withResolvers(), proceed=Promise.withResolvers();
+  const remove=api.env.BUCKET.delete.bind(api.env.BUCKET);
+  let calls=0;
+  api.env.BUCKET.delete=async key => {
+    if(++calls===1) { reached.resolve(); await proceed.promise; }
+    await remove(key);
+  };
+  const first=worker.scheduled({},api.env,{});
+  await reached.promise;
+  await worker.scheduled({},api.env,{});
+  assert.equal((await upload.acknowledge(listing.id)).status,200);
+  proceed.resolve();
+  await first;
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,0);
+});
+
+test('scheduled cleanup has a bounded per-invocation budget and drains the remainder on restart',async t => {
+  const api=registry(t);
+  const insert=api.env.DB.db.prepare("INSERT INTO builds(id,upload,owner_hash,multipart,state,name,search_name,category,minecraft,loader,size,sha256,created,publisher) VALUES(?,?,?,?,'ready','Test','test','adventure','1.20.1','fabric',?,?,0,'test')");
+  for(let n=0;n<150;n++) {
+    const id='BH-'+n.toString(16).padStart(12,'0').toUpperCase();
+    insert.run(id,n.toString(16).padStart(32,'0'),'b'.repeat(64),'completed',small.length,sha(small));
+    api.env.BUCKET.objects.set(`builds/${id}.zip`,small);
+  }
+  await worker.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,22);
+  await worker.scheduled({},api.env,{});
+  assert.equal(api.env.BUCKET.objects.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
+  assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,150);
 });

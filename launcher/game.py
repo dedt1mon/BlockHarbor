@@ -403,15 +403,33 @@ def _minecraft_command(installed: str, cache: Path, options: dict) -> list[str]:
     return [argument.replace(original, corrected) for argument in command]
 
 
+def _verified_install_file(path, metadata):
+    """Hash a changed declared artifact; unchanged files reuse a bounded stamp cache."""
+    from .modfiles import file_hash, file_stamp
+
+    if not path.is_file():
+        return False
+    stamp = file_stamp(path)
+    if not stamp[0] or stamp[0] != metadata.get("size", stamp[0]):
+        return False
+    for algorithm in ("sha256", "sha1"):
+        expected = metadata.get(algorithm)
+        if expected:
+            if (not isinstance(expected, str)
+                    or not re.fullmatch(r"[a-fA-F0-9]{%d}" % (hashlib.new(algorithm).digest_size * 2), expected)
+                    or file_hash(path, stamp, algorithm) != expected.lower()):
+                return False
+    return True
+
+
 def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
-    """Check the local launch dependencies. No requests or large file hashes on a repeat Play."""
+    """Check local launch dependencies; unchanged artifact hashes stay cached."""
     import minecraft_launcher_lib as mc
     from minecraft_launcher_lib.command import get_classpath_separator
 
     metadata = json.loads(_manifest_path(cache, base).read_text(encoding="utf-8"))
     jar = _manifest_path(cache, base).with_suffix(".jar")
-    expected = metadata.get("downloads", {}).get("client", {}).get("size")
-    if not jar.is_file() or (expected is not None and jar.stat().st_size != expected):
+    if not _verified_install_file(jar, metadata.get("downloads", {}).get("client", {})):
         return jar.name
     component = metadata.get("javaVersion", {}).get("component")
     if component:
@@ -428,7 +446,7 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
     args = _minecraft_command(
         installed, cache, {"username": "Player", "uuid": "0" * 32, "token": "0"}
     )
-    sizes = {path: entry["size"] for path, entry in libraries if "size" in entry}
+    declared = dict(libraries)
     required = [path for path, _entry in libraries]
     for flag in ("-cp", "-classpath", "--class-path", "-p", "--module-path"):
         if flag not in args:
@@ -439,14 +457,12 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
             required.append(Path(library).resolve())
     for path in dict.fromkeys(required):
         lifecycle.check()
-        if not path.is_file():
-            return path.name
-        size = path.stat().st_size
-        if not size or size != sizes.get(path, size):
+        if not _verified_install_file(path, declared.get(path, {})):
             return path.name
     if metadata.get("logging", {}).get("client"):
-        log_id = metadata["logging"]["client"]["file"]["id"]
-        if not (cache / "assets" / "log_configs" / log_id).is_file():
+        log_file = metadata["logging"]["client"]["file"]
+        log_id = _version_id(log_file["id"])
+        if not _verified_install_file(cache / "assets" / "log_configs" / log_id, log_file):
             return log_id
     if "assetIndex" in metadata:
         index = (

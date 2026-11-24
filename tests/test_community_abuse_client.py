@@ -75,6 +75,25 @@ class ClientAbuseTests(unittest.TestCase):
             self.assertEqual(catalog.CommunityCatalog(store, Legacy()).capabilities()["mode"], "legacy")
             self.assertFalse(catalog.CommunityCatalog(store, Unknown()).capabilities()["enabled"])
 
+    def test_new_publication_is_blocked_before_upload_on_legacy_server(self):
+        class Legacy:
+            origin = "https://catalog.example"
+            calls = []
+            def json(self, method, path, **kwargs):
+                self.calls.append((method, path))
+                raise catalog.CatalogError(404, "No such endpoint")
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder))
+            pid = store.create("Моя сборка", "1.20.1", "fabric")
+            api = Legacy()
+            service = catalog.CommunityCatalog(store, api)
+            with self.assertRaisesRegex(ValueError, "60 минут"):
+                service.publish(pid, "Для друзей", "adventure", lambda _: None)
+            self.assertEqual(api.calls, [("GET", "capabilities")])
+            self.assertTrue(store.folder(pid).exists())
+            with store.connection() as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM community_uploads").fetchone()[0], 0)
+
     def test_capabilities_verify_only_complete_live_policy(self):
         policy = {
             "publicRetentionSeconds": 3600, "manifestFormat": 1,

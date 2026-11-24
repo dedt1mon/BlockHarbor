@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import lru_cache
 from http.client import HTTPException
 from pathlib import Path
@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from . import lifecycle
+from .io_errors import storage_message
 
 ATTEMPTS = 3
 SOCKET_TIMEOUT = 25
@@ -153,7 +154,7 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         return dict(response.headers), response.geturl()
 
 
-def _receive_requests(url, output, limit, notify=lambda *_: None):
+def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=None):
     """Independent HTTPS transport for Maven; keep cancellation and TLS verification."""
     import requests
 
@@ -162,7 +163,7 @@ def _receive_requests(url, output, limit, notify=lambda *_: None):
     # Requests uses the environment/system proxy configuration. Respect an
     # explicitly configured CA file; do not disable certificate verification.
     try:
-        with requests.Session() as session:
+        with requests.Session() if session is None else nullcontext(session) as session:
             if os.environ.get("SSL_CERT_FILE") and not (
                 os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
             ):
@@ -363,6 +364,40 @@ class Progress:
 class Download:
     def __init__(self, progress):
         self.progress = progress
+        self._sessions = {}
+        self._sessions_lock = threading.Lock()
+
+    def close(self):
+        with self._sessions_lock:
+            sessions, self._sessions = tuple(self._sessions.values()), {}
+        for session in sessions:
+            session.close()
+
+    def _receive_asset(self, url, output, limit, notify):
+        """Keep one verified HTTPS pool per worker for Mojang's small assets.
+
+        A fresh TLS connection for each of several thousand asset objects made
+        preparation needlessly slow on high-latency networks. Sessions are not
+        shared between workers and are closed with the preparation environment.
+        """
+        import requests
+
+        thread = threading.get_ident()
+        with self._sessions_lock:
+            session = self._sessions.get(thread)
+            if session is None:
+                context = ssl.create_default_context()
+                class SystemRootsAdapter(requests.adapters.HTTPAdapter):
+                    def init_poolmanager(self, *args, **kwargs):
+                        kwargs["ssl_context"] = context
+                        return super().init_poolmanager(*args, **kwargs)
+                    def proxy_manager_for(self, proxy, **kwargs):
+                        kwargs["ssl_context"] = context
+                        return super().proxy_manager_for(proxy, **kwargs)
+                session = requests.Session()
+                session.mount("https://", SystemRootsAdapter(pool_connections=2, pool_maxsize=2))
+                self._sessions[thread] = session
+        return _receive_requests(url, output, limit, notify, session=session)
 
     def __call__(
         self,
@@ -389,6 +424,11 @@ class Download:
         try:
             lifecycle.check()
             return self.fetch(url, path, sha1, lzma_compressed)
+        except OSError as error:
+            message = storage_message(error)
+            if message:
+                raise DownloadError(message) from error
+            raise
         finally:
             _THREADS.release()
 
@@ -418,6 +458,9 @@ class Download:
                 ) as out:
                     packed = Path(out.name)
                     receive = _receive_requests if alternate else _receive
+                    if (not alternate and sha1 and urlsplit(source_url).scheme == "https"
+                            and urlsplit(source_url).hostname == "resources.download.minecraft.net"):
+                        receive = self._receive_asset
                     receive(
                         source_url,
                         out,
@@ -571,6 +614,7 @@ def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, 
     ]
     original = _helper.download_file
     downloader = Download(progress)
+    stack.callback(downloader.close)
     network = SimpleNamespace(
         get=metadata_response, session=requests.Session, Session=requests.Session
     )
@@ -715,7 +759,7 @@ def runtime_problem(cache, component, java):
             return "Java: " + name
         digest = digest_time.split(" ", 1)[0]
         st = file_stamp(path)
-        checked = [st[0], st[1]]
+        checked = list(st)
         if previous.get(name) != checked and file_hash(path, st, "sha1") != digest:
             return "Java: " + name
         verified[name] = checked

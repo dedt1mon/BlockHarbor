@@ -204,6 +204,8 @@ function observeProgress(job) {
   const startup = job.updater?.startupResult ? null : job.startupNotice;
   backgroundNotice("bootstrap", startup ? {...startup, persist: true} : null);
   window.UpdatesUI?.observe(job.updater);
+  window.BatchUI?.observe(job);
+  window.ExperienceUI?.observeNotifications(job.notificationUnread);
 }
 function head(title, actions = "", sub = "") {
   return (
@@ -947,6 +949,7 @@ function modal(title, body) {
   const d = $("#dialog");
   $("#dialogTitle").textContent = title;
   $("#dialogBody").innerHTML = body;
+  $("#dialogBody").scrollTop = 0;
   if (!d.open) d.showModal();
   moveNotice();
 }
@@ -1137,7 +1140,8 @@ async function runJob(action, data = {}) {
   const j = await act(action, data);
   lastJob = j.job;
   if (action === "play") lastPlayJob = j.job;
-  if (action === "purgeBuild" || action === "installModrinth") closeDialog();
+  if (action === "purgeBuild") closeDialog();
+  if (action === "installModrinth") window.BatchUI?.start(j.job, data);
   notice("Подготовка…", false, true);
   await tick();
   return j.job;

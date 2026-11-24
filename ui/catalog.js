@@ -63,6 +63,7 @@ function openModrinth(profile, category) {
     profile.version,
     categoryLabel,
   ].join("  ·  ");
+  find(".catalog-context").title = find(".catalog-context").textContent;
   input.placeholder = {
     mods: "Найти мод",
     shaderpacks: "Найти шейдер",
@@ -184,6 +185,10 @@ function openModrinth(profile, category) {
     }
   }
   function makePage(query, data, preset) {
+    // Several sources may report the same canonical project. Preserve the first
+    // trusted result and its source; a card must never appear twice on one page.
+    const projectIds = new Set();
+    data = {...data, hits: data.hits.filter(item => !projectIds.has(item.id) && projectIds.add(item.id))};
     const list = document.createElement("ul");
     list.className = "catalog-results";
     list.setAttribute("aria-label", categoryLabel);
@@ -397,13 +402,22 @@ function openModrinth(profile, category) {
       if (!active()) return;
       for (const row of result.selected || []) {
         const item = [...cartPanel.querySelectorAll("[data-cart-remove]")].find(el => el.dataset.cartRemove === row.project);
-        if (item) item.previousElementSibling.textContent = [cart.get(row.project).title, row.version, row.installed ? "уже в сборке" : ""].filter(Boolean).join(" · ");
+        if (item) {
+          const label = item.previousElementSibling;
+          label.textContent = [cart.get(row.project).title, row.version, row.installed ? "уже в сборке" : ""].filter(Boolean).join(" · ");
+          if (row.error) {
+            const error = document.createElement("span");
+            error.className = "catalog-selection-error";
+            error.textContent = row.error;
+            label.append(error);
+          }
+        }
       }
       area.innerHTML = compatibilitySummary(result);
       checkedItems = result.items;
       checkedToken = result.reviewToken || "";
       install.disabled = result.blocked || !checkedItems?.length;
-      install.textContent = result.blocked ? "Установка недоступна" : checkedToken ? "Установить с предупреждением" : "Установить выбранное";
+      install.textContent = result.blocked ? "Установка недоступна" : checkedToken ? "Установить с предупреждением" : checkedItems?.length < items.length ? "Установить доступные (" + checkedItems.length + ")" : "Установить выбранное";
     } catch (error) {
       if (!active()) return;
       area.innerHTML = `<p class="compat-error">${esc(error.message)}</p><button class="linkbtn" type="button" data-cart-retry>Повторить проверку</button>`;
@@ -457,6 +471,7 @@ function openModrinth(profile, category) {
     if (el.hasAttribute("data-cart-install") && checkedItems) {
       el.disabled = true;
       try {
+        window.BatchUI?.rememberTitles([...cart.values()]);
         await runJob("installModrinth", {id:profile.id, items:checkedItems, acknowledgement:checkedToken});
       } catch (error) { el.disabled = false; notice(error.message, true); }
       return;
@@ -488,6 +503,7 @@ function openModrinth(profile, category) {
     } else if (el.hasAttribute("data-install-project")) {
       el.disabled = true;
       try {
+        window.BatchUI?.rememberTitles([{project: project.id, title: project.title}]);
         await runJob("installModrinth", {
           id: profile.id,
           kind: category,

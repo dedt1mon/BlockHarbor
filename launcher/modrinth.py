@@ -792,7 +792,7 @@ def check(store, pid, kind, project, version):
 
 
 def check_selection(store, pid, items, *, request=None):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     try:
         selected = _selections(items)
         releases = _plan_items(store, profile, selected)
@@ -963,7 +963,7 @@ def _download_compatible(release, target, loader, transfer=None, status=lambda _
     )
 
 
-def _publish_set(store, pid, releases, staged):
+def _publish_set(store, pid, releases, staged, publisher=None):
     lifecycle.check()
     # Recheck all destinations after downloading. Manual imports may have completed
     # during network I/O. The launcher's mutation lock covers just this local commit.
@@ -999,6 +999,8 @@ def _publish_set(store, pid, releases, staged):
                     )
             known_mods[target] = ids
         pending.append((release, src, target))
+    if publisher is not None:
+        return publisher(pid, pending)
     with lifecycle.guard():
         written = []
         try:
@@ -1071,11 +1073,13 @@ def install(
 def install_selection(
     store, pid, items, status, mutation_lock=None, acknowledgement="", *,
     before_publish=None, transfer=None, after_publish=None, request=None, local_mod=None,
+    on_stage=lambda _stage, _release=None: None, publisher=None,
 ):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     selected = _selections(items) if items or local_mod is None else []
     request = request or {"id": pid, "items": selected}
     roots = {r["project"] for r in selected}
+    on_stage("dependencies")
     status("Проверяем совместимость и обязательные зависимости…")
     releases = _plan_items(store, profile, selected)
     inventory = _inventory(store, pid)
@@ -1104,6 +1108,7 @@ def install_selection(
                         raise PlanConflict(installed.name + ": " + str(exc) + " Удали несовместимый файл и повтори установку.") from exc
                     continue
                 tmp = Path(work) / release.version
+                on_stage("downloading", release)
                 actual = _download_compatible(release, tmp, profile["loader"], transfer, status)
                 changed |= actual.sha512 != release.sha512 or actual.filename != release.filename
                 resolved[(actual.project, actual.version)] = actual
@@ -1136,6 +1141,7 @@ def install_selection(
                 if name.casefold() in {n.casefold() for n in [*active, *additions]}:
                     raise PlanConflict("Файл уже есть в сборке или плане установки: " + name)
                 additions[name] = path
+            on_stage("checking")
             inspected = compatibility.local_report(profile, active, additions)
             _require_no_conflicts(inspected)
             missing = [row for row in inspected["required"] if not row["installed"]]
@@ -1176,9 +1182,10 @@ def install_selection(
                 manual = Package("local-" + digest, "", "mods", "", name, "", "", name, path.stat().st_size, digest, "", ())
                 staged[manual.version] = path
             publish = releases + [manual] if local_mod else releases
+            on_stage("installing")
             if staged and before_publish is not None:
                 before_publish()
-            written = _publish_set(store, pid, publish, staged)
+            written = _publish_set(store, pid, publish, staged, publisher)
     _save_project_icons(store, pid, releases, status)
     if after_publish is not None:
         after_publish(releases)

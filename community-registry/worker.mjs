@@ -8,6 +8,8 @@ const RATE_REQUESTS = 10;
 const RATE_BAN = 5 * 60 * 60;
 const UPLOAD_TTL = 30 * 60; // Unfinished multipart reservations expire in 30 min.
 const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after completion.
+const CLEANUP_BATCH = 16;
+const MAX_OWNER_RECEIPTS = 200000; // Bound durable offline receipts without expiring unread events.
 const PAGE = 20;
 const CATEGORIES = new Set(['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']);
 const LOADERS = new Set(['vanilla','fabric','quilt','forge','neoforge']);
@@ -39,6 +41,7 @@ function capabilities() {
   return {
     publicRetentionSeconds: PUBLIC_TTL,
     manifestFormat: 1,
+    ownerNotificationFormat: 1,
     publishLimits: {
       maxArchiveBytes: MAX_SIZE, maxActive: ACTIVE_PER_PUBLISHER,
       windowSeconds: RATE_WINDOW, maxAttempts: RATE_REQUESTS, banSeconds: RATE_BAN,
@@ -125,21 +128,42 @@ async function cleanupRateCounters(env) {
 
 async function discard(env, row, expiredOnly = false) {
   // Hide first. Retries safely finish an interrupted deletion.
+  const moment=now();
+  const mark="UPDATE builds SET expired_at=CASE WHEN state='ready' AND created<=? THEN created+? ELSE expired_at END,state='removing' WHERE id=?";
   const update = expiredOnly
-    ? env.DB.prepare("UPDATE builds SET state='removing' WHERE id=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(row.id, now()-UPLOAD_TTL, now()-PUBLIC_TTL)
-    : env.DB.prepare("UPDATE builds SET state='removing' WHERE id=?").bind(row.id);
+    ? env.DB.prepare(mark+" AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(moment-PUBLIC_TTL,PUBLIC_TTL,row.id,moment-UPLOAD_TTL,moment-PUBLIC_TTL)
+    : env.DB.prepare(mark).bind(moment-PUBLIC_TTL,PUBLIC_TTL,row.id);
   if ((await update.run()).meta.changes === 0) return;
-  if (row.state !== 'ready') {
+  row=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(row.id).first();
+  if(!row) return; // Another janitor completed the same idempotent deletion.
+  try {
     try { await env.BUCKET.resumeMultipartUpload(key(row), row.multipart).abort(); }
     catch { /* Already completed or automatically expired in R2. */ }
+    await env.BUCKET.delete(key(row));
+    const statements=[];
+    if(row.expired_at!==null) {
+      statements.push(env.DB.prepare("INSERT OR IGNORE INTO publication_events(id,owner_hash,expired_at,removed_at) SELECT id,owner_hash,expired_at,? FROM builds WHERE id=? AND state='removing' AND expired_at IS NOT NULL")
+        .bind(now(),row.id));
+    }
+    statements.push(env.DB.prepare('DELETE FROM parts WHERE upload=?').bind(row.upload),
+      env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id));
+    await env.DB.batch(statements);
+  } catch(error) {
+    // One unavailable R2 object must not starve other expired rows. This retry
+    // state is durable and resumes after worker restarts, with a bounded delay.
+    const delay=Math.min(3600,30*2**Math.min(row.cleanup_attempts || 0,7));
+    await env.DB.prepare('UPDATE builds SET cleanup_after=?,cleanup_attempts=cleanup_attempts+1 WHERE id=?')
+      .bind(now()+delay,row.id).run();
+    throw error;
   }
-  await env.BUCKET.delete(key(row));
-  await env.DB.batch([env.DB.prepare('DELETE FROM parts WHERE upload=?').bind(row.upload),
-    env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id)]);
 }
 async function prune(env) {
-  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?) ORDER BY created,id LIMIT 4").bind(now()-UPLOAD_TTL,now()-PUBLIC_TTL).all();
-  for (const row of results) await discard(env,row,true);
+  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE cleanup_after<=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?)) ORDER BY created,id LIMIT ?").bind(now(),now()-UPLOAD_TTL,now()-PUBLIC_TTL,CLEANUP_BATCH).all();
+  // Four bounded deletion lanes, not an unbounded Promise per public archive.
+  for(let index=0;index<results.length;index+=4) {
+    const deleted=await Promise.allSettled(results.slice(index,index+4).map(row=>discard(env,row,true)));
+    for(const result of deleted) if(result.status==='rejected') console.warn('Catalog cleanup deferred',result.reason?.name || 'error');
+  }
   return results.length;
 }
 async function begin(request, env) {
@@ -168,11 +192,12 @@ async function begin(request, env) {
       (SELECT count(*) FROM builds WHERE publisher=? AND
         ((state='ready' AND created>?) OR (state='uploading' AND created>?)))<? AND
       (SELECT count(*) FROM builds WHERE state IN ('ready','uploading'))<20000 AND
+      (SELECT count(*) FROM publication_events)+(SELECT count(*) FROM builds)<? AND
       (SELECT COALESCE(sum(size),0) FROM builds)+?<=?`)
       .bind(id,upload,await hash(token),multi.uploadId,name,name.normalize('NFC').toLowerCase(),data.category,
         data.minecraft,data.loader,data.size,data.sha256,now(),publisher,
         publisher,now()-PUBLIC_TTL,now()-UPLOAD_TTL,ACTIVE_PER_PUBLISHER,
-        data.size,limit).run();
+        MAX_OWNER_RECEIPTS,data.size,limit).run();
     requireThat(inserted.meta.changes===1,429,
       'Достигнут лимит: не более 3 активных публикаций с одного адреса либо заполнено хранилище.');
   } catch(error) { await multi.abort(); throw error; }
@@ -217,8 +242,12 @@ async function part(request, env, row, number) {
   requireThat(buffer.byteLength===size,400,'Часть загружена не полностью.');
   if(number===1) validateFirstPart(buffer,row);
   const result=await env.BUCKET.resumeMultipartUpload(key(row),row.multipart).uploadPart(number,buffer);
-  await env.DB.prepare('INSERT INTO parts(upload,number,etag) VALUES(?,?,?) ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag')
-    .bind(row.upload,number,result.etag).run();
+  const saved=await env.DB.prepare("INSERT INTO parts(upload,number,etag) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM builds WHERE upload=? AND state='uploading') ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag")
+    .bind(row.upload,number,result.etag,row.upload).run();
+  if(!saved.meta.changes) {
+    try { await env.BUCKET.resumeMultipartUpload(key(row),row.multipart).abort(); } catch {}
+    throw new RequestError(410,'Публикация снята или уже завершена.');
+  }
   return json({part:number});
 }
 // R2 serves only complete catalog archives. Two bounded range reads cover the
@@ -314,7 +343,7 @@ async function validateDirectory(bucket, row) {
     validZip(validateFirstPart(first.buffer,row).publicConfigs===true);
   }
 }
-async function finish(env,row) {
+async function finishArchive(env,row) {
   if(row.state==='ready') {
     requireThat(row.created>now()-PUBLIC_TTL,410,'Срок публикации истёк.');
     return json(publicBuild(row));
@@ -350,6 +379,33 @@ async function finish(env,row) {
   const current=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(row.id).first();
   requireThat(current?.state==='ready' && current.created>now()-PUBLIC_TTL,410,'Публикация снята или истекла.');
   return json(publicBuild(current));
+}
+async function finish(env,row) {
+  try { return await finishArchive(env,row); }
+  finally {
+    // Withdrawal can race multipart.complete after its initial read. A late R2
+    // completion must not recreate an orphan object after the DB row was removed.
+    const current=await env.DB.prepare('SELECT state FROM builds WHERE id=?').bind(row.id).first();
+    if(!current || current.state==='removing') await env.BUCKET.delete(key(row));
+  }
+}
+async function ownerEvents(request,env,id) {
+  let event=await env.DB.prepare('SELECT * FROM publication_events WHERE id=?').bind(id).first();
+  const row=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(id).first();
+  requireThat(event || row,404,'Уведомление публикации не найдено.');
+  await authorized(request,event || row);
+  if(request.method==='DELETE') {
+    requireThat(event,409,'Удаление публикации ещё не подтверждено.');
+    await env.DB.prepare('DELETE FROM publication_events WHERE id=?').bind(id).run();
+    return json({acknowledged:true});
+  }
+  requireThat(request.method==='GET',404,'Адрес каталога не найден.');
+  if(!event && (row.state==='removing' || row.state==='ready' && row.created<=now()-PUBLIC_TTL)) {
+    await discard(env,row,true);
+    event=await env.DB.prepare('SELECT * FROM publication_events WHERE id=?').bind(id).first();
+  }
+  return json({events:event ? [{id:'publication-expired:'+id,type:'publicationExpired',build:id,
+    created:event.expired_at,removedAt:event.removed_at}] : []});
 }
 async function search(env, params) {
   const q=(params.get('q')||'').trim().normalize('NFC').toLowerCase();
@@ -387,10 +443,14 @@ async function handle(request,env) {
     requireThat(typeof env.RATE_SALT==='string' && env.RATE_SALT.length>=32 &&
       env.DB && env.BUCKET,503,'Сервис публикации ещё не настроен.');
     await env.DB.prepare('SELECT subject FROM publisher_rate LIMIT 1').first();
+    await env.DB.prepare('SELECT cleanup_after,expired_at FROM builds LIMIT 1').first();
+    await env.DB.prepare('SELECT id FROM publication_events LIMIT 1').first();
     return json(capabilities());
   }
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
+  const events=/^\/v1\/publications\/(BH-[0-9A-F]{12})\/events$/.exec(path);
+  if(events) return ownerEvents(request,env,events[1]);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
   if(upload) {
     const row=await env.DB.prepare('SELECT * FROM builds WHERE upload=?').bind(upload[1]).first();
@@ -429,11 +489,13 @@ export default {
     }
   },
   async scheduled(controller,env,ctx) {
-    // Cron (recommended every 5 minutes) reclaims R2 space even when
+    // Cron (configured every minute) reclaims R2 space even when
     // nobody searches or publishes new packs; operations are bounded.
-    for(let round=0;round<16;round++) {
+    // <=128 rows keeps D1/R2 calls below the free-plan internal-subrequest
+    // budget, including row reads, retry updates and transactional receipts.
+    for(let round=0;round<8;round++) {
       const count=await prune(env);
-      if(count<4) break;
+      if(count<CLEANUP_BATCH) break;
     }
     await cleanupRateCounters(env);
   },

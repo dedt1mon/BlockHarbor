@@ -4,10 +4,10 @@
 .updater-auto-control > span { display: grid; gap: 8px; }
 .updater-auto-control strong { font-size: 18px; color: var(--text); }
 .updater-auto-control span span { color: var(--muted); font-size: 13px; line-height: 1.5; }
-.updater-auto-control input { appearance: none; flex: 0 0 48px; width: 48px; height: 27px; border: 1px solid #ffffff23; border-radius: 20px; background: #17251e; position: relative; cursor: pointer; padding: 0; transition: background .18s ease; }
-.updater-auto-control input::before { content: ""; position: absolute; width: 19px; height: 19px; top: 3px; left: 4px; border-radius: 50%; background: #9eaaa2; transition: transform .18s ease, background .18s ease; }
+.updater-auto-control input { appearance: none; flex: 0 0 var(--switch-width); width: var(--switch-width); height: var(--switch-height); border: 1px solid var(--control-border); border-radius: 20px; background: var(--control-fill); position: relative; cursor: pointer; padding: 0; transition: background var(--motion-fast) ease; }
+.updater-auto-control input::before { content: ""; position: absolute; width: var(--switch-thumb); height: var(--switch-thumb); top: 3px; left: 3px; border-radius: 50%; background: var(--muted); transition: transform var(--motion-fast) ease, background var(--motion-fast) ease; }
 .updater-auto-control input:checked { background: var(--lime); border-color: var(--lime); }
-.updater-auto-control input:checked::before { transform: translateX(20px); background: #173520; }
+.updater-auto-control input:checked::before { transform: translateX(var(--switch-travel)); background: var(--ink); }
 .updater-auto-control input:focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; }
 .updater-auto-control input:disabled { opacity: .55; cursor: wait; }
 .updater-automatic p { line-height: 1.6; font-size: 13px; }

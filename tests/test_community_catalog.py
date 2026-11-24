@@ -27,6 +27,10 @@ class Registry:
         self.data = b""
 
     def json(self, method, path, *, token=None, payload=None, block=None):
+        if (method, path) == ("GET", "capabilities"):
+            return {"publicRetentionSeconds": 3600, "publishLimits": {
+                "maxArchiveBytes": catalog.MAX_PUBLIC_UPLOAD, "maxActive": 3,
+                "windowSeconds": 600, "maxAttempts": 10, "banSeconds": 18000}}
         if (method, path) == ("POST", "uploads"):
             self.uploads += 1
             self.meta = payload.copy()

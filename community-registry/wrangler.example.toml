@@ -1,0 +1,25 @@
+# Copy to your deployment configuration and use the EXISTING production DB/R2.
+# Placeholder bindings intentionally prevent accidental deployment to a new store.
+name = "blockharbor-community-catalog"
+main = "worker.mjs"
+compatibility_date = "2026-01-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_WITH_EXISTING_DATABASE_NAME"
+database_id = "REPLACE_WITH_EXISTING_DATABASE_ID"
+migrations_dir = "drizzle"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "REPLACE_WITH_EXISTING_BUCKET_NAME"
+
+[vars]
+CATALOG_STORAGE_LIMIT = "8589934592"
+
+# RATE_SALT must be set as a secret, never committed here.
+# Apply all SQL migrations before deploying. Configure an R2 incomplete-multipart
+# lifecycle rule as an additional recovery net; see RETENTION-ONE-HOUR.md.

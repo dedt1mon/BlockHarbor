@@ -42,7 +42,7 @@
           <span>Лаунчер</span><span class="slash">/</span
           ><strong id="crumb">Главная</strong>
         </div>
-        <div class="header-actions"><button class="icon-button" data-experience="notifications" aria-label="История уведомлений" title="История уведомлений"><i data-icon="bell"></i></button>
+        <div class="header-actions"><button class="icon-button batch-toggle" data-batch-open aria-label="Установка дополнений" title="Установка дополнений" hidden><i data-icon="download"></i></button><button class="icon-button notification-bell" data-experience="notifications" aria-label="История уведомлений" title="История уведомлений"><i data-icon="bell"></i><span class="notification-dot" aria-hidden="true" hidden></span></button>
         <button id="accountChip" class="account-chip" data-view="profile">
           <i data-icon="user"></i><span id="topUser">Мой профиль</span>
         </button>
@@ -67,7 +67,7 @@
       aria-atomic="true"
       hidden
     ></div>
-    <dialog id="dialog">
+    <dialog id="dialog" aria-labelledby="dialogTitle">
       <div class="dialog-top">
         <h2 id="dialogTitle"></h2>
         <button class="icon-button" aria-label="Закрыть" id="dialogClose">
@@ -88,6 +88,7 @@
     <script src="/catalog-filters.js"></script>
     <script src="/compatibility.js"></script>
     <script src="/catalog.js"></script>
+    <script src="/batch-install.js"></script>
     <script src="/app.js"></script>
     <script src="/experience.js"></script>
     <script src="/build-care.js"></script>

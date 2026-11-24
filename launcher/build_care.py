@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync
 from .content_icons import _small_directory
-from .modfiles import file_hash, file_stamp, read_descriptor
+from .modfiles import file_hash, file_stamp, read_descriptor, publish_new
 from .sessions import process_alive, process_identity, read_record
 from .store import KINDS, clean_filename, input_profile, require_idle_files
 
@@ -34,6 +34,8 @@ BUILD_SECTIONS = (
 MAX_BYTES = 16 * 1024**3
 MAX_FILES = 60000
 MAX_MANIFEST = 16 * 1024**2
+MAX_JOURNAL = 2 * 1024**2
+MAX_TRANSACTION_TARGETS = 8001
 PROFILE_SETTINGS = ("performanceMemory", "performancePreset", "careAutoWorldBackup")
 _ID = re.compile(r"[a-f0-9]{32}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
@@ -285,7 +287,7 @@ class BuildCare:
             for work in self.root.glob("transaction-*"):
                 journal = work / "journal.json"
                 try:
-                    if _reparse(work) or not journal.is_file() or journal.stat().st_size > 65536:
+                    if _reparse(work) or not journal.is_file() or journal.stat().st_size > MAX_JOURNAL:
                         continue
                     if json.loads(journal.read_text(encoding="utf-8")).get("pid") == pid:
                         shutil.rmtree(work)
@@ -521,6 +523,12 @@ class BuildCare:
                 os.replace(backup, dest)
             elif not had and not os.path.lexists(staged):
                 _remove(dest)
+            elif not had and target.get("noReplace") and os.path.lexists(staged) and os.path.lexists(dest):
+                # POSIX publication links first and then removes the staged name.
+                # A crash between those two operations must also roll back our
+                # link, while preserving an unrelated file that won the race.
+                if not _reparse(dest) and os.path.samefile(staged, dest):
+                    _remove(dest)
         old = journal["oldProfile"]
         with self.store.connection() as db:
             db.execute("UPDATE profiles SET version=?,loader=? WHERE id=?", (old["version"], old["loader"], journal["pid"]))
@@ -536,6 +544,11 @@ class BuildCare:
 
     def _recover(self):
         self.recover_pending()
+        for work in self.root.glob("addon-stage-*"):
+            if (work.is_dir() and not _reparse(work)
+                    and _ID.fullmatch(work.name.removeprefix("addon-stage-"))
+                    and not process_alive(read_record(work / "owner.json").get("owner"))):
+                shutil.rmtree(work, ignore_errors=True)
         for work in self.root.glob("plan-*"):
             if work.is_dir() and not _reparse(work) and _ID.fullmatch(work.name.removeprefix("plan-")):
                 if process_alive(read_record(work / "owner.json").get("owner")):
@@ -561,12 +574,15 @@ class BuildCare:
                     continue
                 journal = {}
                 try:
-                    if not journal_file.is_file() or _reparse(journal_file) or journal_file.stat().st_size > 65536:
+                    if not journal_file.is_file() or _reparse(journal_file) or journal_file.stat().st_size > MAX_JOURNAL:
                         raise ValueError("Повреждён журнал восстановления.")
                     journal = json.loads(journal_file.read_text(encoding="utf-8"))
                     if not isinstance(journal, dict):
                         raise ValueError("Повреждён журнал восстановления.")
                     if journal.get("phase") != "committed":
+                        targets = journal.get("targets")
+                        if not isinstance(targets, list) or len(targets) > MAX_TRANSACTION_TARGETS:
+                            raise ValueError("Повреждён список файлов в журнале восстановления.")
                         self._rollback_transaction(work, journal)
                         self.history(journal["pid"], "Восстановление после прерывания", "Незавершённые изменения отменены.")
                     shutil.rmtree(work)
@@ -582,20 +598,59 @@ class BuildCare:
             self.recovery_errors.update(errors)
             return dict(errors)
 
-    def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
+    def publish_addons(self, pid, pending):
+        """Publish verified new files using the same crash journal as recovery.
+
+        No whole mod folder copy is needed, and an unrelated destination that
+        appears during the operation is never overwritten.
+        """
+        if not pending:
+            return 0
+        work = self.root / ("addon-stage-" + secrets.token_hex(16))
+        work.mkdir()
+        _atomic_json(work / "owner.json", {"owner": self.owner})
+        prepared = work / "files"
+        prepared.mkdir()
+        sections = []
+        try:
+            for release, source, target in pending:
+                lifecycle.check()
+                if release.kind not in KINDS:
+                    raise ValueError("Недопустимый тип дополнения.")
+                name = clean_filename(release.filename)
+                expected = self.store.content_folder(pid, release.kind) / name
+                if target != expected or os.path.lexists(target):
+                    raise ValueError("Файл появился во время установки: " + name)
+                relative = release.kind + "/" + name
+                destination = prepared / relative
+                destination.parent.mkdir(exist_ok=True)
+                os.replace(source, destination)
+                sections.append(relative)
+            self._transaction(pid, prepared, sections, no_replace=sections)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        return len(pending)
+
+    def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
         # All expensive reads/copies are complete. Serialize the short rename/DB
         # commit (including rollback) against close; never publish after cancel.
         with lifecycle.guard():
-            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings)
+            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings, no_replace=no_replace)
         shutil.rmtree(work)
 
-    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
+    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
         root = self._writable_root(pid)
         require_idle_files(root)
+        if len(sections) > MAX_TRANSACTION_TARGETS:
+            raise ValueError("Слишком много файлов в одной транзакции.")
+        for name in no_replace:
+            if os.path.lexists(self._validate_target(root, name)):
+                raise ValueError("Файл появился во время установки: " + name)
         work = self.root / ("transaction-" + secrets.token_hex(16))
         work.mkdir()
         journal = {"phase": "prepared", "pid": pid, "oldProfile": self.store.profile(pid),
-                   "targets": [{"name": name, "had": os.path.lexists(self._validate_target(root, name))} for name in sections]}
+                   "targets": [{"name": name, "had": os.path.lexists(self._validate_target(root, name)),
+                                "noReplace": name in no_replace} for name in sections]}
         if pins is not None:
             with self.store.connection() as db:
                 journal["oldPins"] = [list(r) for r in db.execute("SELECT kind,name FROM care_pins WHERE pid=?", (pid,))]
@@ -613,7 +668,11 @@ class BuildCare:
                 if target["had"]:
                     os.replace(dest, old)
                 if os.path.lexists(new):
-                    os.replace(new, dest)
+                    if target["noReplace"]:
+                        publish_new(new, dest)
+                        new.unlink(missing_ok=True)
+                    else:
+                        os.replace(new, dest)
             if new_profile:
                 _, version, loader = input_profile(new_profile["name"], new_profile["version"], new_profile["loader"])
                 with self.store.connection() as db:

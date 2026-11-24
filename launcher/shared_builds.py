@@ -24,7 +24,7 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from . import build_archive, e4steam, modrinth, room_bridge, steam_network
+from . import build_archive, e4steam, lifecycle, modrinth, room_bridge, steam_network
 from .modfiles import file_hash, file_stamp, mod_info, read_descriptor
 from .pack_hub import _hashes, _path, _size, _unique_name, _url, _validate_paths, download_verified
 from .store import KINDS, clean_filename, input_profile, require_idle_files, verify_pack
@@ -174,10 +174,18 @@ class SharedBuilds:
     READ_ACTIONS = {"shareRoomState"}
     JOBS = {"shareApply"}
 
-    def __init__(self, store, transfers=None, before_change=None, game_running=None):
+    def __init__(self, store, transfers=None, before_change=None, game_running=None, *, commit_changes=None):
         self.store, self.transfers = store, transfers
         self.before_change = before_change or (lambda pid, label: None)
         self.game_running = game_running or (lambda pid: False)
+        if commit_changes is None:
+            from .build_care import BuildCare
+            # The normal App injects its existing recovery service. Standalone
+            # consumers get the same journal protocol without running recovery
+            # before their caller has acquired the shared operation lock.
+            self._recovery = BuildCare(store, recover=False)
+            commit_changes = self._recovery._transaction
+        self.commit_changes = commit_changes
         self.plans = {}
         self.lock = threading.RLock()
 
@@ -371,6 +379,8 @@ class SharedBuilds:
                         download_verified(url, path, row["hashes"], row["size"], transfers=self.transfers, status=status, title=row["title"])
                         error = None
                         break
+                    except lifecycle.OperationCancelled:
+                        raise
                     except (ValueError, OSError) as exc:
                         if type(exc).__name__ == "TransferCancelled":
                             raise
@@ -408,46 +418,27 @@ class SharedBuilds:
                 new_id = self.store.create(name, descriptor["minecraft"], descriptor["loader"], prepare=prepare)
             else:
                 self.before_change(pid, "Синхронизация со сборкой друга")
-                removed, written = [], []
                 old_stamp = folder / build_archive.STAMP
                 if os.path.lexists(old_stamp) and (old_stamp.is_symlink() or not old_stamp.is_file() or old_stamp.stat().st_size > 65536):
                     raise ValueError("Сведения о загрузчике перенаправлены или повреждены. Исправь файл сборки перед синхронизацией.")
-                stamp_data = old_stamp.read_bytes() if old_stamp.exists() else None
-                try:
-                    for number, row in enumerate(result["different"]):
-                        target = folder.joinpath(*_path(row["current"]["path"]))
-                        backup = temp / f"old-{number}"
-                        target.rename(backup)
-                        removed.append((target, backup))
-                    for relative, path in staged.items():
-                        target = folder.joinpath(*_path(relative))
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        if target.exists():
-                            raise ValueError("Имя файла уже занято: " + relative)
-                        # Link/no-replace publication: never overwrite a manual file.
-                        from .modfiles import publish_new
-                        publish_new(path, target)
-                        written.append(target)
-                    if descriptor["loaderVersion"]:
-                        stamp_temp = temp / "stamp.json"
-                        stamp_temp.write_text(json.dumps(pin_data), encoding="utf-8")
-                        os.replace(stamp_temp, old_stamp)
-                except BaseException:
-                    try:
-                        for path in reversed(written):
-                            path.unlink(missing_ok=True)
-                        for target, backup in reversed(removed):
-                            if target.exists():
-                                raise ValueError("Во время восстановления появился другой файл.")
-                            backup.rename(target)
-                        if stamp_data is not None:
-                            old_stamp.write_bytes(stamp_data)
-                        else:
-                            old_stamp.unlink(missing_ok=True)
-                    except BaseException as recovery:
-                        cleanup = False
-                        raise ValueError("Восстановление не завершилось. Исходные файлы сохранены в " + str(temp)) from recovery
-                    raise
+                prepared = temp / "prepared"
+                prepared.mkdir()
+                removed = {row["current"]["path"] for row in result["different"]}
+                for relative, path in staged.items():
+                    target = folder.joinpath(*_path(relative))
+                    if os.path.lexists(target) and relative not in removed:
+                        raise ValueError("Имя файла уже занято: " + relative)
+                    destination = prepared.joinpath(*_path(relative))
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, destination)
+                sections = removed | set(staged)
+                if descriptor["loaderVersion"]:
+                    (prepared / build_archive.STAMP).write_text(json.dumps(pin_data), encoding="utf-8")
+                    sections.add(build_archive.STAMP)
+                # Reuse the launcher's durable journal. Its prepared marker is
+                # saved before the first rename, and startup recovers an abrupt
+                # process exit just as it recovers interrupted mod updates.
+                self.commit_changes(pid, prepared, sorted(sections))
                 new_id, name = pid, profile["name"]
             with self.lock:
                 self.plans.pop(token, None)

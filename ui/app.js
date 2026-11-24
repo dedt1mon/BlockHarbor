@@ -95,6 +95,8 @@ let state,
   kind = "mods",
   lastJob = "",
   acceptedJobGeneration = 0,
+  stateRequestSequence = 0,
+  appliedStateSequence = 0,
   lastPlayJob = "",
   shownExit = "",
   activePoll = false,
@@ -256,12 +258,25 @@ const act = (action, data = {}) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, ...data }),
   });
-async function refresh() {
+async function updateAppState(isCurrent = () => true) {
+  const request = ++stateRequestSequence;
   const generation = acceptedJobGeneration;
-  const current = await api("/api/state");
-  if (generation !== acceptedJobGeneration) return;
-  state = current;
-  render();
+  const mayApply = () => generation === acceptedJobGeneration && request >= appliedStateSequence && isCurrent();
+  try {
+    const current = await api("/api/state");
+    if (!mayApply()) return false;
+    appliedStateSequence = request;
+    state = current;
+    return true;
+  } catch (error) {
+    // An obsolete full-state request must not replace a newer operation's
+    // notice. Current failures still reach the caller's ordinary error UI.
+    if (!mayApply()) return false;
+    throw error;
+  }
+}
+async function refresh() {
+  if (await updateAppState()) render();
 }
 function navigate(v) {
   navigationRequest++;
@@ -275,9 +290,10 @@ function navigate(v) {
 }
 async function navigateFresh(v, section = null) {
   const request = ++navigationRequest;
-  const current = await api("/api/state");
+  await updateAppState(() => request === navigationRequest);
   if (request !== navigationRequest) return;
-  state = current;
+  // A job or newer refresh can supersede the fetched snapshot without
+  // cancelling the user's still-current choice of destination.
   if (section !== null) settingsSection = section === "downloads" ? "downloads" : "general";
   navigate(v);
 }

@@ -72,12 +72,15 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
-    env:
-      BH_AUDIT_OUTPUT: ${{ runner.temp }}\blockharbor-audit
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prepare isolated audit output directory
+        shell: pwsh
+        run: |
+          $auditOutput = Join-Path $env:RUNNER_TEMP 'blockharbor-audit'
+          "BH_AUDIT_OUTPUT=$auditOutput" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

@@ -20,7 +20,7 @@ function appHarness({realRefresh = false} = {}) {
   const dummy = {addEventListener() {}, classList: {toggle() {}}, querySelector() { return dummy; }};
   const context = {
     document: {hidden: false, querySelector: () => dummy, querySelectorAll: () => [], addEventListener() {}},
-    window: {addEventListener() {}, BatchUI: {start: id => started.push(id), observe: job => observed.push(job.id)}, ExperienceUI: {observeNotifications: value => unread.push(value)}},
+    window: {addEventListener() {}, scrollTo() {}, BatchUI: {start: id => started.push(id), observe: job => observed.push(job.id)}, ExperienceUI: {observeNotifications: value => unread.push(value)}},
     location: {hash: "#test-token", pathname: "/"},
     sessionStorage: {setItem() {}, getItem: () => "test-token"}, history: {replaceState() {}},
     setTimeout: () => 1, clearTimeout() {}, URLSearchParams, AbortController,
@@ -115,6 +115,54 @@ test("an obsolete poll error cannot replace the new job's notice", async () => {
   assert.equal(h.run("pollError"), "");
   assert.equal(h.run("lastJob"), "new-job");
 });
+
+for (const outcome of ["success", "error"]) {
+  test(`a navigation ${outcome} captured before a new job preserves that job and the requested destination`, async () => {
+    const h = appHarness({realRefresh: true});
+    const navigation = h.run("navigateFresh('settings', 'downloads')");
+    const accepted = h.run("runJob('installModrinth', {id:'profile',items:[{project:'new-project'}]})");
+    await flush();
+    h.polls[0].resolve(response({id: "new-job", busy: true, message: "Installing", notificationUnread: 2}));
+    await accepted;
+    const currentNotices = [...h.notices];
+    if (outcome === "success") h.states[1].resolve(response({profiles: [], job: {id: "old-job"}, nickname: "Stale profile", notificationUnread: 0}));
+    else h.states[1].reject(new Error("Old navigation request failed"));
+    await navigation;
+    assert.equal(h.run("state.job.id"), "new-job");
+    assert.equal(h.run("state.nickname"), undefined);
+    assert.deepEqual(h.unread, [2]);
+    assert.deepEqual(h.notices, currentNotices);
+    assert.equal(h.run("view"), "settings");
+    assert.equal(h.run("settingsSection"), "downloads");
+    assert.equal(h.context.rendered, 1, "The current destination was not rendered from the retained state");
+  });
+}
+
+test("a current navigation failure still reaches its error handler", async () => {
+  const h = appHarness({realRefresh: true});
+  const navigation = h.run("navigateFresh('settings')");
+  h.states[1].reject(new Error("Current request failed"));
+  await assert.rejects(navigation, /Связь с приложением прервана/);
+  assert.equal(h.run("view"), "home");
+  assert.equal(h.context.rendered, 0);
+});
+
+for (const [older, newer] of [["refresh()", "refresh()"], ["navigateFresh('settings')", "refresh()"], ["refresh()", "navigateFresh('settings')"]]) {
+  test(`a newer ${newer} survives an out-of-order ${older} response in the same job generation`, async () => {
+    const h = appHarness({realRefresh: true});
+    const previous = h.run(older);
+    const current = h.run(newer);
+    h.states[2].resolve(response({profiles: [], job: {id: "current-job"}, nickname: "Current profile", notificationUnread: 2}));
+    await current;
+    h.states[1].resolve(response({profiles: [], job: {id: "previous-job"}, nickname: "Stale profile", notificationUnread: 0}));
+    await previous;
+    assert.equal(h.run("state.job.id"), "current-job");
+    assert.equal(h.run("state.nickname"), "Current profile");
+    assert.equal(h.run("state.notificationUnread"), 2);
+    assert.equal(h.context.rendered, older === "refresh()" ? 1 : 2);
+    if (older !== "refresh()") assert.equal(h.run("view"), "settings");
+  });
+}
 
 test("batch component waits for the id returned by its own start request", () => {
   const toggle = {hidden: true, title: "", setAttribute() {}, classList: {toggle(_name, value) { toggle.active = value; }}};

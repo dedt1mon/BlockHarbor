@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "sourceHead": "9720ba5ab97e6bd4d552436e3ed4392fe504a44e",
+  "sourceTree": "515b11645bd9b6dc26d5c691b345b78de92dbed6",
+  "runId": 45448193348,
+  "runUrl": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45448193348",
+  "conclusion": "success",
+  "branch": "audit/ux-settings-2026-11-24",
+  "version": "2.6.8",
+  "main": "9a8b93c0ffa98c44c6340841c3db6a49e78dcfb1",
+  "releasePublished": false,
+  "jobs": [
+    {
+      "id": 138637664813,
+      "name": "windows",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Prepare isolated audit output directory",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-go@v6",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install application and browser test dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Python regressions on a fresh Windows runner",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build portable application without publishing",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native Windows cleanup and actual EXE payload regressions",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Unicode x64 NSIS",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build and exercise actual Windows installer",
+          "conclusion": "success"
+        },
+        {
+          "name": "Chromium UI scenarios on Windows",
+          "conclusion": "success"
+        },
+        {
+          "name": "Save Windows validation evidence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-go@v6",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 138637666000,
+      "name": "linux",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-go@v6",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install application and browser test dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Python regressions and authenticated HTTP integration",
+          "conclusion": "success"
+        },
+        {
+          "name": "JavaScript and server contract tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Installer payload and cleanup regressions",
+          "conclusion": "success"
+        },
+        {
+          "name": "Shared control geometry",
+          "conclusion": "success"
+        },
+        {
+          "name": "Production UI scripts at 24 resolution and scaling combinations",
+          "conclusion": "success"
+        },
+        {
+          "name": "Save browser evidence",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-go@v6",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 14947980682,
+      "name": "audit-browser-linux",
+      "size": 16481396,
+      "digest": "sha256:355a90c88ce602d09eb78b25f1347b71069c958b74f83d5e2a7b6d2348b17ddb",
+      "head": "9720ba5ab97e6bd4d552436e3ed4392fe504a44e"
+    },
+    {
+      "id": 14947831776,
+      "name": "audit-windows-validation",
+      "size": 13011599,
+      "digest": "sha256:b691e0ee542eb25364ec0ee6518d4689465909a91f45047fc159fced157a0474",
+      "head": "9720ba5ab97e6bd4d552436e3ed4392fe504a44e"
+    }
+  ],
+  "standaloneControls": {
+    "viewports": [
+      [
+        1440,
+        900
+      ],
+      [
+        900,
+        700
+      ],
+      [
+        520,
+        760
+      ]
+    ],
+    "passed": 3,
+    "total": 3
+  },
+  "coverage": "Production HTML/CSS/JavaScript with deterministic API fixtures. Viewport and DPR are emulated; native Windows DPI changes and WebView2 are not covered.",
+  "platforms": {
+    "linux": {
+      "browser": "157.0.8103.0",
+      "configurationsPassed": 24,
+      "scenarioChecks": 414,
+      "settingsScenariosPassed": 6,
+      "fieldMeasurements": 36,
+      "fieldErrors": 0,
+      "maxAbsCenterOffsetCssPx": 0.59375,
+      "controlHeightCssPx": 44
+    },
+    "windows": {
+      "browser": "157.0.8103.79",
+      "configurationsPassed": 24,
+      "scenarioChecks": 414,
+      "settingsScenariosPassed": 6,
+      "fieldMeasurements": 36,
+      "fieldErrors": 0,
+      "maxAbsCenterOffsetCssPx": 0.59375,
+      "controlHeightCssPx": 44
+    }
+  },
+  "screenshots": [
+    {
+      "file": "windows/general.png",
+      "sourceFile": "1366x768-100pct-settings.png",
+      "sha256": "821d31d4cec6a0aed52a646038ab037b6255bdb5edc20ea900412eb79024068e"
+    },
+    {
+      "file": "windows/downloads.png",
+      "sourceFile": "1366x768-100pct-downloads.png",
+      "sha256": "2ca5002cc156c5a95de3684e6dc1e40db5b9d67c41f4d913ddd79ae01e1bda0d"
+    },
+    {
+      "file": "windows/channel-picker-narrow.png",
+      "sourceFile": "1280x720-200pct-settings-app120-updateChannel-picker.png",
+      "sha256": "571c709b91958d49036c324e2ef0c3a467a2d59fd353faece7bcf368b180d292"
+    },
+    {
+      "file": "windows/scale-picker-narrow.png",
+      "sourceFile": "1280x720-200pct-settings-app120-uiScale-picker.png",
+      "sha256": "f150aea232b3af27ef8319acb59fb61c63b8ccd7c8a645d14025c3da153bfc66"
+    }
+  ],
+  "files": [
+    {
+      "file": "linux/field-metrics.json",
+      "bytes": 31870,
+      "sha256": "fdc7ca5ac0a4ff822771556deed61305f1d5f1364a36c993808fc1d31f9e1494"
+    },
+    {
+      "file": "linux/report.json",
+      "bytes": 6251,
+      "sha256": "a0f653525a275c5f285416a2c40f60dd684bbafbd702ea659b0b550799a23953"
+    },
+    {
+      "file": "windows/channel-picker-narrow.png",
+      "bytes": 73085,
+      "sha256": "571c709b91958d49036c324e2ef0c3a467a2d59fd353faece7bcf368b180d292"
+    },
+    {
+      "file": "windows/downloads.png",
+      "bytes": 76957,
+      "sha256": "2ca5002cc156c5a95de3684e6dc1e40db5b9d67c41f4d913ddd79ae01e1bda0d"
+    },
+    {
+      "file": "windows/field-metrics.json",
+      "bytes": 31895,
+      "sha256": "b9d4c4bbc701e32c6f0bcbd3baf86983e5494ca34eb8cff016c8543d84512c65"
+    },
+    {
+      "file": "windows/general.png",
+      "bytes": 64652,
+      "sha256": "821d31d4cec6a0aed52a646038ab037b6255bdb5edc20ea900412eb79024068e"
+    },
+    {
+      "file": "windows/report.json",
+      "bytes": 6616,
+      "sha256": "25bd5fa93f6dcd258e6a43caebb0a413133ed49b822898c87618e09960db4e07"
+    },
+    {
+      "file": "windows/scale-picker-narrow.png",
+      "bytes": 53327,
+      "sha256": "f150aea232b3af27ef8319acb59fb61c63b8ccd7c8a645d14025c3da153bfc66"
+    }
+  ]
+}

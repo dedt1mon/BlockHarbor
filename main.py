@@ -86,6 +86,7 @@ STATIC = {
     "/updates.css": "updates.css",
     "/pack-hub.js": "pack-hub.js",
     "/pack-hub.css": "pack-hub.css",
+    "/catalog-ux.css": "catalog-ux.css",
 }
 MIME = {
     ".html": "text/html; charset=utf-8",

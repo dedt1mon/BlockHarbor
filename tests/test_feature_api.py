@@ -3,6 +3,7 @@
 import http.cookiejar
 import io
 import json
+import re
 import tempfile
 import threading
 import unittest
@@ -54,8 +55,12 @@ class FeatureApiTests(unittest.TestCase):
                 self.assertIsInstance(result, dict)
         state = self.call("/api/state")
         self.assertEqual(state["appVersion"], VERSION)
-        for name in ("experience", "build-care", "pack-hub", "updates"):
-            self.assertGreater(len(self.call("/" + name + ".js",auth=False,raw=True)), 100)
+        index = self.call("/", auth=False, raw=True).decode("utf-8")
+        assets = set(re.findall(r'(?:src|href)="(/[^\"]+\.(?:css|js))"', index))
+        self.assertTrue(assets)
+        for path in assets:
+            with self.subTest(asset=path):
+                self.assertGreater(len(self.call(path, auth=False, raw=True)), 100)
 
     def test_get_cannot_mutate_and_cross_origin_is_blocked(self):
         for path, auth, origin, expected in ((f"/api/feature?action=careRemove&id={self.pid}", True,None,400),("/api/feature?action=updateState",False,None,403),("/api/state",True,"https://other.example",403)):

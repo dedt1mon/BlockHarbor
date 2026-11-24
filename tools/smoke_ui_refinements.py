@@ -23,6 +23,8 @@ class RefinementAPI(FixtureAPI):
         if action == "diagnostics":
             return {"notice": "Проверка завершена", "findings": [], "empty": False, "report": "Проверка сборки\n" * 70}
         result = super().feature(action)
+        if action == "packSearch":
+            result["total"] = 48
         if action == "updateState":
             result["current"] = "2.6.10"
             result["transfers"]["tasks"] = [
@@ -44,7 +46,7 @@ class RefinementAPI(FixtureAPI):
         if url.path == "/api/releases":
             route.fulfill(json={"versions": ["1.20.1"], "allVersions": [{"id": "1.20.1", "type": "release"}]})
         elif url.path == "/api/loaders":
-            route.fulfill(json={"loaders": [{"id": k, "supported": True, "message": "Готово"}
+            route.fulfill(json={"version": query.get("version", [""])[0], "loaders": [{"id": k, "supported": True, "message": "Готово"}
                                            for k in ("vanilla", "fabric", "forge", "neoforge", "quilt")]})
         elif url.path == "/api/catalog/search":
             route.fulfill(json={"hits": [{"id": "installed", "title": "Уже установлен", "description": "Этот файл есть в сборке.",
@@ -69,6 +71,7 @@ def check_layout(page, *, dialog=False):
 
 def header_action(page, label):
     action = page.locator("#dialogHeaderActions").get_by_role("button", name=label, exact=False)
+    action.wait_for(state="visible")
     assert action.count() == 1 and action.is_visible(), label + " is missing from the dialog header"
     check_layout(page, dialog=True)
     return action
@@ -104,7 +107,7 @@ def main():
                     page.wait_for_function("typeof state !== 'undefined' && state && window.ExperienceUI")
                     page.locator('aside [data-view="settings"]').click()
                     page.locator("#settingsDownloadsTab").click()
-                    page.wait_for_function("!document.querySelector('#updateChannel').disabled")
+                    page.wait_for_function("document.querySelector('#updateChannel') && !document.querySelector('#updateChannel').disabled")
                     check_layout(page)
                     cards = page.locator(".update-overview-grid > *")
                     assert cards.count() == 3
@@ -176,6 +179,8 @@ def main():
                     page.locator("[data-build-settings]").first.click()
                     for category in ("mods", "shaderpacks", "resourcepacks"):
                         page.locator(f'[data-kind="{category}"]').click()
+                        settle(page)
+                        page.locator(f'.tabs [data-kind="{category}"].on').wait_for(state="visible")
                         page.locator('[data-act="openCatalog"]').click()
                         page.wait_for_selector('[data-mark="installed"]')
                         assert page.locator('[data-mark="installed"]').is_disabled()

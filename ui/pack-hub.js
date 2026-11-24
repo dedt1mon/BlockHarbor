@@ -558,7 +558,7 @@
       updateReleaseSelection();
       // Required files, optional defaults and the safe name remain backend-owned.
       // The inline Steam note is accepted together with this installation click.
-      await runJob("packInstall", {token: data.token, name: data.name, allowWithoutSteam: true});
+      await runJob("packInstall", {token: data.token, name: data.name, allowWithoutSteam: true, discardOnFinish: true});
       request.accepted = true;
       if (isCurrent()) closeDialog();
     } catch (error) {

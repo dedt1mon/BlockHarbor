@@ -100,7 +100,7 @@ test("one catalog click prepares and installs without another dialog or duplicat
   await flush();
   assert.equal(h.jobs.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(h.jobs[0].data)), {
-    token: "checked-archive", name: "Author pack", allowWithoutSteam: true,
+    token: "checked-archive", name: "Author pack", allowWithoutSteam: true, discardOnFinish: true,
   }, "Backend defaults must own the optional component selection");
   assert.deepEqual(h.discards, [], "A token awaiting job acceptance was discarded");
   h.jobs[0].resolve("accepted-job");

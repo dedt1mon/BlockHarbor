@@ -86,6 +86,56 @@ class PackHubTests(unittest.TestCase):
         self.assertEqual(set(self.store.instances.iterdir()), before)
         self.assertEqual(self.hub.preview(prepared["token"])["name"], "Пак")
 
+    def test_failed_direct_install_releases_staging_and_allows_repeated_retry(self):
+        old = self.store.create("Старая", "1.20.1", "vanilla")
+        before = set(self.store.instances.iterdir())
+        for attempt in range(5):
+            with self.subTest(attempt=attempt):
+                prepared = self.hub.stage_import(pack_file([file_row()]))
+                with patch.object(packs, "download_verified", side_effect=ValueError("download failed")), \
+                        self.assertRaisesRegex(ValueError, "download failed"):
+                    self.hub.handle("packInstall", {"token": prepared["token"], "name": prepared["name"],
+                                                    "allowWithoutSteam": True, "discardOnFinish": True})
+                self.assertEqual(self.hub.previews, {})
+                self.assertFalse(list(self.hub.staging.glob("preview-*")))
+                self.assertEqual(self.store.get("active"), old)
+                self.assertEqual(set(self.store.instances.iterdir()), before)
+
+    def test_duplicate_direct_install_keeps_the_running_workers_archive(self):
+        prepared = self.hub.stage_import(pack_file([file_row()]))
+        request = {"token": prepared["token"], "allowWithoutSteam": True, "discardOnFinish": True}
+        archive = self.hub.previews[prepared["token"]]["path"]
+        entered, release = threading.Event(), threading.Event()
+        outcome = []
+
+        def download(*args, **kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise AssertionError("Installation was not released")
+            return self.download(*args, **kwargs)
+
+        def install():
+            try:
+                outcome.append(self.hub.handle("packInstall", request))
+            except BaseException as error:
+                outcome.append(error)
+
+        with patch.object(packs, "download_verified", side_effect=download):
+            worker = threading.Thread(target=install)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                with self.assertRaisesRegex(ValueError, "уже устанавливается"):
+                    self.hub.handle("packInstall", request)
+                self.assertTrue(archive.exists())
+            finally:
+                release.set()
+                worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(outcome[0], str)
+        self.assertEqual(len(self.store.all()), 1)
+        self.assertFalse(archive.exists())
+
     def test_download_checks_both_hashes_and_size_before_atomic_publication(self):
         target = self.store.root / "target.jar"
         target.write_bytes(b"existing")

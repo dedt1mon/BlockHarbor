@@ -1,4 +1,4 @@
-"""Focused 2.6.13 UX checks, using production UI and a stateful local API fixture."""
+"""Focused 2.6.14 UX checks, using production UI and a stateful local API fixture."""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ class RefinementAPI(FixtureAPI):
 
     def state(self):
         data = super().state()
-        data.update(appVersion="2.6.13", profiles=copy.deepcopy(self.profiles),
+        data.update(appVersion="2.6.14", profiles=copy.deepcopy(self.profiles),
                     deletedProfiles=copy.deepcopy(self.deleted), active=self.active)
         return data
 
@@ -81,7 +81,7 @@ class RefinementAPI(FixtureAPI):
         if action == "careState":
             result["snapshots"] = copy.deepcopy(self.snapshots)
         if action == "updateState":
-            result.update(current="2.6.13", rollback={"version": "2.6.12"})
+            result.update(current="2.6.14", rollback={"version": "2.6.13"})
         return result
 
     def start_job(self, action, data):
@@ -837,7 +837,7 @@ def main():
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
-                    print(f"PASS: 2.6.13 UX at {width}x{height}", flush=True)
+                    print(f"PASS: 2.6.14 UX at {width}x{height}", flush=True)
                 except Exception as error:
                     case["error"] = type(error).__name__ + ": " + str(error)
                     case["traceback"] = traceback.format_exc()

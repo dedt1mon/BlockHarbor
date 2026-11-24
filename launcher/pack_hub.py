@@ -427,7 +427,8 @@ class PackHub:
         if value:
             shutil.rmtree(value["path"].parent, ignore_errors=True)
 
-    def install_token(self, token, *, name="", optional=(), status=lambda message: None, allow_without_steam=False):
+    def install_token(self, token, *, name="", optional=(), status=lambda message: None, allow_without_steam=False,
+                      discard_on_finish=False):
         allowed = e4steam.notice_permission({"allowWithoutSteam": allow_without_steam})
         with self.lock:
             self.preview(token)
@@ -447,7 +448,9 @@ class PackHub:
             with self.lock:
                 value["installing"] = False
                 value["expires"] = time.monotonic() + 1800
-                discard = success or value.get("discardRequested")
+                # A direct catalog install has no preview to retry from. Release
+                # its archive after failure too, once this worker has finished.
+                discard = success or discard_on_finish or value.get("discardRequested")
             if discard:
                 self.discard(token)
 
@@ -593,6 +596,7 @@ class PackHub:
             return {"ok": True}
         if action == "packInstall":
             result = self.install_token(p["token"], name=p.get("name", ""), optional=p.get("optional", []), status=status,
-                                        allow_without_steam=e4steam.notice_permission(p))
+                                        allow_without_steam=e4steam.notice_permission(p),
+                                        discard_on_finish=p.get("discardOnFinish") is True)
             return f"Модпак «{result['name']}» установлен в отдельную сборку."
         raise ValueError("Неизвестное действие модпака.")

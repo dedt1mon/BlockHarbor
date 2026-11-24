@@ -1,5 +1,5 @@
 """The application version, shared by the UI, release checker and reports."""
 
 # Bumping this value triggers the stable Windows release workflow.
-VERSION = "2.6.13"
+VERSION = "2.6.14"
 DATA_SCHEMA = 1

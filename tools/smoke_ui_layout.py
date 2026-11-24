@@ -42,7 +42,8 @@ FIXTURE = r"""
 </main>
 <script>
 window.addEventListener("load", async () => {
-await new Promise(resolve => requestAnimationFrame(resolve));
+// The geometry reads below flush layout. A headless DOM dump need not paint
+// a frame before its virtual-time budget expires, so do not gate on rAF.
 const errors = [];
 const check = (value, message) => { if (!value) errors.push(message); };
 const q = s => document.querySelector(s);
@@ -90,7 +91,7 @@ def main():
     names = re.findall(r'<link rel="stylesheet" href="/([^"]+)"', index)
     assert len(names) >= 5
     css = "\n".join((UI / name).read_text(encoding="utf-8") for name in names)
-    html = '<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body>' + FIXTURE + '</body></html>'
+    html = '<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>'
     with tempfile.TemporaryDirectory(prefix="bh-layout-") as tmp:
         root = Path(tmp)
         page = root / "layout.html"
@@ -105,6 +106,11 @@ def main():
                 timeout=45, check=True,
             )
             if 'data-layout-result="PASS"' not in result.stdout:
+                evidence = ROOT / "artifacts" / "ui-audit"
+                evidence.mkdir(parents=True, exist_ok=True)
+                stem = f"controls-layout-{width}x{height}"
+                (evidence / (stem + ".html")).write_text(result.stdout, encoding="utf-8")
+                (evidence / (stem + "-stderr.txt")).write_text(result.stderr, encoding="utf-8")
                 errors = re.search(r'data-layout-errors="([^"]*)"', result.stdout)
                 raise AssertionError(f"Layout {width}x{height}: " + (errors[1] if errors else "no browser result"))
             print(f"PASS: Chromium layout {width}x{height}, controls, focus, selection, responsive widths")

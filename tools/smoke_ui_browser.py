@@ -418,8 +418,14 @@ def settings_flows(page, api, output, label, results):
                     record["failures"].append(name + ": " + str(error))
                     page.screenshot(path=str(output / (stem + "-" + name + "-FAIL.png")))
 
+            # app.js removes the token hash. Navigating back to /#token alone
+            # can therefore keep the previous document, dialog and preferences.
+            page.goto("about:blank")
             page.goto(ORIGIN + "/#" + TOKEN)
-            page.wait_for_function("typeof state !== 'undefined' && state && window.ExperienceUI")
+            page.wait_for_function("""scale => typeof state !== 'undefined' &&
+              state?.experience?.preferences?.scale === scale && window.ExperienceUI &&
+              Math.abs(parseFloat(getComputedStyle(document.documentElement).fontSize) - 15 * scale / 100) < .01""",
+                                   arg=app_scale)
             settle(page)
             assert abs(page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)") - 15 * app_scale / 100) < .01, "Production text scale was not applied"
             page.locator('aside [data-view="settings"]').click()

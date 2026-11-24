@@ -39,7 +39,6 @@ class FixtureAPI:
         self.requests = []
         self.reads = []
         self.racing_notification = True
-        self.publication_enabled = True
         self.preview_error = ""
         self.preferences = {"scale": 100, "reducedMotion": True}
         self.notifications = [{"id": 1, "created": 1770000000, "message": "Срок действия ссылки на сборку истёк. Сборка автоматически удалена с сервера", "level": "info", "read": False}]
@@ -55,7 +54,7 @@ class FixtureAPI:
         return sum(not item["read"] for item in self.notifications)
 
     def state(self):
-        return {"appVersion": "audit", "profiles": [self.profile, {**self.profile, "id": "profile-b", "name": "Вторая сборка", "loader": "quilt"}],
+        return {"appVersion": "audit", "capabilities": {"communitySharing": False}, "profiles": [self.profile, {**self.profile, "id": "profile-b", "name": "Вторая сборка", "loader": "quilt"}],
                 "deletedProfiles": [], "active": self.profile["id"], "contents": self.contents,
                 "experience": {"preferences": copy.deepcopy(self.preferences), "notificationUnread": self.unread},
                 "notificationUnread": self.unread, "steam": {"supported": True, "installed": True, "canEnable": False, "canContinue": True, "message": "Готово"},
@@ -64,6 +63,7 @@ class FixtureAPI:
                 "job": {**self.job, "notificationUnread": self.unread}, "mode": "local", "gameRunning": False, "gameExit": None, "localGameRunning": False, "runningProfiles": [], "launcherCount": 1}
 
     def feature(self, action):
+        assert not action.startswith("community"), "Disabled sharing requested feature: " + action
         if action == "experienceNotifications":
             return {"items": copy.deepcopy(list(reversed(self.notifications))), "unread": self.unread, "lastId": max((item["id"] for item in self.notifications), default=0)}
         if action == "experienceState":
@@ -76,14 +76,8 @@ class FixtureAPI:
             return {"worlds": [{"name": LONG_NAME, "size": 1024, "lastPlayed": 1770000000}]}
         if action == "buildErrors":
             return {"groups": [], "lastId": 0, "limit": 50}
-        if action == "communityPublication":
-            return {"publications": []}
-        if action == "communityCapabilities":
-            return {"enabled": self.publication_enabled, "message": "Сервер хранит публикацию 60 минут" if self.publication_enabled else "Новые публикации недоступны: сервер ещё не подтвердил правила"}
         if action == "packSearch":
             return {"hits": [{"id": "pack-" + str(i), "title": "Большая сборка " + str(i), "description": "Описание " * 40, "author": "Автор", "downloads": 1000, "icon": ""} for i in range(8)], "total": 8, "limit": 20, "offset": 0}
-        if action == "communitySearch":
-            return {"source": "primary", "hits": [{"id": "BH-0123456789A" + str(i), "name": LONG_NAME, "minecraft": "1.20.1", "loader": "fabric", "category": "adventure", "size": 1024, "expiresAt": 9999999999} for i in range(4)], "total": 4, "limit": 20, "offset": 0}
         if action == "updateState":
             return {"current": "audit", "channel": "stable", "autoEnabled": False, "available": False, "windows": True, "checkedAt": 1770000000, "transfers": {"tasks": []}, "trust": "Проверка контрольной суммы"}
         raise AssertionError("Unexpected feature: " + action)
@@ -91,6 +85,7 @@ class FixtureAPI:
     def action(self, data):
         self.actions.append(copy.deepcopy(data))
         action = data["action"]
+        assert not action.startswith("community"), "Disabled sharing requested action: " + action
         if action == "experienceNotify":
             assert data["message"] and data["level"] in {"info", "success", "error"}
             assert data["eventKey"], "A UI outcome must have an idempotency key"
@@ -193,6 +188,13 @@ class FixtureAPI:
 def settle(page):
     page.wait_for_function("window.__pendingRequests === 0")
     page.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+
+
+def sharing_disabled(page, api):
+    assert page.evaluate("state.capabilities.communitySharing === false")
+    assert page.locator("[data-pack-share], [data-pack-publish], [data-pack-community], [data-pack-community-retry], [data-pack-community-page], .community-results, .community-page-host, .community-file-share, [data-pack-receive]").count() == 0, "Disabled sharing still has UI controls"
+    assert not [row for row in api.requests if any(value.startswith("community") for value in row["query"].get("action", []))], "Disabled sharing still reads the registry"
+    assert not [row for row in api.actions if row["action"].startswith("community")], "Disabled sharing still mutates publications"
 
 
 def geometry(page, dialog=False):
@@ -530,17 +532,15 @@ def production_views(page, api, output, label):
     page.evaluate("navigate('builds')")
     settle(page)
     page.screenshot(path=str(output / (label + "-builds.png")))
-    page.locator("[data-pack-share]").first.click()
-    settle(page)
-    check_geometry("publication", True)
-    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_enabled()
-    if detailed_capture:
-        page.screenshot(path=str(output / (label + "-publication.png")))
-    page.locator("#dialogClose").click()
+    sharing_disabled(page, api)
+    assert page.locator('[data-act="importBuild"]').is_visible()
+    assert page.locator('[data-export-build]').count() == 2
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
     check_geometry("packs", True)
-    assert page.locator(".pack-card").count() == 12
+    sharing_disabled(page, api)
+    assert page.locator(".pack-card").count() == 8
+    assert page.locator('.pack-search [name="q"]').get_attribute("placeholder") == "Название модпака"
     assert page.locator(".pack-results").evaluate("el => el.clientHeight >= 24"), "Pack filters collapsed the results viewport"
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-packs.png")))
@@ -575,7 +575,7 @@ def production_views(page, api, output, label):
     readable_batch_row(page)
     page.screenshot(path=str(output / (label + "-batch.png")))
     page.locator("[data-batch-hide]").click()
-    return 14 - len(geometry_failures), geometry_failures
+    return 13 - len(geometry_failures), geometry_failures
 
 
 def interaction_flows(page, api, output, label):
@@ -611,23 +611,16 @@ def interaction_flows(page, api, output, label):
     assert page.locator(".notification-dot").is_visible(), "New event failed to restore indicator"
 
     page.evaluate("navigate('builds')")
-    api.publication_enabled = False
-    page.locator("[data-pack-share]").first.click()
     settle(page)
-    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_disabled(), "Unverified retention allowed publishing"
-    api.publication_enabled = True
-    page.locator("[data-pack-policy-retry]").click()
-    settle(page)
-    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_enabled()
-    page.locator("#dialogClose").click()
+    sharing_disabled(page, api)
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
     previous_requests = len(api.requests)
     page.locator('[data-pack-filter="loader"]').select_option("quilt")
     settle(page)
     calls = [entry for entry in api.requests[previous_requests:] if entry["path"] == "/api/feature"]
-    for action in ("packSearch", "communitySearch"):
-        assert any(entry["query"].get("action") == [action] and entry["query"].get("loader") == ["quilt"] for entry in calls), action + " did not receive filter"
+    assert any(entry["query"].get("action") == ["packSearch"] and entry["query"].get("loader") == ["quilt"] for entry in calls), "Modrinth search did not receive filter"
+    sharing_disabled(page, api)
     page.locator("#dialogClose").click()
 
     api.job.update(busy=False, ok=True)

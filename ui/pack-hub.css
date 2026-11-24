@@ -61,7 +61,7 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .pack-optional small { color: var(--muted); white-space: nowrap; }
 @media(max-width:760px) { .pack-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } .pack-grid { grid-template-columns: 1fr; } .pack-intro { align-items: flex-start; flex-direction: column; gap: 9px; } }
 .pack-source-title { margin: 18px 0 12px; font-size: 16px; }
-.pack-modrinth { margin-top: 20px; border-top: 1px solid var(--line); }
+.community-results + .pack-modrinth { margin-top: 20px; border-top: 1px solid var(--line); }
 .pack-status:empty,.community-feedback:empty { display: none; }
 .pack-card h4 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
 /* A compact, full-width publishing form and publication management view. */
@@ -82,11 +82,6 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .community-receipt strong { overflow-wrap: anywhere; }
 .community-feedback { font-size: 13px; }
 .community-feedback:empty { display: none; }
-.community-file-share { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
-.community-file-share > h3 { margin: 0 0 8px; }
-.community-file-share > .actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
-.community-file-share > .actions > .btn { width: 100%; min-width: 0; white-space: normal; }
-@media(max-width:480px) { .community-file-share > .actions { grid-template-columns: minmax(0,1fr); } }
 
 .community-published-actions,
 .community-confirm-actions,

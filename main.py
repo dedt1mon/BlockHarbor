@@ -31,6 +31,7 @@ from launcher import (
     catalog_sources,
     distances,
     e4steam,
+    features,
     friends,
     lifecycle,
     loader_catalog,
@@ -426,6 +427,8 @@ class App:
     def feature_action(self, action, params, *, read=False):
         self.scope.check()
         service = next((item for item in self.features if action in item.ACTIONS), None)
+        if service is self.community:
+            features.require_community_sharing()
         reads = getattr(service, "READ_ACTIONS", {"updateState"} if service is self.updates else set())
         # Read-only queries, cancel controls and the atomic favorite flag stay
         # responsive during downloads without acquiring the game-files lock.
@@ -506,6 +509,7 @@ class App:
         estimated = automatic_heap()
         return {
             "appVersion": VERSION,
+            "capabilities": features.capabilities(),
             "experience": {"preferences": self.experience.preferences()},
             "notificationUnread": self.experience.notification_unread(),
             "profiles": profiles,

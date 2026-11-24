@@ -93,6 +93,7 @@ def test_runtime(installed, root, version):
 
         state = call("api/state")
         assert state["appVersion"] == version, state.get("appVersion")
+        assert state["capabilities"]["communitySharing"] is False
         try:
             call("api/state", auth=False)
         except HTTPError as exc:
@@ -106,9 +107,18 @@ def test_runtime(installed, root, version):
         state = call("api/state")
         profile = next(x for x in state["profiles"] if x["name"] == "Тестовая сборка")
         for action in ("careState", "careWorlds", "experienceState", "performanceState",
-                       "shareRoomState", "communityPublication", "diagnostics", "updateState"):
+                       "shareRoomState", "diagnostics", "updateState"):
             result = call("api/feature?action=" + action + "&id=" + profile["id"])
             assert isinstance(result, dict), action
+        try:
+            call("api/feature?action=communityPublication&id=" + profile["id"])
+        except HTTPError as exc:
+            assert exc.code == 400
+            assert "временно отключена" in exc.read().decode("utf-8")
+            exc.close()
+        else:
+            raise AssertionError("Packaged launcher permitted paused community publication")
+        print("PASS: packaged runtime keeps community publication paused")
         for script in ("app.js", "window.js", "pack-hub.js", "updates.js", "build-care.js"):
             assert len(call(script, auth=False, raw=True)) > 100, script
         print("PASS: packaged runtime with isolated system PATH, local API, Russian profile, feature reads, static UI, authentication")

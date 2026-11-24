@@ -98,6 +98,10 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
 
     def test_share_dialog_publish_action_uses_footer_inside_form(self):
         publishing = self.pack_ui.split('function showPublish(', 1)[1].split('function setPublicationBusy(', 1)[0]
+        self.assertIn('if (!sharingEnabled()) return;', publishing)
+        self.assertNotIn('community-file-share', self.pack_ui)
+        self.assertNotIn('community-file-share', self.packs)
+        self.assertNotIn('packReceive', self.pack_ui)
         self.assertIn('id="communityPublishForm"', publishing)
         self.assertIn('class="community-publish-footer"', publishing)
         self.assertIn('type="submit" data-pack-publish-submit', publishing)

@@ -12,8 +12,9 @@
   const communityDownloads = new Set();
   let publicationRequest = 0;
   let pendingPublication = null, selectedCommunity = null;
-  const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim())
-    || /^https:\/\/blockharbor-community-catalog\.ded8timon\.chatgpt\.site\/v1\/builds\/BH-[0-9A-F]{12}(?:\/archive)?$/i.test(catalog.q.trim());
+  const sharingEnabled = () => typeof state !== "undefined" && state?.capabilities?.communitySharing === true;
+  const exactCommunityId = () => sharingEnabled() && (/^BH-[0-9A-F]{12}$/i.test(catalog.q.trim())
+    || /^https:\/\/blockharbor-community-catalog\.ded8timon\.chatgpt\.site\/v1\/builds\/BH-[0-9A-F]{12}(?:\/archive)?$/i.test(catalog.q.trim()));
   const choices = new Map();
   const releaseRows = new Map();
   const releaseInstalls = new Map();
@@ -71,7 +72,7 @@
       button.dataset.packProject === focusProject || button.dataset.packCommunity === focusCommunity);
     (previous || host.querySelector('[name="q"]'))?.focus({preventScroll: true});
     if ((!catalog.page || catalog.needsSearch) && !catalog.busy) search(catalog.nextOffset);
-    if (!community.busy && (community.needsSearch || Date.now() - community.fetchedAt >= 15000)) searchCommunity(community.page?.offset || 0);
+    if (sharingEnabled() && !community.busy && (community.needsSearch || Date.now() - community.fetchedAt >= 15000)) searchCommunity(community.page?.offset || 0);
   }
 
   function results() {
@@ -90,6 +91,7 @@
   }
 
   function communityResults() {
+    if (!sharingEnabled()) return "";
     const page = community.page;
     let status = "";
     if (community.error) status = `<p class="pack-status pack-error" role="status">${esc(community.error)} ${button("data-pack-community-retry", "Повторить")}</p>`;
@@ -105,6 +107,7 @@
   }
 
   function communityPager() {
+    if (!sharingEnabled()) return "";
     const page = community.page;
     if (!page || page.total <= page.limit) return "";
     return `<div class="pack-pager" aria-label="Страницы сборок игроков">${button('data-pack-community-page="prev"' + (community.busy || !page.offset ? " disabled" : ""), "Назад", "back")}
@@ -113,13 +116,14 @@
   }
 
   function updateCommunityResults(host) {
-    if (!host?.isConnected) return;
+    if (!sharingEnabled() || !host?.isConnected) return;
     host.innerHTML = communityResults();
     const pagination = host.closest(".pack-hub")?.querySelector(".community-page-host");
     if (pagination) pagination.innerHTML = communityPager();
   }
 
   async function searchCommunity(offset = 0, quiet = false) {
+    if (!sharingEnabled()) return;
     community.controller?.abort();
     const controller = new AbortController();
     community.controller = controller;
@@ -131,7 +135,7 @@
     if (!quiet) updateCommunityResults(host);
     try {
       const page = await feature("communitySearch", {q: catalog.q, category: catalog.category, version: catalog.version, loader: catalog.loader, offset}, {signal: controller.signal});
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || !sharingEnabled()) return;
       community.page = page;
       community.fetchedAt = Date.now();
       community.needsSearch = false;
@@ -157,11 +161,12 @@
     catalog.needsSearch = true;
     updateResults();
     document.querySelector(".pack-results")?.scrollTo(0, 0);
-    searchCommunity();
+    if (sharingEnabled()) searchCommunity();
     search();
   }
 
   function updateShareButtons(id) {
+    if (!sharingEnabled()) return;
     const rows = (publicationCache.get(id)?.publications || []).filter(row => !row.expiresAt || row.expiresAt * 1000 > Date.now());
     const published = rows.some(row => !row.statusUnverified), uncertain = rows.length > 0 && !published;
     for (const control of document.querySelectorAll('[data-pack-share]')) {
@@ -184,12 +189,14 @@
   }
 
   async function fetchPublications(id, force = false) {
+    if (!sharingEnabled()) return [];
     const cached = publicationCache.get(id);
     if (!force && cached && Date.now() - cached.fetched < 15000)
       return cached.publications.filter(row => !row.expiresAt || row.expiresAt * 1000 > Date.now());
     if (publicationRequests.has(id)) return publicationRequests.get(id);
     const epoch = publicationEpochs.get(id) || 0;
     const request = feature("communityPublication", {id}).then(data => {
+      if (!sharingEnabled()) return [];
       if ((publicationEpochs.get(id) || 0) !== epoch) return data.publications || [];
       return savePublications(id, data);
     }).finally(() => {
@@ -200,13 +207,13 @@
   }
 
   function refreshOpenCommunity() {
-    if (!document.hidden && document.querySelector('.pack-dialog[data-pack-view="catalog"]') &&
+    if (sharingEnabled() && !document.hidden && document.querySelector('.pack-dialog[data-pack-view="catalog"]') &&
         !community.busy && Date.now() - community.attemptedAt >= 15000)
       searchCommunity(community.page?.offset || 0, true);
   }
 
   function refreshShareButtons() {
-    if (!state?.profiles?.length || !document.querySelector("[data-pack-share]")) return;
+    if (!sharingEnabled() || !state?.profiles?.length || !document.querySelector("[data-pack-share]")) return;
     const current = ++publicationRequest;
     const ids = state.profiles.map(p => p.id);
     for (const id of ids) updateShareButtons(id);
@@ -240,12 +247,13 @@
   }
 
   async function readPublications(form) {
+    if (!sharingEnabled()) return;
     const host = form.querySelector(".community-receipts");
     const revision = String(Number(host.dataset.revision || 0) + 1);
     host.dataset.revision = revision;
     try {
       const publications = await fetchPublications(form.dataset.packPublish, true);
-      if (!form.isConnected || host.dataset.revision !== revision) return;
+      if (!sharingEnabled() || !form.isConnected || host.dataset.revision !== revision) return;
       host.innerHTML = publicationRows(publications);
       form.classList.remove("is-checking");
       form.classList.toggle("is-published", publications.length > 0);
@@ -280,6 +288,7 @@
   }
 
   async function readPublicationCapabilities(form) {
+    if (!sharingEnabled()) return;
     const status = form.querySelector(".community-policy-status");
     const retry = form.querySelector("[data-pack-policy-retry]");
     form.dataset.policyVerified = "false";
@@ -287,7 +296,7 @@
     if (retry) retry.disabled = true;
     try {
       const policy = await feature("communityCapabilities");
-      if (!form.isConnected || !status) return;
+      if (!sharingEnabled() || !form.isConnected || !status) return;
       status.textContent = policy?.message || "Не удалось подтвердить правила публикации на сервере.";
       status.dataset.mode = policy?.enabled === true ? "verified" : "unverified";
       form.dataset.policyVerified = String(policy?.enabled === true);
@@ -304,6 +313,7 @@
   }
 
   function showPublish(id) {
+    if (!sharingEnabled()) return;
     const profile = state.profiles.find(p => p.id === id);
     if (!profile) return;
     const previous = (publicationCache.get(id)?.publications || []).filter(row =>
@@ -322,10 +332,7 @@
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
       <div class="community-publish-footer"><button id="communityPublishSubmit" class="btn main" type="submit" data-pack-publish-submit disabled>${ic("share")}Опубликовать</button><p role="status" class="community-publication-status">Проверяем статус публикации…</p></div>
-    </form><section class="community-file-share"><h3>Передать другу ZIP</h3>
-      <p class="note">Можно отправить ZIP другу любым удобным способом. В архиве будут моды и настройки, без миров. Получатель выбирает этот ZIP через «Получить сборку». Публикация в каталоге для этого не нужна.</p>
-      <div class="actions">${button(`data-export-build="${esc(id)}"`, "Передать ZIP", "share")}${button("data-pack-receive", "Получить сборку", "download")}</div>
-    </section>`, {contentSized: true});
+    </form>`, {contentSized: true});
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
     readPublicationCapabilities(form);
@@ -361,6 +368,7 @@
   }
 
   function observeJob(job) {
+    if (!sharingEnabled()) return;
     refreshOpenCommunity();
     const request = pendingPublication;
     if (!request || !request.job || job.id !== request.job || job.busy) return;
@@ -386,6 +394,7 @@
   }
 
   async function publicationAction(form, action, params) {
+    if (!sharingEnabled()) return;
     if (pendingPublication) return notice("Дождись завершения текущей публикации.", true);
     const publishing = action === "communityPublish";
     const request = {id: form.dataset.packPublish, job: null,
@@ -404,13 +413,15 @@
   }
 
   function renderPacks() {
-    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Название сборки, ID или ссылка" aria-label="Название сборки, ID или ссылка" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
+    const sharing = sharingEnabled();
+    const searchLabel = sharing ? "Название сборки, ID или ссылка" : "Название модпака";
+    return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="${searchLabel}" aria-label="${searchLabel}" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
       <label>Загрузчик<select class="field" data-pack-filter="loader">${option("", "Любой", catalog.loader)}${Object.entries(loaders).map(([v, label]) => option(v, label, catalog.loader)).join("")}</select></label>
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", ...categories}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
       <label>Сортировка<select class="field" data-pack-filter="sort">${Object.entries({relevance: "По релевантности", downloads: "По загрузкам", follows: "По подписчикам", newest: "Сначала новые", updated: "Недавно обновлённые"}).map(([v, label]) => option(v, label, catalog.sort)).join("")}</select></label></div>
-      <div class="pack-results"><section class="community-results" aria-label="Сборки игроков BlockHarbor">${communityResults()}</section>
-      <section class="pack-modrinth" aria-label="Модпаки"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div></section></div><footer class="pack-pagination"><div class="community-page-host">${communityPager()}</div><div class="pack-page-host">${pager()}</div></footer></section>`;
+      <div class="pack-results">${sharing ? `<section class="community-results" aria-label="Сборки игроков BlockHarbor">${communityResults()}</section>` : ""}
+      <section class="pack-modrinth" aria-label="Модпаки"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div></section></div><footer class="pack-pagination">${sharing ? `<div class="community-page-host">${communityPager()}</div>` : ""}<div class="pack-page-host">${pager()}</div></footer></section>`;
   }
 
   function loadArt() {
@@ -602,6 +613,7 @@
     const form = event.target;
     if (form.matches("[data-pack-publish]")) {
       event.preventDefault();
+      if (!sharingEnabled()) return;
       if (form.classList.contains("is-checking") || form.classList.contains("is-published") || form.dataset.policyVerified !== "true") return;
       const data = new FormData(form);
       const name = data.get("name").trim();
@@ -615,6 +627,7 @@
   });
   document.addEventListener("change", event => {
     if (event.target.matches('.community-publish [name="includeConfigs"]')) {
+      if (!sharingEnabled()) return;
       event.target.form.querySelector("#communityConfigHelp").hidden = !event.target.checked;
       return;
     }
@@ -635,13 +648,9 @@
     if (!target || target.disabled) return;
     const d = target.dataset;
     if (!Object.keys(d).some(key => key.startsWith("pack"))) return;
+    if (!sharingEnabled() && ["packShare", "packCopyId", "packCopyLink", "packWithdraw", "packPublicationRetry", "packPolicyRetry", "packCommunity", "packCommunityRetry", "packCommunityPage"].some(key => key in d)) return;
     try {
       if (d.packShare) return showPublish(d.packShare);
-      if ("packReceive" in d) {
-        closeDialog();
-        document.querySelector("#buildZipPick")?.click();
-        return;
-      }
       if ("packCopyId" in d) {
         const input = target.closest(".community-id").querySelector("input");
         input.value = input.dataset.publicationId || input.value;
@@ -739,7 +748,7 @@
   window.PackHubUI = {
     render: renderPacks,
     openCatalog,
-    isPublished(id) {return (publicationCache.get(id)?.publications || []).some(row =>
+    isPublished(id) {return sharingEnabled() && (publicationCache.get(id)?.publications || []).some(row =>
       !row.statusUnverified && (!row.expiresAt || row.expiresAt * 1000 > Date.now()));},
     refreshShareButtons,
     observeJob,
@@ -748,7 +757,7 @@
       loadArt();
       if (!document.querySelector(".pack-hub")) return;
       if (!catalog.page && !catalog.busy && !catalog.error) search();
-      if (community.needsSearch && !community.busy && !community.error) searchCommunity();
+      if (sharingEnabled() && community.needsSearch && !community.busy && !community.error) searchCommunity();
     },
     preview: previewPack,
     async dispatch(action) {

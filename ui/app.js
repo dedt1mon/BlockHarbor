@@ -483,7 +483,7 @@ function buildRows(profiles) {
         '»">' +
         ic("upload") +
         "<span>Выгрузить</span></button>" +
-        `<button type="button" class="btn build-settings${window.PackHubUI?.isPublished(p.id) ? " is-published" : ""}" data-pack-share="${esc(p.id)}" title="${window.PackHubUI?.isPublished(p.id) ? "Управление публикацией" : "Поделиться сборкой"}" aria-label="${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться сборкой"} «${esc(p.name)}»">${ic(window.PackHubUI?.isPublished(p.id) ? "check" : "share")}<span>${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться"}</span></button>` +
+        (state.capabilities?.communitySharing === true ? `<button type="button" class="btn build-settings${window.PackHubUI?.isPublished(p.id) ? " is-published" : ""}" data-pack-share="${esc(p.id)}" title="${window.PackHubUI?.isPublished(p.id) ? "Управление публикацией" : "Поделиться сборкой"}" aria-label="${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться сборкой"} «${esc(p.name)}»">${ic(window.PackHubUI?.isPublished(p.id) ? "check" : "share")}<span>${window.PackHubUI?.isPublished(p.id) ? "Опубликовано" : "Поделиться"}</span></button>` : "") +
         '<button type="button" class="build-remove" data-remove-build="' +
         esc(p.id) +
         '" aria-label="Удалить сборку «' +
@@ -883,8 +883,7 @@ function supportSettings() {
     <section class="panel support-card"><h3>${ic("layers")}Мои работы</h3>
       <p>Другие проекты, дизайн и разработки — на моём сайте.</p>
       <a class="btn" href="https://dedt1mon.github.io/" target="_blank" rel="noopener noreferrer">Открыть сайт ${ic("link")}</a></section>
-    <section class="panel support-donation"><div class="support-donation-heading"><h3>${ic("star")}Поддержать разработку</h3><span class="tag">По желанию</span></div>
-      <p>Закинь минуточку на развитие BlockHarbor. Выбери любую сумму от 50 ₽ и переведи её в своём банковском приложении.</p>
+    <section class="panel support-donation"><div class="support-donation-heading"><h3>${ic("star")}Поддержать разработку</h3></div>
       <div class="support-transfer"><div class="support-amount"><label for="supportAmount">Сумма, ₽</label>
         <input id="supportAmount" class="field" type="number" min="50" step="1" required inputmode="numeric" value="${esc(supportAmount)}" aria-describedby="supportAmountHelp">
         <div class="support-presets" role="group" aria-label="Выбрать сумму">${[50,100,250,500].map(amount => `<button type="button" class="btn" data-support-amount="${amount}" aria-pressed="${Number(supportAmount) === amount}">${amount} ₽</button>`).join("")}</div>

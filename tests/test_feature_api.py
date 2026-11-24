@@ -93,6 +93,82 @@ class FeatureApiTests(unittest.TestCase):
         self.assertEqual(error.exception.code,403)
         self.assertEqual(len(self.app.store.all()),1)  # preview never installs silently
 
+    def test_disabled_community_is_rejected_before_network_or_job_creation(self):
+        self.assertIs(self.call("/api/state")["capabilities"]["communitySharing"], False)
+        community = self.app.community
+        with (patch.object(self.app, "start_job") as start,
+              patch.object(community.api, "json") as registry,
+              patch.object(community.api, "request") as download,
+              patch.object(community.mirror, "search") as mirror):
+            for action in sorted(community.ACTIONS):
+                with self.subTest(action=action):
+                    params = {"action": action, "id": self.pid, "build": "BH-A123456789BC"}
+                    with self.assertRaises(HTTPError) as error:
+                        self.call("/api/action", params)
+                    self.assertEqual(error.exception.code, 400)
+                    self.assertIn("временно отключена", error.exception.read().decode("utf-8"))
+                    if action in community.READ_ACTIONS:
+                        with self.assertRaises(HTTPError) as read_error:
+                            self.call(f"/api/feature?action={action}&id={self.pid}")
+                        self.assertEqual(read_error.exception.code, 400)
+                        self.assertIn("временно отключена", read_error.exception.read().decode("utf-8"))
+                    with self.assertRaisesRegex(ValueError, "временно отключена"):
+                        community.handle(action, params)
+            start.assert_not_called()
+            registry.assert_not_called()
+            download.assert_not_called()
+            mirror.assert_not_called()
+        self.assertFalse(self.app.job_snapshot()["busy"])
+
+    def test_disabled_publication_poll_keeps_existing_owner_records_without_server_calls(self):
+        community = self.app.community
+        listing = {"id": "BH-A123456789BC", "name": "Старая публикация", "minecraft": "1.20.1",
+                   "loader": "vanilla", "category": "adventure", "size": 100,
+                   "sha256": "a" * 64, "expiresAt": 1}
+        with self.app.store.connection() as db:
+            db.execute("INSERT INTO community_uploads VALUES(?,?,?,?,?,?)",
+                       (community.api.origin, self.pid, "existing", "a" * 32, "b" * 64, json.dumps(listing)))
+            community._remember_receipt(db, listing, "b" * 64)
+            uploads = [tuple(row) for row in db.execute("SELECT * FROM community_uploads")]
+            receipts = [tuple(row) for row in db.execute("SELECT * FROM community_receipts")]
+        with (patch.object(community.api, "json") as registry,
+              patch.object(self.app.updates, "tick_auto"),
+              patch.object(self.app.updates, "monitor_pending"),
+              patch.object(self.app.experience, "notify") as notify,
+              patch("launcher.community_catalog.threading.Thread") as thread):
+            self.app.background_maintenance()
+            community.tick_notifications(notify)
+            self.assertEqual(community.sync_notifications(notify), 0)
+            registry.assert_not_called()
+            thread.assert_not_called()
+            notify.assert_not_called()
+        with self.app.store.connection() as db:
+            self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM community_uploads")], uploads)
+            self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM community_receipts")], receipts)
+
+    def test_community_pause_keeps_zip_roundtrip_and_modrinth_catalog_available(self):
+        self.assertIs(self.call("/api/state")["capabilities"]["communitySharing"], False)
+        folder = self.app.store.folder(self.pid)
+        (folder / "mods/example.jar").write_bytes(b"example mod")
+        (folder / "config").mkdir(exist_ok=True)
+        (folder / "config/example.json").write_text('{"enabled":true}')
+        world = folder / "saves/private-world/level.dat"
+        world.parent.mkdir(parents=True)
+        world.write_bytes(b"private world")
+        ticket = self.call("/api/build-export", {"id": self.pid})
+        raw = self.call(ticket["download"], auth=False, raw=True)
+        imported = self.call("/api/build-import", raw)
+        copied = self.app.store.folder(imported["id"])
+        self.assertEqual((copied / "mods/example.jar").read_bytes(), b"example mod")
+        self.assertEqual((copied / "config/example.json").read_text(), '{"enabled":true}')
+        self.assertFalse((copied / "saves/private-world/level.dat").exists())
+        with patch("launcher.pack_hub.modrinth._get", return_value={"hits": [], "total_hits": 0}) as search:
+            result = self.call("/api/feature?action=packSearch&q=adventure")
+        self.assertEqual(result["hits"], [])
+        search.assert_called_once()
+        self.assertEqual(search.call_args.args, ("/search",))
+        self.assertEqual(search.call_args.kwargs["query"], "adventure")
+
     def test_auto_world_backup_is_deferred_outside_state_poll(self):
         self.app.store.set("careAutoWorldBackup:"+self.pid,"0")
         with patch.object(self.app.care,"backup_after_game",return_value="Копия готова") as backup:

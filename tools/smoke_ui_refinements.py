@@ -1,4 +1,4 @@
-"""Focused 2.6.15 UX checks, using production UI and a stateful local API fixture."""
+"""Focused 2.6.16 UX checks, using production UI and a stateful local API fixture."""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 import zipfile
 
-from smoke_ui_browser import FixtureAPI, TOKEN, geometry, settle
+from smoke_ui_browser import FixtureAPI, TOKEN, geometry, settle, sharing_disabled
 
 
 class RefinementAPI(FixtureAPI):
@@ -35,6 +35,7 @@ class RefinementAPI(FixtureAPI):
         self.trash_images = {}
         self.trash_counter = 0
         self.exports = []
+        self.imports = []
         self.downloads = {}
         self.download_receipts = []
         self.pending_job = None
@@ -52,7 +53,7 @@ class RefinementAPI(FixtureAPI):
 
     def state(self):
         data = super().state()
-        data.update(appVersion="2.6.15", profiles=copy.deepcopy(self.profiles),
+        data.update(appVersion="2.6.16", profiles=copy.deepcopy(self.profiles),
                     deletedProfiles=copy.deepcopy(self.deleted), active=self.active)
         return data
 
@@ -71,9 +72,6 @@ class RefinementAPI(FixtureAPI):
         if action == "experienceGallery":
             return {"images": copy.deepcopy(self.images), "trash": copy.deepcopy(self.trash),
                     "total": len(self.images), "limit": 200}
-        if action == "communityPublication":
-            pid = (query or {}).get("id", [""])[0]
-            return {"publications": copy.deepcopy(self.publications.get(pid, []))}
         result = super().feature(action)
         if action == "experienceState":
             result["wardrobe"] = [{"id": "skin-a", "name": "Исследователь", "model": "classic", "preview": "a" * 64},
@@ -81,7 +79,7 @@ class RefinementAPI(FixtureAPI):
         if action == "careState":
             result["snapshots"] = copy.deepcopy(self.snapshots)
         if action == "updateState":
-            result.update(current="2.6.15", rollback={"version": "2.6.14"})
+            result.update(current="2.6.16", rollback={"version": "2.6.15"})
         return result
 
     def start_job(self, action, data):
@@ -97,21 +95,14 @@ class RefinementAPI(FixtureAPI):
         action, data = self.pending_job
         if action == "purgeBuild":
             self.deleted = [row for row in self.deleted if row["id"] != data["id"]]
-        elif action == "communityUnpublish":
-            self.publications[data["id"]] = [
-                row for row in self.publications.get(data["id"], []) if row["build"] != data["build"]]
-        elif action == "communityInstall":
-            self.profiles.append({**self.profile, "id": "community-installed", "name": "Сборка игрока"})
         elif action == "packInstall":
             self.profiles.append({**self.profile, "id": "pack-installed", "name": data["name"]})
-        elif action == "communityPublish":
-            self.publications.setdefault(data["id"], []).append({"build": "BH-FEDCBA987654", "name": data["name"], "expiresAt": 9999999999})
         self.pending_job = None
         self.job.update(busy=False, ok=True, message="Операция завершена.")
 
     def action(self, data):
         action = data["action"]
-        custom = {"create", "deleteBuild", "restoreBuild", "purgeBuild", "communityInstall", "communityUnpublish", "communityPublish", "careDeleteSnapshot",
+        custom = {"create", "deleteBuild", "restoreBuild", "purgeBuild", "careDeleteSnapshot",
                   "packPreview", "packInstall", "experienceClearBuildErrors",
                   "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
         if action not in custom:
@@ -159,15 +150,6 @@ class RefinementAPI(FixtureAPI):
             row = next(row for row in self.deleted if row["id"] == data["id"])
             row["purging"] = True
             return self.start_job(action, data)
-        elif action == "communityUnpublish":
-            assert any(row["build"] == data["build"] for row in self.publications.get(data["id"], []))
-            return self.start_job(action, data)
-        elif action == "communityPublish":
-            assert data["name"] and data["category"], "Publishing lost required form values"
-            return self.start_job(action, data)
-        elif action == "communityInstall":
-            assert data["allowWithoutSteam"] is False, "Supported Steam unexpectedly bypassed compatibility"
-            return self.start_job(action, data)
         elif action == "experienceDeleteScreenshots":
             assert data["id"] == self.active and data["images"]
             selected = []
@@ -207,7 +189,7 @@ class RefinementAPI(FixtureAPI):
             route.fulfill(status=409, json={"error": "Копия используется другой операцией."})
             return
         custom = {"/api/feature", "/api/releases", "/api/loaders",
-                  "/api/steam/compatibility", "/api/build-export"}
+                  "/api/steam/compatibility", "/api/build-export", "/api/build-import"}
         download = url.path.startswith("/api/build-download/")
         if url.path not in custom and not download:
             return super().route(route)
@@ -239,6 +221,15 @@ class RefinementAPI(FixtureAPI):
             elif url.path == "/api/steam/compatibility":
                 result = {"supported": self.steam_supported, "acknowledged": self.steam_supported, "variants": [],
                           "version": query.get("version", [""])[0], "loader": query.get("loader", [""])[0]}
+            elif url.path == "/api/build-import":
+                assert request.method == "POST" and request.headers.get("content-type") == "application/zip"
+                contents = request.post_data_buffer
+                with zipfile.ZipFile(io.BytesIO(contents)) as archive:
+                    payload = json.loads(archive.read("fixture.json"))
+                assert payload == {"id": "profile-a", "worlds": False}, "Import lost the exported ZIP contents"
+                self.imports.append({"bytes": len(contents), "exportPayload": payload})
+                result = {**self.profile, "id": "profile-imported", "name": "Сборка из ZIP"}
+                self.profiles.append(result)
             else:
                 assert request.method == "POST"
                 payload = request.post_data_json
@@ -279,7 +270,8 @@ class LoopbackFixture:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 request = SimpleNamespace(url=api.origin + self.path, method=self.command,
                                           headers={key.lower(): value for key, value in self.headers.items()},
-                                          post_data_json=json.loads(body) if body else None)
+                                          post_data_buffer=body,
+                                          post_data_json=json.loads(body) if body and self.headers.get_content_type() == "application/json" else None)
                 handler = self
 
                 class Response:
@@ -535,6 +527,8 @@ def check_screens(page, api, output, width, height, case):
     amount.wait_for(state="visible")
     assert page.locator("#settingsPanel").get_attribute("aria-labelledby") == "settingsSupportTab"
     assert page.locator("#settingsSupportTab").get_attribute("aria-selected") == "true"
+    support_text = page.locator("#settingsPanel").inner_text()
+    assert "По желанию" not in support_text and "Закинь минуточку" not in support_text
     assert amount.input_value() == "100" and amount.get_attribute("min") == "50"
     amount.fill("49")
     assert amount.evaluate("el => el.validity.rangeUnderflow && !el.checkValidity()")
@@ -721,6 +715,8 @@ def check_screens(page, api, output, width, height, case):
 
     case["stage"] = "build-actions"
     navigate(page, "builds", '[data-export-build="profile-a"]')
+    publications_before = copy.deepcopy(api.publications)
+    sharing_disabled(page, api)
     case["download"] = {"expectedFilename": "blockharbor-profile-a.zip", "status": "waiting-for-browser"}
     print(f"DOWNLOAD: {width}x{height}: requesting ZIP export without worlds", flush=True)
     with page.expect_download() as download_event:
@@ -739,6 +735,17 @@ def check_screens(page, api, output, width, height, case):
     settle(page)
     assert api.exports == [{"id": "profile-a", "worlds": False}]
     no_confirmation(page)
+    with page.expect_file_chooser() as chooser_event:
+        page.locator('[data-act="importBuild"]').click()
+    chooser_event.value.set_files({"name": download.suggested_filename, "mimeType": "application/zip",
+                                  "buffer": Path(download.path()).read_bytes()})
+    page.locator('[data-profile="profile-imported"]').wait_for(state="visible")
+    settle(page)
+    assert len(api.imports) == 1 and api.imports[0]["exportPayload"] == {"id": "profile-a", "worlds": False}
+    assert page.locator("#buildZipPick").is_enabled()
+    case["import"] = copy.deepcopy(api.imports[0])
+    no_confirmation(page)
+    sharing_disabled(page, api)
     for cycle in range(2):
         page.locator('[data-remove-build="profile-a"]').click()
         settle(page)
@@ -772,7 +779,7 @@ def check_screens(page, api, output, width, height, case):
             complete_job(page, api)
             assert not api.deleted and page.locator('[data-purge-build="profile-a"]').count() == 0
 
-    case["stage"] = "publication-and-headers"
+    case["stage"] = "create-and-headers"
     api.steam_supported = False
     page.locator('[data-act="create"]').click()
     page.wait_for_function("document.querySelector('[name=createBuildSubmit]') && !document.querySelector('[name=createBuildSubmit]').disabled")
@@ -799,38 +806,16 @@ def check_screens(page, api, output, width, height, case):
     assert page.locator("#steamCompatibilityDialog").count() == 0
     notice_in_history(page, api, "Сборка создана.", "success")
     api.steam_supported = True
-    navigate(page, "builds", '[data-pack-share="profile-b"]')
-    page.locator('[data-pack-share="profile-b"]').click()
-    withdraw = page.locator('[data-pack-withdraw="BH-0123456789AB"]')
-    withdraw.wait_for(state="visible")
-    withdraw.click()
-    settle(page)
-    last_action(api, "communityUnpublish", id="profile-b", build="BH-0123456789AB")
-    assert withdraw.is_disabled(), "Unpublish unlocked before its job completed"
-    assert page.locator(".community-confirm").count() == 0
-    complete_job(page, api)
-    page.locator("#communityPublishSubmit").wait_for(state="visible")
-    settle(page)
-    assert page.locator("#communityPublishSubmit").is_enabled() and not api.publications["profile-b"]
-    case["headers"]["publish"] = header_metrics(page)
-    case["publishActions"] = row_metrics(page.locator(".community-publish-footer"), ":scope > button, :scope > .community-publication-status")
-    assert page.locator("#dialogHeaderActions #communityPublishSubmit").count() == 0
-    assert page.locator("#communityPublishSubmit").evaluate("el => el.form.id") == "communityPublishForm"
-    page.locator('#communityPublishForm [name="category"]').select_option("adventure")
-    page.screenshot(path=str(output / f"{width}-publish.png"))
-    page.locator("#communityPublishSubmit").click()
-    page.wait_for_function("state.job && state.job.busy")
-    last_action(api, "communityPublish", id="profile-b", category="adventure", includeConfigs=False)
-    assert page.locator("#communityPublishSubmit").is_disabled()
-    complete_job(page, api)
-    page.locator('[data-pack-withdraw="BH-FEDCBA987654"]').wait_for(state="visible")
-    assert "опубликовано" in page.locator(".community-publication-status").inner_text().lower()
-    page.locator("#dialogClose").click()
+    navigate(page, "builds", '[data-export-build="profile-b"]')
+    sharing_disabled(page, api)
 
     case["stage"] = "catalog-and-compact-header"
     page.locator('[data-act="packCatalog"]').click()
     page.locator("[data-pack-project]").first.wait_for(state="visible")
     settle(page)
+    sharing_disabled(page, api)
+    assert page.locator('.pack-search [name="q"]').get_attribute("placeholder") == "Название модпака"
+    assert page.locator("[data-pack-project]").count() == 8
     pager = page.locator(".pack-pagination")
     pager_top = pager.bounding_box()["y"]
     case["packPagerPosition"] = pagination_position(page, "packs")
@@ -883,17 +868,11 @@ def check_screens(page, api, output, width, height, case):
     assert page.evaluate("window.__steamHeaderPrompt") is False
     page.set_viewport_size({"width": width, "height": height})
     page.locator('[data-act="packCatalog"]').click()
-    community = page.locator("[data-pack-community]").first
-    community.wait_for(state="visible")
+    page.locator("[data-pack-project]").first.wait_for(state="visible")
     settle(page)
-    build_id = community.get_attribute("data-pack-community")
-    community.click()
-    settle(page)
-    last_action(api, "communityInstall", build=build_id, allowWithoutSteam=False)
-    no_confirmation(page)
-    assert page.locator("#steamCompatibilityDialog").count() == 0
-    complete_job(page, api)
-    assert page.locator('[data-profile="community-installed"]').count() == 1
+    sharing_disabled(page, api)
+    assert api.publications == publications_before, "Disabling the UI changed an existing publication"
+    page.locator("#dialogClose").click()
     assert not api.errors, api.errors
     case["stage"] = "complete"
 
@@ -945,7 +924,7 @@ def main():
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
-                    print(f"PASS: 2.6.15 UX at {width}x{height}", flush=True)
+                    print(f"PASS: 2.6.16 UX at {width}x{height}", flush=True)
                 except Exception as error:
                     case["error"] = type(error).__name__ + ": " + str(error)
                     case["traceback"] = traceback.format_exc()
@@ -958,7 +937,7 @@ def main():
                     print(case["traceback"], flush=True)
                 finally:
                     case["pageErrors"], case["apiErrors"] = errors, api.errors
-                    case["actions"], case["exports"] = api.actions, api.exports
+                    case["actions"], case["exports"], case["imports"] = api.actions, api.exports, api.imports
                     case["requests"], case["downloadReceipts"] = api.requests, api.download_receipts
                     context.close()
                     server.close()

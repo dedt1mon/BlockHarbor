@@ -156,6 +156,8 @@ class ReceiptAPI:
 
 class PublicationReceiptTests(unittest.TestCase):
     def setUp(self):
+        # Exercise the dormant receipt protocol independently of the release gate.
+        self.enterContext(patch("launcher.features.COMMUNITY_SHARING_ENABLED", True))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name))

@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import build_archive, e4steam, lifecycle, version_ids
+from . import build_archive, e4steam, features, lifecycle, version_ids
 from .pack_hub import CATEGORIES
 from .store import LOADERS, input_profile
 from .staging import owned_directory, prune_abandoned
@@ -327,6 +327,8 @@ class CommunityCatalog:
 
     def tick_notifications(self, notify):
         """Start a small owned background poll, never blocking UI/session checks."""
+        if not features.COMMUNITY_SHARING_ENABLED:
+            return
         moment = time.monotonic()
         with self._notification_lock:
             if moment < self._notification_next or self._notification_thread and self._notification_thread.is_alive():
@@ -350,6 +352,8 @@ class CommunityCatalog:
 
     def sync_notifications(self, notify):
         """Save before ACK: process/network crashes cannot lose an owner event."""
+        if not features.COMMUNITY_SHARING_ENABLED:
+            return 0
         moment = int(time.time())
         with self.store.connection() as db:
             rows = db.execute("SELECT * FROM community_receipts WHERE origin=? AND expires<=? AND next_check<=? ORDER BY next_check,expires LIMIT 8",
@@ -784,6 +788,7 @@ class CommunityCatalog:
         return result
 
     def handle(self, action, params, status=lambda msg: None):
+        features.require_community_sharing()
         if action == "communitySearch":
             return self.search(params)
         if action == "communityCapabilities":

@@ -47,7 +47,7 @@ jobs:
           node --test community-registry/worker.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py
-      - name: Check streamlined settings, dialog alignment and direct actions
+      - name: Check direct actions and accessible dialog headers
         run: python -u tools/smoke_ui_refinements.py --output artifacts/ui-refinements
       - name: Save focused UI preview
         if: always()

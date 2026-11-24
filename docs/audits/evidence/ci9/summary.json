@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 1,
+  "sourceHead": "6a0a1a97a1f7a07fe7023814f23ec01d8e7758f0",
+  "runId": 45430303954,
+  "runUrl": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45430303954",
+  "conclusion": "success",
+  "counting": {
+    "python": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup.",
+    "go": "Each pass/fail/skip event with a Test field is one terminal test result. Package terminal events are separate.",
+    "browser": "Configurations are display/scale combinations; scenarioGroups are harness scenario groups, not independent unit tests."
+  },
+  "jobs": {
+    "linux": {
+      "id": 138573446987,
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45430303954/job/138573446987"
+    },
+    "windows": {
+      "id": 138573446257,
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45430303954/job/138573446257"
+    }
+  },
+  "artifacts": {
+    "linux": {
+      "id": 14939027988,
+      "name": "audit-browser-linux",
+      "sha256": "4815b1a4ff1670daddf1112867c0837073dff3d10e2d4c7109935cd6b4b2c8da",
+      "archiveBytes": 13539538
+    },
+    "windows": {
+      "id": 14937613416,
+      "name": "audit-windows-validation",
+      "sha256": "69a5edc04e78d2442d591e4f19ecfae0d4c491f880cefab5ff4cfc59505db566",
+      "archiveBytes": 10565317
+    }
+  },
+  "python": {
+    "linux": {
+      "tests": 672,
+      "passed": 671,
+      "failedCases": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "expectedFailures": 0,
+      "unexpectedSuccesses": 0,
+      "skips": [
+        {
+          "test": "test_transfer_reliability.TransferReliabilityTests.test_native_windows_short_path_cannot_hang_destination_validation",
+          "reason": "Requires actual Windows short-path aliases"
+        }
+      ],
+      "durationSeconds": 32.601,
+      "sourceFile": "tests-linux.json"
+    },
+    "windows": {
+      "tests": 672,
+      "passed": 672,
+      "failedCases": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expectedFailures": 0,
+      "unexpectedSuccesses": 0,
+      "skips": [],
+      "durationSeconds": 220.643,
+      "sourceFile": "tests-windows.json"
+    }
+  },
+  "go": {
+    "linux": {
+      "bootstrap": {
+        "totalTestTerminals": 5,
+        "passed": 4,
+        "failed": 0,
+        "skipped": 1,
+        "packageResult": "pass",
+        "packageSeconds": 0.004,
+        "passedTests": [
+          "TestSetupAndRepair",
+          "TestIncompleteAndInvalidArchive",
+          "TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork",
+          "TestBootstrapNoticeIsIsolatedToTheActualChild"
+        ],
+        "skippedTests": [
+          "TestShippedExecutable"
+        ],
+        "sourceFile": "go-bootstrap-linux.jsonl"
+      },
+      "cleanup": {
+        "totalTestTerminals": 7,
+        "passed": 7,
+        "failed": 0,
+        "skipped": 0,
+        "packageResult": "pass",
+        "packageSeconds": 0.007,
+        "passedTests": [
+          "TestSessionRecordsDoNotTreatCorruptionAsIdle",
+          "TestOrphanGameBlocksAndReusedPIDDoesNot",
+          "TestRecordFilesAreBoundedAndLinksAreRejected",
+          "TestProtectedRemovalKeepsBarriersAndExternalLinks",
+          "TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks",
+          "TestBarrierNamesUseWindowsCaseComparison",
+          "TestEmptyFinalRemoveDoesNotSweepNewData"
+        ],
+        "skippedTests": [],
+        "sourceFile": "go-cleanup-linux.jsonl"
+      }
+    },
+    "windows": {
+      "bootstrap": {
+        "totalTestTerminals": 5,
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0,
+        "packageResult": "pass",
+        "packageSeconds": 2.932,
+        "passedTests": [
+          "TestSetupAndRepair",
+          "TestIncompleteAndInvalidArchive",
+          "TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork",
+          "TestBootstrapNoticeIsIsolatedToTheActualChild",
+          "TestShippedExecutable"
+        ],
+        "skippedTests": [],
+        "sourceFile": "go-bootstrap-windows.jsonl"
+      },
+      "cleanup": {
+        "totalTestTerminals": 13,
+        "passed": 13,
+        "failed": 0,
+        "skipped": 0,
+        "packageResult": "pass",
+        "packageSeconds": 1.059,
+        "passedTests": [
+          "TestSessionRecordsDoNotTreatCorruptionAsIdle",
+          "TestOrphanGameBlocksAndReusedPIDDoesNot",
+          "TestRecordFilesAreBoundedAndLinksAreRejected",
+          "TestProtectedRemovalKeepsBarriersAndExternalLinks",
+          "TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks",
+          "TestBarrierNamesUseWindowsCaseComparison",
+          "TestEmptyFinalRemoveDoesNotSweepNewData",
+          "TestWindowsBootstrapHandleBlocksAppend",
+          "TestWindowsLegacyByteLockMatchesLauncher",
+          "TestWindowsRootPinsAndJunctionRemoval",
+          "TestWindowsDirectoryPinsAcceptShortAncestorAndKeepIdentity",
+          "TestWindowsDirectoryPinsRejectLeafAndAncestorJunctions",
+          "TestWindowsProcessBirthProtectsAgainstPIDReuse"
+        ],
+        "skippedTests": [],
+        "sourceFile": "go-cleanup-windows.jsonl"
+      }
+    }
+  },
+  "nodeOrdering": {
+    "tests": 22,
+    "passed": 22,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "platform": "linux",
+    "sourceJob": 138573446987
+  },
+  "worker": {
+    "tests": 24,
+    "passed": 24,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "platform": "linux",
+    "sourceJob": 138573446987
+  },
+  "windowLifecycle": {
+    "result": "pass",
+    "platform": "linux",
+    "sourceJob": 138573446987,
+    "logEvidence": "PASS: browser close, hidden window, reload, beacon fallback, page restore, native registration"
+  },
+  "controls": {
+    "platform": "linux",
+    "passed": 3,
+    "failed": 0,
+    "viewports": [
+      [
+        1440,
+        900
+      ],
+      [
+        900,
+        700
+      ],
+      [
+        520,
+        760
+      ]
+    ],
+    "sourceJob": 138573446987
+  },
+  "browser": {
+    "linux": {
+      "passedConfigurations": 24,
+      "failedConfigurations": 0,
+      "scenarioGroups": 400,
+      "pngCount": 98,
+      "browserVersion": "157.0.8103.0",
+      "platform": "linux",
+      "artifactId": 14939027988,
+      "reportPath": "../ui-linux/report.json"
+    },
+    "windows": {
+      "passedConfigurations": 24,
+      "failedConfigurations": 0,
+      "scenarioGroups": 400,
+      "pngCount": 98,
+      "browserVersion": "157.0.8103.79",
+      "platform": "win32",
+      "artifactId": 14937613416,
+      "reportPath": "../ui-windows/report.json"
+    }
+  },
+  "windowsPackage": {
+    "sourceJob": 138573446257,
+    "portableBuild": "pass",
+    "nsisBuild": "pass",
+    "unicodeInstall": "pass",
+    "upgradePreservesUnrelatedFiles": "pass",
+    "packagedRuntimeSystemOnlyPath": "pass",
+    "authenticatedLocalApi": "pass",
+    "uninstallPreservesUnrelatedFiles": "pass",
+    "logEvidence": [
+      "PASS: actual silent NSIS installation to a Unicode path and registry metadata",
+      "PASS: actual silent upgrade preserves unrelated files",
+      "PASS: packaged runtime with isolated system PATH, local API, Russian profile, feature reads, static UI, authentication",
+      "PASS: actual silent uninstall preserves unrelated files"
+    ]
+  },
+  "windowsPrivacyTest": {
+    "result": "pass",
+    "sourceJob": 138573446257,
+    "logEvidence": "test_privacy_links_in_instance_are_not_exported (test_build_archive.BuildArchiveTests.test_privacy_links_in_instance_are_not_exported) ... ok"
+  },
+  "manualVisualReview": {
+    "reviewedBy": "ui_audit",
+    "linuxOriginals": [
+      "1280x720-200pct-batch.png",
+      "1280x720-200pct-batch-busy.png",
+      "1366x768-100pct-batch-result.png"
+    ],
+    "windowsOriginals": [
+      "1280x720-200pct-catalog.png",
+      "3440x1440-100pct-builds.png",
+      "1280x720-200pct-batch.png",
+      "1280x720-200pct-batch-busy.png",
+      "1366x768-100pct-batch-result.png"
+    ],
+    "compactBatchFullFirstRowAndStatus": "pass",
+    "compactBusyNoticeAndCancel": "pass",
+    "partialResultAndRetry": "pass",
+    "windowsCatalogAndWideBuilds": "pass",
+    "uiManifests": [
+      "../ui-linux/manifest.json",
+      "../ui-windows/manifest.json"
+    ]
+  },
+  "rawFiles": [
+    {
+      "file": "tests-linux.json",
+      "artifactId": 14939027988,
+      "sha256": "b3e538b3dc61937eccdaacff6f4bdc28c0cacac288fdc1eb91410a0f269dfb0c",
+      "bytes": 3733
+    },
+    {
+      "file": "go-bootstrap-linux.jsonl",
+      "artifactId": 14939027988,
+      "sha256": "3e78248c0e9e11fa612b50af0271a4e4b8e43e46fe7273011ee93203a3be0778",
+      "bytes": 4360
+    },
+    {
+      "file": "go-cleanup-linux.jsonl",
+      "artifactId": 14939027988,
+      "sha256": "109774f9ea887ede458631321b8c9e9b4e15c7d2c091c494d577761692127a40",
+      "bytes": 6289
+    },
+    {
+      "file": "tests-windows.json",
+      "artifactId": 14937613416,
+      "sha256": "0026671098d54d9e867af085b46ef42cb4665ab632c6ecdabd148ff16e9c46ee",
+      "bytes": 3434
+    },
+    {
+      "file": "go-bootstrap-windows.jsonl",
+      "artifactId": 14937613416,
+      "sha256": "ebcd83f51d5f1df2ad8280126cdd1dd3e351e089d812021e10840457cfb7452a",
+      "bytes": 10160
+    },
+    {
+      "file": "go-cleanup-windows.jsonl",
+      "artifactId": 14937613416,
+      "sha256": "f0d52ef1110147e86d6fcb2ffed5214a09a34a8f308567f5a5c5e92246670240",
+      "bytes": 11223
+    }
+  ],
+  "limitations": [
+    "Browser tests execute production UI with deterministic API fixtures in real headless Chrome on Linux and Windows.",
+    "Display scaling uses CSS viewport and deviceScaleFactor emulation. Native Windows system DPI changes and WebView2 window geometry are not measured.",
+    "Windows packaging was checked on a fresh hosted Windows runner with an isolated child environment, not a consumer PC.",
+    "Real Minecraft installation, game-world rendering and gameplay are outside this browser and package smoke coverage.",
+    "Selected PNGs and raw JSON/JSONL files are unchanged copies from the workflow artifacts. Python durations, Node/Worker/control summaries and package smoke lines come from the referenced job logs."
+  ]
+}

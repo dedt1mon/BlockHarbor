@@ -3,11 +3,14 @@ const PART = 8 * 1024 ** 2;
 const MAX_SIZE = 256 * 1024 ** 2; // 256 MiB maximum per public archive.
 const STORAGE_LIMIT = 8 * 1024 ** 3; // Hard ceiling below R2's free allowance.
 const ACTIVE_PER_PUBLISHER = 3;
-const RATE_WINDOW = 10 * 60;
-const RATE_REQUESTS = 10;
-const RATE_BAN = 5 * 60 * 60;
+const RATE_BURST = 3;
+const RATE_COOLDOWN = 5 * 60;
+const MAX_RATE_SUBJECTS = 200000;
+const PRUNE_THROTTLE = 5;
 const UPLOAD_TTL = 30 * 60; // Unfinished multipart reservations expire in 30 min.
 const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after completion.
+const CLEANUP_BATCH = 16;
+const MAX_OWNER_RECEIPTS = 200000; // Bound durable offline receipts without expiring unread events.
 const PAGE = 20;
 const CATEGORIES = new Set(['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']);
 const LOADERS = new Set(['vanilla','fabric','quilt','forge','neoforge']);
@@ -39,9 +42,11 @@ function capabilities() {
   return {
     publicRetentionSeconds: PUBLIC_TTL,
     manifestFormat: 1,
+    ownerNotificationFormat: 1,
     publishLimits: {
       maxArchiveBytes: MAX_SIZE, maxActive: ACTIVE_PER_PUBLISHER,
-      windowSeconds: RATE_WINDOW, maxAttempts: RATE_REQUESTS, banSeconds: RATE_BAN,
+      burstAttempts: RATE_BURST, cooldownSeconds: RATE_COOLDOWN,
+      rateScope: 'publisher-build', stableBuildKeyRequired: true,
     },
   };
 }
@@ -64,83 +69,105 @@ async function publisherKey(request, env) {
     {name:'HMAC',hash:'SHA-256'},false,['sign']);
   return hex(await crypto.subtle.sign('HMAC',key,text.encode(ip)));
 }
-async function checkPublicationRate(env, subject) {
+async function checkPublicationRate(env, publisher, data) {
   const moment=now();
-  // SQLite UPSERT + RETURNING is one atomic statement, so concurrent POSTs
-  // cannot defeat the 10-attempt window. 11th starts a fixed 5-hour block.
-  const sql = [
-    'INSERT INTO publisher_rate (subject,window_start,attempts,blocked_until,updated_at)',
-    'VALUES (?, ?, 1, 0, ?)',
-    'ON CONFLICT(subject) DO UPDATE SET',
-    'attempts=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.attempts',
-      'WHEN publisher_rate.window_start<=?-? THEN 1',
-      'ELSE publisher_rate.attempts+1 END,',
-    'blocked_until=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.blocked_until',
-      'WHEN publisher_rate.window_start> ?-? AND publisher_rate.attempts>=?',
-      'THEN ?+?',
-      'ELSE 0 END,',
-    'window_start=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.window_start',
-      'WHEN publisher_rate.window_start<=?-? THEN ?',
-      'ELSE publisher_rate.window_start END,',
-    'updated_at=?',
-    'RETURNING attempts,blocked_until,window_start'
-  ].join(' ');
-  const result=await env.DB.prepare(sql).bind(
-    subject,moment,moment,
-    moment,moment,RATE_WINDOW,
-    moment,moment,RATE_WINDOW,RATE_REQUESTS,moment,RATE_BAN,
-    moment,moment,RATE_WINDOW,moment,moment).first();
-  requireThat(result && Number.isInteger(result.attempts),503,
-    'Не удалось проверить ограничения публикации.');
-  if(result.blocked_until>moment) {
-    if(result.blocked_until===moment+RATE_BAN) {
-      // Immediately cancel unfinished spam reservations to free R2 capacity.
-      // Never unpublish already verified 'ready' builds.
-      try {
-        const {results:unfinished}=await env.DB.prepare(
-          "SELECT * FROM builds WHERE publisher=? AND state='uploading' LIMIT ?"
-        ).bind(subject,ACTIVE_PER_PUBLISHER).all();
-        for(const row of unfinished) await discard(env,row);
-      } catch(error) {
-        console.warn('Deferred cleanup for blocked publisher',error?.name || 'error');
-      }
-    }
-    const remaining=result.blocked_until-moment;
+  // The stable profile key survives edits, retries and new upload tokens.
+  // A second gate prevents rotating that key to republish identical content.
+  const subjects=await Promise.all([
+    hash('build:'+publisher+':'+data.buildKey),
+    hash('content:'+publisher+':'+data.sha256),
+  ]);
+  // Materialize eligibility BEFORE either upsert. Both guards consume one
+  // attempt atomically, or neither changes. The first three are immediate;
+  // thereafter each accepted attempt starts a new 300-second interval. No
+  // idle-time reset, janitor, withdrawal or complete replay restores a burst.
+  const {results}=await env.DB.prepare(`
+    WITH allowed AS MATERIALIZED (
+      SELECT 1 WHERE NOT EXISTS (
+        SELECT 1 FROM publication_rate WHERE subject IN (?,?) AND next_allowed>?
+      ) AND (SELECT count(*) FROM publication_rate)+2-
+        (SELECT count(*) FROM publication_rate WHERE subject IN (?,?))<=?
+    )
+    INSERT INTO publication_rate(subject,attempts,next_allowed,updated_at)
+      SELECT subject,1,0,? FROM (SELECT ? AS subject UNION ALL SELECT ?)
+      WHERE EXISTS (SELECT 1 FROM allowed)
+    ON CONFLICT(subject) DO UPDATE SET
+      attempts=MIN(?,publication_rate.attempts+1),
+      next_allowed=CASE WHEN publication_rate.attempts>=? THEN ?+? ELSE 0 END,
+      updated_at=?
+    RETURNING subject,attempts,next_allowed
+  `).bind(...subjects,moment,...subjects,MAX_RATE_SUBJECTS,moment,...subjects,
+    RATE_BURST,RATE_BURST-1,moment,RATE_COOLDOWN,moment).all();
+  if(results.length===2) return;
+  const blocked=await env.DB.prepare(
+    'SELECT MAX(next_allowed) AS until FROM publication_rate WHERE subject IN (?,?)'
+  ).bind(...subjects).first();
+  if(blocked?.until>moment) {
     throw new RequestError(429,
-      'Публикация временно заблокирована из-за слишком частых попыток.',
-      {code:'PUBLISH_RATE_BAN',retryAfterSeconds:remaining,blockedUntil:result.blocked_until});
+      'Три быстрые попытки уже использованы. Повторная публикация этой сборки доступна не чаще раза в 5 минут.',
+      // Keep the established error shape so older launchers show the modal.
+      {code:'PUBLISH_RATE_BAN',retryAfterSeconds:blocked.until-moment,blockedUntil:blocked.until});
   }
-}
-async function cleanupRateCounters(env) {
-  const cutoff=now()-RATE_BAN-RATE_WINDOW-3600;
-  await env.DB.prepare([
-    'DELETE FROM publisher_rate WHERE subject IN',
-    '(SELECT subject FROM publisher_rate',
-    'WHERE updated_at<? AND blocked_until<? ORDER BY updated_at LIMIT 256)'
-  ].join(' ')).bind(cutoff,now()).run();
+  throw new RequestError(503,'Сервис временно не принимает новые сборки: достигнут предел служебного хранилища.');
 }
 
 async function discard(env, row, expiredOnly = false) {
   // Hide first. Retries safely finish an interrupted deletion.
+  const moment=now();
+  const mark="UPDATE builds SET expired_at=CASE WHEN state='ready' AND created<=? THEN created+? ELSE expired_at END,state='removing' WHERE id=?";
   const update = expiredOnly
-    ? env.DB.prepare("UPDATE builds SET state='removing' WHERE id=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(row.id, now()-UPLOAD_TTL, now()-PUBLIC_TTL)
-    : env.DB.prepare("UPDATE builds SET state='removing' WHERE id=?").bind(row.id);
+    ? env.DB.prepare(mark+" AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?))").bind(moment-PUBLIC_TTL,PUBLIC_TTL,row.id,moment-UPLOAD_TTL,moment-PUBLIC_TTL)
+    : env.DB.prepare(mark).bind(moment-PUBLIC_TTL,PUBLIC_TTL,row.id);
   if ((await update.run()).meta.changes === 0) return;
-  if (row.state !== 'ready') {
+  row=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(row.id).first();
+  if(!row) return; // Another janitor completed the same idempotent deletion.
+  try {
     try { await env.BUCKET.resumeMultipartUpload(key(row), row.multipart).abort(); }
     catch { /* Already completed or automatically expired in R2. */ }
+    await env.BUCKET.delete(key(row));
+    const statements=[];
+    if(row.expired_at!==null) {
+      statements.push(env.DB.prepare("INSERT OR IGNORE INTO publication_events(id,owner_hash,expired_at,removed_at) SELECT id,owner_hash,expired_at,? FROM builds WHERE id=? AND state='removing' AND expired_at IS NOT NULL")
+        .bind(now(),row.id));
+    }
+    statements.push(env.DB.prepare('DELETE FROM parts WHERE upload=?').bind(row.upload),
+      env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id));
+    await env.DB.batch(statements);
+  } catch(error) {
+    // One unavailable R2 object must not starve other expired rows. This retry
+    // state is durable and resumes after worker restarts, with a bounded delay.
+    const delay=Math.min(3600,30*2**Math.min(row.cleanup_attempts || 0,7));
+    await env.DB.prepare('UPDATE builds SET cleanup_after=?,cleanup_attempts=cleanup_attempts+1 WHERE id=?')
+      .bind(now()+delay,row.id).run();
+    throw error;
   }
-  await env.BUCKET.delete(key(row));
-  await env.DB.batch([env.DB.prepare('DELETE FROM parts WHERE upload=?').bind(row.upload),
-    env.DB.prepare('DELETE FROM builds WHERE id=?').bind(row.id)]);
 }
 async function prune(env) {
-  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?) ORDER BY created,id LIMIT 4").bind(now()-UPLOAD_TTL,now()-PUBLIC_TTL).all();
-  for (const row of results) await discard(env,row,true);
+  const {results} = await env.DB.prepare("SELECT * FROM builds WHERE cleanup_after<=? AND (state='removing' OR (state='uploading' AND created<?) OR (state='ready' AND created<=?)) ORDER BY created,id LIMIT ?").bind(now(),now()-UPLOAD_TTL,now()-PUBLIC_TTL,CLEANUP_BATCH).all();
+  // Four bounded deletion lanes, not an unbounded Promise per public archive.
+  for(let index=0;index<results.length;index+=4) {
+    const deleted=await Promise.allSettled(results.slice(index,index+4).map(row=>discard(env,row,true)));
+    for(const result of deleted) if(result.status==='rejected') console.warn('Catalog cleanup deferred',result.reason?.name || 'error');
+  }
   return results.length;
+}
+async function publicPrune(request,env,url) {
+  // No ID, timestamp, owner token or arbitrary deletion command is accepted.
+  // A scheduler needs no privileged secret; only the server clock decides
+  // which already-expired records the existing idempotent janitor may remove.
+  requireThat(!url.search && (!request.body || request.headers.get('Content-Length')==='0'),400,
+    'Очистка принимает только пустой запрос без параметров.');
+  const moment=now();
+  const admitted=await env.DB.prepare(`INSERT INTO maintenance_runs(name,next_allowed)
+    VALUES ('prune',?) ON CONFLICT(name) DO UPDATE SET next_allowed=excluded.next_allowed
+    WHERE maintenance_runs.next_allowed<=? RETURNING next_allowed`)
+    .bind(moment+PRUNE_THROTTLE,moment).first();
+  if(!admitted) {
+    const state=await env.DB.prepare("SELECT next_allowed FROM maintenance_runs WHERE name='prune'").first();
+    return json({checked:0,limit:CLEANUP_BATCH,throttled:true,
+      retryAfterSeconds:Math.max(1,Math.min(PRUNE_THROTTLE,(state?.next_allowed || moment+1)-moment))});
+  }
+  return json({checked:await prune(env),limit:CLEANUP_BATCH,throttled:false,retryAfterSeconds:PRUNE_THROTTLE});
 }
 async function begin(request, env) {
   const length = Number(request.headers.get('Content-Length'));
@@ -156,8 +183,10 @@ async function begin(request, env) {
     'Размер публичного ZIP не должен превышать 256 МиБ.');
   requireThat(typeof data.sha256==='string' && /^[a-f0-9]{64}$/.test(data.sha256),400,
     'Неверная контрольная сумма сборки.');
+  requireThat(typeof data.buildKey==='string' && /^[a-f0-9]{64}$/.test(data.buildKey),400,
+    'Обнови лаунчер: для публикации нужен постоянный идентификатор сборки.');
   const publisher=await publisherKey(request,env);
-  await checkPublicationRate(env,publisher);
+  await checkPublicationRate(env,publisher,data);
   await prune(env);
   const token=random(32), upload=random(16), id='BH-'+random(6).toUpperCase();
   const multi=await env.BUCKET.createMultipartUpload(key({id}));
@@ -168,11 +197,12 @@ async function begin(request, env) {
       (SELECT count(*) FROM builds WHERE publisher=? AND
         ((state='ready' AND created>?) OR (state='uploading' AND created>?)))<? AND
       (SELECT count(*) FROM builds WHERE state IN ('ready','uploading'))<20000 AND
+      (SELECT count(*) FROM publication_events)+(SELECT count(*) FROM builds)<? AND
       (SELECT COALESCE(sum(size),0) FROM builds)+?<=?`)
       .bind(id,upload,await hash(token),multi.uploadId,name,name.normalize('NFC').toLowerCase(),data.category,
         data.minecraft,data.loader,data.size,data.sha256,now(),publisher,
         publisher,now()-PUBLIC_TTL,now()-UPLOAD_TTL,ACTIVE_PER_PUBLISHER,
-        data.size,limit).run();
+        MAX_OWNER_RECEIPTS,data.size,limit).run();
     requireThat(inserted.meta.changes===1,429,
       'Достигнут лимит: не более 3 активных публикаций с одного адреса либо заполнено хранилище.');
   } catch(error) { await multi.abort(); throw error; }
@@ -217,8 +247,12 @@ async function part(request, env, row, number) {
   requireThat(buffer.byteLength===size,400,'Часть загружена не полностью.');
   if(number===1) validateFirstPart(buffer,row);
   const result=await env.BUCKET.resumeMultipartUpload(key(row),row.multipart).uploadPart(number,buffer);
-  await env.DB.prepare('INSERT INTO parts(upload,number,etag) VALUES(?,?,?) ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag')
-    .bind(row.upload,number,result.etag).run();
+  const saved=await env.DB.prepare("INSERT INTO parts(upload,number,etag) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM builds WHERE upload=? AND state='uploading') ON CONFLICT(upload,number) DO UPDATE SET etag=excluded.etag")
+    .bind(row.upload,number,result.etag,row.upload).run();
+  if(!saved.meta.changes) {
+    try { await env.BUCKET.resumeMultipartUpload(key(row),row.multipart).abort(); } catch {}
+    throw new RequestError(410,'Публикация снята или уже завершена.');
+  }
   return json({part:number});
 }
 // R2 serves only complete catalog archives. Two bounded range reads cover the
@@ -314,7 +348,7 @@ async function validateDirectory(bucket, row) {
     validZip(validateFirstPart(first.buffer,row).publicConfigs===true);
   }
 }
-async function finish(env,row) {
+async function finishArchive(env,row) {
   if(row.state==='ready') {
     requireThat(row.created>now()-PUBLIC_TTL,410,'Срок публикации истёк.');
     return json(publicBuild(row));
@@ -351,6 +385,33 @@ async function finish(env,row) {
   requireThat(current?.state==='ready' && current.created>now()-PUBLIC_TTL,410,'Публикация снята или истекла.');
   return json(publicBuild(current));
 }
+async function finish(env,row) {
+  try { return await finishArchive(env,row); }
+  finally {
+    // Withdrawal can race multipart.complete after its initial read. A late R2
+    // completion must not recreate an orphan object after the DB row was removed.
+    const current=await env.DB.prepare('SELECT state FROM builds WHERE id=?').bind(row.id).first();
+    if(!current || current.state==='removing') await env.BUCKET.delete(key(row));
+  }
+}
+async function ownerEvents(request,env,id) {
+  let event=await env.DB.prepare('SELECT * FROM publication_events WHERE id=?').bind(id).first();
+  const row=await env.DB.prepare('SELECT * FROM builds WHERE id=?').bind(id).first();
+  requireThat(event || row,404,'Уведомление публикации не найдено.');
+  await authorized(request,event || row);
+  if(request.method==='DELETE') {
+    requireThat(event,409,'Удаление публикации ещё не подтверждено.');
+    await env.DB.prepare('DELETE FROM publication_events WHERE id=?').bind(id).run();
+    return json({acknowledged:true});
+  }
+  requireThat(request.method==='GET',404,'Адрес каталога не найден.');
+  if(!event && (row.state==='removing' || row.state==='ready' && row.created<=now()-PUBLIC_TTL)) {
+    await discard(env,row,true);
+    event=await env.DB.prepare('SELECT * FROM publication_events WHERE id=?').bind(id).first();
+  }
+  return json({events:event ? [{id:'publication-expired:'+id,type:'publicationExpired',build:id,
+    created:event.expired_at,removedAt:event.removed_at}] : []});
+}
 async function search(env, params) {
   const q=(params.get('q')||'').trim().normalize('NFC').toLowerCase();
   const offset=Number(params.get('offset')||0);
@@ -386,11 +447,17 @@ async function handle(request,env) {
     // appear ready in the launcher.
     requireThat(typeof env.RATE_SALT==='string' && env.RATE_SALT.length>=32 &&
       env.DB && env.BUCKET,503,'Сервис публикации ещё не настроен.');
-    await env.DB.prepare('SELECT subject FROM publisher_rate LIMIT 1').first();
+    await env.DB.prepare('SELECT subject,attempts,next_allowed FROM publication_rate LIMIT 1').first();
+    await env.DB.prepare('SELECT name,next_allowed FROM maintenance_runs LIMIT 1').first();
+    await env.DB.prepare('SELECT cleanup_after,expired_at FROM builds LIMIT 1').first();
+    await env.DB.prepare('SELECT id FROM publication_events LIMIT 1').first();
     return json(capabilities());
   }
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
+  if(path==='/v1/maintenance/prune' && method==='POST') return publicPrune(request,env,url);
+  const events=/^\/v1\/publications\/(BH-[0-9A-F]{12})\/events$/.exec(path);
+  if(events) return ownerEvents(request,env,events[1]);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
   if(upload) {
     const row=await env.DB.prepare('SELECT * FROM builds WHERE upload=?').bind(upload[1]).first();
@@ -408,10 +475,32 @@ async function handle(request,env) {
     requireThat(row.state==='ready' && row.created>now()-PUBLIC_TTL,404,'Срок публикации истёк или сборка недоступна.');
     if(method==='GET' && !build[2]) return json(publicBuild(row));
     if(method==='GET' && build[2]) {
-      const file=await env.BUCKET.get(key(row));
+      // A strong content validator lets a client safely resume the same
+      // immutable snapshot. Expiry is checked above for every range request.
+      const etag='"sha256-'+row.sha256+'"';
+      let range;
+      const requested=request.headers.get('Range'), validator=request.headers.get('If-Range');
+      if(requested && (!validator || validator===etag)) {
+        const match=/^bytes=(\d+)-(\d*)$/.exec(requested);
+        const start=match ? Number(match[1]) : NaN;
+        const end=match && match[2] ? Math.min(Number(match[2]),row.size-1) : row.size-1;
+        if(!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<0 || start>=row.size || end<start) {
+          return json({error:'Недопустимый диапазон архива.'},416,{'Content-Range':'bytes */'+row.size,ETag:etag});
+        }
+        range={offset:start,length:end-start+1};
+      }
+      const file=await env.BUCKET.get(key(row),range ? {range} : undefined);
       requireThat(file,503,'Архив временно недоступен.');
-      return new Response(file.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(file.size),
-        'X-Content-Type-Options':'nosniff','Content-Disposition':`attachment; filename="${row.id}.zip"`,'Cache-Control':'no-store'}});
+      if(file.size!==row.size) {
+        await file.body.cancel();
+        throw new RequestError(503,'Размер архива в хранилище не совпадает с публикацией.');
+      }
+      const headers={'Content-Type':'application/octet-stream','Content-Length':String(range ? range.length : file.size),
+        'X-Content-Type-Options':'nosniff','Content-Disposition':`attachment; filename="${row.id}.zip"`,'Cache-Control':'no-store'};
+      headers.ETag=etag;
+      headers['Accept-Ranges']='bytes';
+      if(range) headers['Content-Range']=`bytes ${range.offset}-${range.offset+range.length-1}/${row.size}`;
+      return new Response(file.body,{status:range ? 206 : 200,headers});
     }
   }
   throw new RequestError(404,'Адрес каталога не найден.');
@@ -429,12 +518,13 @@ export default {
     }
   },
   async scheduled(controller,env,ctx) {
-    // Cron (recommended every 5 minutes) reclaims R2 space even when
+    // Cron (configured every minute) reclaims R2 space even when
     // nobody searches or publishes new packs; operations are bounded.
-    for(let round=0;round<16;round++) {
+    // <=128 rows keeps D1/R2 calls below the free-plan internal-subrequest
+    // budget, including row reads, retry updates and transactional receipts.
+    for(let round=0;round<8;round++) {
       const count=await prune(env);
-      if(count<4) break;
+      if(count<CLEANUP_BATCH) break;
     }
-    await cleanupRateCounters(env);
   },
 };

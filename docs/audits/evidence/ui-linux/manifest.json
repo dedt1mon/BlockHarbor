@@ -1,0 +1,73 @@
+{
+  "sourceHead": "6a0a1a97a1f7a07fe7023814f23ec01d8e7758f0",
+  "workflowRun": 45430303954,
+  "workflowUrl": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45430303954",
+  "job": 138573446987,
+  "artifact": 14939027988,
+  "artifactName": "audit-browser-linux",
+  "artifactSha256": "4815b1a4ff1670daddf1112867c0837073dff3d10e2d4c7109935cd6b4b2c8da",
+  "platform": "linux",
+  "browser": "157.0.8103.0",
+  "imagesUnmodified": true,
+  "coverage": "Production UI with deterministic API fixtures. CSS viewport/deviceScaleFactor emulation; no native system DPI change or real Minecraft installation. All 24 cases include an assertion that a complete first batch row and its status fit within the effective scroll viewport.",
+  "files": [
+    {
+      "file": "batch-small.png",
+      "originalFilename": "1280x720-200pct-batch.png",
+      "sourceCase": "1280x720-200pct",
+      "display": [
+        1280,
+        720
+      ],
+      "scale": 2,
+      "cssViewport": [
+        640,
+        360
+      ],
+      "sha256": "940185ae69605647bc3bbc01d1376985edbaa09aab63b421fc6a313256cfafd0",
+      "bytes": 103357,
+      "note": "32 queued items: the first long item and its status are fully visible in the compact layout, with scrolling for the remaining items."
+    },
+    {
+      "file": "batch-busy.png",
+      "originalFilename": "1280x720-200pct-batch-busy.png",
+      "sourceCase": "1280x720-200pct",
+      "display": [
+        1280,
+        720
+      ],
+      "scale": 2,
+      "cssViewport": [
+        640,
+        360
+      ],
+      "sha256": "dd3c73ccef4e7579a9765b40aba4cf07b1fe5631af4c43bdcb8ca9e6d4723ab6",
+      "bytes": 74913,
+      "note": "A retry is running. The entire item status, busy notice and cancel action are visible; a subsequent unforced cancel click passed."
+    },
+    {
+      "file": "batch-result.png",
+      "originalFilename": "1366x768-100pct-batch-result.png",
+      "sourceCase": "1366x768-100pct",
+      "display": [
+        1366,
+        768
+      ],
+      "scale": 1,
+      "cssViewport": [
+        1366,
+        768
+      ],
+      "sha256": "0f0237a19b514c894527ba73b6d3016ed190a6290a1a227ba521ce8676cac9a7",
+      "bytes": 75932,
+      "note": "Partial result fixture: two installed items and one checksum error, with a per-item retry and correct summary."
+    },
+    {
+      "file": "report.json",
+      "originalFilename": "report.json",
+      "sourceCase": "all 24 display/scale combinations",
+      "sha256": "1b71d7ea134b3f93d4e091bb8e51d0e3c78bf21627f9f59ff3efdf2736683ec4",
+      "bytes": 5144
+    }
+  ]
+}

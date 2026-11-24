@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -21,9 +22,9 @@ import zipfile
 from collections import OrderedDict, deque
 from pathlib import Path, PurePosixPath
 
-from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync
+from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync, staging
 from .content_icons import _small_directory
-from .modfiles import file_hash, file_stamp, read_descriptor
+from .modfiles import file_hash, file_stamp, read_descriptor, publish_new
 from .sessions import process_alive, process_identity, read_record
 from .store import KINDS, clean_filename, input_profile, require_idle_files
 
@@ -34,9 +35,12 @@ BUILD_SECTIONS = (
 MAX_BYTES = 16 * 1024**3
 MAX_FILES = 60000
 MAX_MANIFEST = 16 * 1024**2
+MAX_JOURNAL = 2 * 1024**2
+MAX_TRANSACTION_TARGETS = 8001
 PROFILE_SETTINGS = ("performanceMemory", "performancePreset", "careAutoWorldBackup")
 _ID = re.compile(r"[a-f0-9]{32}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
+log = logging.getLogger(__name__)
 
 
 def _plain(value, limit=500):
@@ -68,6 +72,100 @@ def _remove(path):
         shutil.rmtree(path)
     else:
         path.unlink(missing_ok=True)
+
+
+def _new_object_identity(path, *, cancellable=True):
+    """Fingerprint files and whole trees without relying on directory mtime.
+
+    Rename retains each node's device/inode. Content digests additionally catch
+    same-size in-place edits, including a nested file in a published directory.
+    Rollback deliberately calls this without checking its cancelled scope.
+    """
+    def check():
+        if cancellable:
+            lifecycle.check()
+
+    def stamp(value):
+        # Windows path stat and fd stat expose different ctime semantics on
+        # recent CPython. Birth time agrees for both views; SHA-256 below still
+        # detects same-size content edits with a restored modification time.
+        created = getattr(value, "st_birthtime_ns", value.st_ctime_ns) if os.name == "nt" else value.st_ctime_ns
+        return (value.st_dev, value.st_ino, value.st_size,
+                value.st_mtime_ns, created)
+
+    def file_identity(file):
+        check()
+        before = file.lstat()
+        if _reparse(file) or not stat.S_ISREG(before.st_mode):
+            raise ValueError("Файл транзакции перенаправлен или изменён.")
+        digest = hashlib.sha256()
+        with file.open("rb") as stream:
+            if stamp(os.fstat(stream.fileno())) != stamp(before):
+                raise ValueError("Файл изменился во время проверки.")
+            while block := stream.read(1024 * 1024):
+                check()
+                digest.update(block)
+        if stamp(file.lstat()) != stamp(before):
+            raise ValueError("Файл изменился во время проверки.")
+        return {"kind": "file", "device": before.st_dev, "inode": before.st_ino,
+                "size": before.st_size, "sha256": digest.hexdigest()}
+
+    before = path.lstat()
+    if _reparse(path):
+        raise ValueError("Объект транзакции перенаправлен.")
+    if stat.S_ISREG(before.st_mode):
+        return file_identity(path)
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError("Недопустимый объект транзакции.")
+    digest, count, total = hashlib.sha256(), 0, 0
+
+    def visit(directory, relative):
+        nonlocal count, total
+        check()
+        start = directory.lstat()
+        if _reparse(directory) or not stat.S_ISDIR(start.st_mode):
+            raise ValueError("Каталог транзакции перенаправлен.")
+        if len(relative.parts) > 32:
+            raise ValueError("Каталог транзакции слишком глубокий.")
+        count += 1
+        if count > MAX_FILES * 2 + 1:
+            raise ValueError("Слишком много объектов в транзакции.")
+        digest.update(json.dumps(["directory", relative.as_posix(), start.st_dev, start.st_ino],
+                                 ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            check()
+            name = relative / child.name
+            info = child.lstat()
+            if _reparse(child):
+                raise ValueError("Объект транзакции перенаправлен.")
+            if stat.S_ISDIR(info.st_mode):
+                visit(child, name)
+            else:
+                identity = file_identity(child)
+                count += 1
+                total += identity["size"]
+                if count > MAX_FILES * 2 + 1 or total > MAX_BYTES:
+                    raise ValueError("Содержимое транзакции превышает лимит.")
+                digest.update(json.dumps([name.as_posix(), identity], sort_keys=True,
+                                         ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
+        if stamp(directory.lstat()) != stamp(start):
+            raise ValueError("Каталог изменился во время проверки.")
+
+    visit(path, Path("."))
+    return {"kind": "directory", "device": before.st_dev, "inode": before.st_ino,
+            "entries": count, "size": total, "sha256": digest.hexdigest()}
+
+
+def _owns_new_object(path, identity):
+    if not isinstance(identity, dict) or not identity.get("inode") or not os.path.lexists(path):
+        return False
+    try:
+        current = _new_object_identity(path, cancellable=False)
+    except (OSError, ValueError):
+        return False
+    # Early audit journals recorded file identities before adding their kind.
+    expected = {"kind": "file", **identity}
+    return current == expected
 
 
 def _safe_relative(name):
@@ -137,7 +235,7 @@ def _walk(root, sections):
                 size += st.st_size
                 if count > MAX_FILES or size > MAX_BYTES:
                     raise ValueError("Для одной копии доступно до 16 ГБ и 60 000 файлов.")
-                yield path, name, (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                yield path, name, file_stamp(path)
             else:
                 raise ValueError("В сборке обнаружен неподдерживаемый тип файла.")
 
@@ -285,7 +383,7 @@ class BuildCare:
             for work in self.root.glob("transaction-*"):
                 journal = work / "journal.json"
                 try:
-                    if _reparse(work) or not journal.is_file() or journal.stat().st_size > 65536:
+                    if _reparse(work) or not journal.is_file() or journal.stat().st_size > MAX_JOURNAL:
                         continue
                     if json.loads(journal.read_text(encoding="utf-8")).get("pid") == pid:
                         shutil.rmtree(work)
@@ -511,16 +609,40 @@ class BuildCare:
 
     def _rollback_transaction(self, work, journal):
         root = self._profile_root(journal["pid"])
+        preserved, conflicts = [], []
         for target in reversed(journal["targets"]):
             name, had = target["name"], target["had"]
             dest = self._validate_target(root, name)
             backup, staged = work / "old" / name, work / "new" / name
             if os.path.lexists(backup):
-                _remove(dest)
+                if os.path.lexists(dest):
+                    if "newIdentity" not in target:
+                        self._preserve_legacy_destination(work, journal["pid"], name, dest)
+                    elif _owns_new_object(dest, target["newIdentity"]):
+                        _remove(dest)
+                    else:
+                        conflicts.append(name)
+                        continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(backup, dest)
+            elif not had and target.get("noReplace") and os.path.lexists(dest):
+                # Both POSIX hard-link publication and Windows rename retain
+                # file identity. Content guards also preserve in-place edits.
+                if _owns_new_object(dest, target.get("newIdentity")):
+                    _remove(dest)
+                else:
+                    preserved.append(name)
             elif not had and not os.path.lexists(staged):
-                _remove(dest)
+                if os.path.lexists(dest):
+                    if "newIdentity" not in target:
+                        self._preserve_legacy_destination(work, journal["pid"], name, dest)
+                    elif _owns_new_object(dest, target["newIdentity"]):
+                        _remove(dest)
+                    else:
+                        preserved.append(name)
+        if conflicts:
+            raise ValueError("Файлы изменены после прерывания: " + ", ".join(conflicts[:3])
+                             + ". Изменённые файлы, исходные копии и журнал сохранены для восстановления.")
         old = journal["oldProfile"]
         with self.store.connection() as db:
             db.execute("UPDATE profiles SET version=?,loader=? WHERE id=?", (old["version"], old["loader"], journal["pid"]))
@@ -533,9 +655,44 @@ class BuildCare:
                         db.execute("DELETE FROM settings WHERE key=?", (key + ":" + journal["pid"],))
                     else:
                         db.execute("REPLACE INTO settings VALUES(?,?)", (key + ":" + journal["pid"], value))
+        return preserved
+
+    def _preserve_legacy_destination(self, work, pid, name, dest):
+        """Old journals cannot prove ownership; preserve before restoring old.
+
+        This folder is deliberately outside every automatic cleanup pattern.
+        Its manifest survives a crash before the history entry can be written.
+        """
+        saved = self.root / ("preserved-" + work.name.removeprefix("transaction-") + "-" + secrets.token_hex(4))
+        saved.mkdir()
+        target = saved / "files" / name
+        target.parent.mkdir(parents=True)
+        _atomic_json(saved / "manifest.json", {"format": "BlockHarborPreservedRecovery/1",
+                     "profile": pid, "transaction": work.name, "path": name})
+        os.replace(dest, target)
+        self.history(pid, "Сохранены файлы после прерывания",
+                     "Старый журнал не подтверждает принадлежность файлов. Сохранено: " + name
+                     + "; папка recovery/" + saved.name + "/files. Исходная копия восстановлена отдельно.")
+
+    def _cleanup_committed(self, work):
+        try:
+            # Keep the durable marker until every payload child is gone. A
+            # partial Windows sharing violation must remain discoverable on
+            # the next startup, even after other children were already removed.
+            journal = work / "journal.json"
+            for child in work.iterdir():
+                if child != journal:
+                    _remove(child)
+            journal.unlink(missing_ok=True)
+            work.rmdir()
+        except OSError as exc:
+            # The durable commit has already succeeded. Retry the independent
+            # cleanup next time; do not fail the install or block the build.
+            log.warning("Committed transaction cleanup will be retried: %s: %s", work.name, exc)
 
     def _recover(self):
         self.recover_pending()
+        staging.prune_abandoned(self.root, "addon-stage-")
         for work in self.root.glob("plan-*"):
             if work.is_dir() and not _reparse(work) and _ID.fullmatch(work.name.removeprefix("plan-")):
                 if process_alive(read_record(work / "owner.json").get("owner")):
@@ -558,18 +715,34 @@ class BuildCare:
                 journal_file = work / "journal.json"
                 # The journal is published before any destination is changed.
                 if not journal_file.exists():
+                    # Cleanup may have removed the final marker immediately
+                    # before rmdir failed. Only an empty, exact service name is
+                    # safe here; never recursively delete an unmarked payload.
+                    if _ID.fullmatch(work.name.removeprefix("transaction-")):
+                        try:
+                            work.rmdir()
+                        except OSError:
+                            pass
                     continue
                 journal = {}
                 try:
-                    if not journal_file.is_file() or _reparse(journal_file) or journal_file.stat().st_size > 65536:
+                    if not journal_file.is_file() or _reparse(journal_file) or journal_file.stat().st_size > MAX_JOURNAL:
                         raise ValueError("Повреждён журнал восстановления.")
                     journal = json.loads(journal_file.read_text(encoding="utf-8"))
                     if not isinstance(journal, dict):
                         raise ValueError("Повреждён журнал восстановления.")
                     if journal.get("phase") != "committed":
-                        self._rollback_transaction(work, journal)
-                        self.history(journal["pid"], "Восстановление после прерывания", "Незавершённые изменения отменены.")
-                    shutil.rmtree(work)
+                        targets = journal.get("targets")
+                        if not isinstance(targets, list) or len(targets) > MAX_TRANSACTION_TARGETS:
+                            raise ValueError("Повреждён список файлов в журнале восстановления.")
+                        preserved = self._rollback_transaction(work, journal)
+                        detail = "Незавершённые изменения отменены."
+                        if preserved:
+                            detail += " Изменённые вручную файлы сохранены: " + ", ".join(preserved)
+                        self.history(journal["pid"], "Восстановление после прерывания", detail)
+                        shutil.rmtree(work)
+                    else:
+                        self._cleanup_committed(work)
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     pid = journal.get("pid") if isinstance(journal, dict) else None
                     if isinstance(pid, str) and _ID.fullmatch(pid):
@@ -582,26 +755,80 @@ class BuildCare:
             self.recovery_errors.update(errors)
             return dict(errors)
 
-    def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
-        # All expensive reads/copies are complete. Serialize the short rename/DB
-        # commit (including rollback) against close; never publish after cancel.
-        with lifecycle.guard():
-            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings)
-        shutil.rmtree(work)
+    def publish_addons(self, pid, pending):
+        """Publish verified new files using the same crash journal as recovery.
 
-    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None):
+        No whole mod folder copy is needed, and an unrelated destination that
+        appears during the operation is never overwritten.
+        """
+        if not pending:
+            return 0
+        with staging.owned_directory(self.root, "addon-stage-") as work:
+            prepared = work / "files"
+            prepared.mkdir()
+            sections = []
+            for release, source, target in pending:
+                lifecycle.check()
+                if release.kind not in KINDS:
+                    raise ValueError("Недопустимый тип дополнения.")
+                name = clean_filename(release.filename)
+                expected = self.store.content_folder(pid, release.kind) / name
+                if target != expected or os.path.lexists(target):
+                    raise ValueError("Файл появился во время установки: " + name)
+                relative = release.kind + "/" + name
+                destination = prepared / relative
+                destination.parent.mkdir(exist_ok=True)
+                os.replace(source, destination)
+                sections.append(relative)
+            self._transaction(pid, prepared, sections, no_replace=sections)
+        return len(pending)
+
+    def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
+        # Fingerprints can include a whole tree. Finish those reads before the
+        # short rename/DB commit guard, and reject paths before traversing them.
+        if len(sections) > MAX_TRANSACTION_TARGETS:
+            raise ValueError("Слишком много файлов в одной транзакции.")
+        for name in sections:
+            _safe_relative(name)
+        identities = {name: _new_object_identity(prepared / name) if os.path.lexists(prepared / name) else None
+                      for name in sections}
+        with lifecycle.guard():
+            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings,
+                                            no_replace=no_replace, identities=identities)
+        self._cleanup_committed(work)
+
+    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=(), identities=None):
         root = self._writable_root(pid)
         require_idle_files(root)
+        no_replace = frozenset(no_replace)
+        if not no_replace.issubset(sections):
+            raise ValueError("Неверный список новых файлов в транзакции.")
+        if len(sections) > MAX_TRANSACTION_TARGETS:
+            raise ValueError("Слишком много файлов в одной транзакции.")
+        if identities is None:
+            identities = {name: _new_object_identity(prepared / name) if os.path.lexists(prepared / name) else None
+                          for name in sections}
+        for name in no_replace:
+            if not isinstance(identities.get(name), dict) or identities[name].get("kind") != "file":
+                raise ValueError("Подготовленный файл установки отсутствует или изменён: " + name)
+            if os.path.lexists(self._validate_target(root, name)):
+                raise ValueError("Файл появился во время установки: " + name)
         work = self.root / ("transaction-" + secrets.token_hex(16))
         work.mkdir()
         journal = {"phase": "prepared", "pid": pid, "oldProfile": self.store.profile(pid),
-                   "targets": [{"name": name, "had": os.path.lexists(self._validate_target(root, name))} for name in sections]}
+                   "targets": [{"name": name,
+                                "had": False if name in no_replace else os.path.lexists(self._validate_target(root, name)),
+                                "noReplace": name in no_replace,
+                                "newIdentity": identities[name]}
+                               for name in sections]}
         if pins is not None:
             with self.store.connection() as db:
                 journal["oldPins"] = [list(r) for r in db.execute("SELECT kind,name FROM care_pins WHERE pid=?", (pid,))]
         if settings is not None:
             journal["oldSettings"] = {k: self.store.get(k + ":" + pid, None) for k in PROFILE_SETTINGS}
         try:
+            if len(json.dumps(journal, ensure_ascii=False).encode("utf-8")) > MAX_JOURNAL - 128:
+                raise ValueError("Журнал изменений слишком большой. Уменьши число файлов в операции.")
             os.replace(prepared, work / "new")
             (work / "old").mkdir()
             _atomic_json(work / "journal.json", journal)
@@ -613,7 +840,11 @@ class BuildCare:
                 if target["had"]:
                     os.replace(dest, old)
                 if os.path.lexists(new):
-                    os.replace(new, dest)
+                    if target["noReplace"]:
+                        publish_new(new, dest)
+                        new.unlink(missing_ok=True)
+                    else:
+                        os.replace(new, dest)
             if new_profile:
                 _, version, loader = input_profile(new_profile["name"], new_profile["version"], new_profile["loader"])
                 with self.store.connection() as db:
@@ -871,8 +1102,6 @@ class BuildCare:
 
     def backup_after_game(self, pid, status=lambda _x: None):
         """Called only after the tracked game has exited, under the app mutation lock."""
-        if self.store.get("careAutoWorldBackup:" + pid) != "1":
-            return ""
         count = 0
         with self.lock:
             require_idle_files(self._writable_root(pid))
@@ -897,7 +1126,7 @@ class BuildCare:
         plan = self._plans.get(pid)
         return {"contents": self.inventory(pid), "snapshots": snapshots, "history": history, "retention": self.retention(), "recoveryBytes": used,
                 "updatePlan": plan["public"] if plan else None, "recoveryError": self.recovery_errors.get(pid, ""),
-                "autoWorldBackup": self.store.get("careAutoWorldBackup:" + pid) == "1"}
+                "autoWorldBackup": True}
 
     def _recognized(self, pid, rows):
         """Network calls only happen on an explicit update check, never on UI polling."""
@@ -1122,8 +1351,9 @@ class BuildCare:
             return "Сохранено миров: " + str(len(worlds)) + "."
         if action == "careAutoBackup":
             self.store.profile(pid)
-            self.store.set("careAutoWorldBackup:" + pid, "1" if p.get("enabled") is True else "0")
-            return {"ok": True, "message": "Копии после выхода из игры включены." if p.get("enabled") is True else "Копии после выхода из игры отключены."}
+            if p.get("enabled") is not True:
+                raise ValueError("Автоматические копии миров после выхода из игры обязательны; отключить их нельзя.")
+            return {"ok": True, "message": "Копии миров после выхода из игры сохраняются автоматически."}
         if action == "careRestore":
             return self.restore(pid, p.get("snapshot"), status)
         if action == "careClone":

@@ -1,0 +1,97 @@
+{
+  "sourceHead": "8ae7562ff99d5287ed95b2fd79f3f73139667b7f",
+  "runId": 45428347881,
+  "runUrl": "https://github.com/dedt1mon/BlockHarbor/actions/runs/45428347881",
+  "conclusion": "success",
+  "python": {
+    "linux": {
+      "tests": 672,
+      "passed": 671,
+      "failedCases": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "durationSeconds": 44.338
+    },
+    "windows": {
+      "tests": 672,
+      "passed": 671,
+      "failedCases": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "durationSeconds": 198.539
+    }
+  },
+  "go": {
+    "linux": {
+      "bootstrap": {
+        "passed": 4,
+        "failed": 0,
+        "skipped": 1
+      },
+      "cleanup": {
+        "passed": 7,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    "windows": {
+      "bootstrap": {
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0
+      },
+      "cleanup": {
+        "passed": 13,
+        "failed": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "nodeOrdering": {
+    "passed": 22,
+    "failed": 0
+  },
+  "worker": {
+    "passed": 24,
+    "failed": 0
+  },
+  "browser": {
+    "linux": {
+      "passedConfigurations": 24,
+      "failedConfigurations": 0,
+      "scenarioGroups": 400,
+      "pngCount": 98,
+      "artifactId": 14938071288
+    },
+    "windows": {
+      "passedConfigurations": 24,
+      "failedConfigurations": 0,
+      "scenarioGroups": 400,
+      "pngCount": 98,
+      "artifactId": 14937627680
+    }
+  },
+  "windowsPackage": {
+    "portableBuild": "pass",
+    "nsisBuild": "pass",
+    "unicodeInstall": "pass",
+    "upgradePreservesUnrelatedFiles": "pass",
+    "packagedRuntimeSystemOnlyPath": "pass",
+    "authenticatedLocalApi": "pass",
+    "uninstallPreservesUnrelatedFiles": "pass"
+  },
+  "manualVisualReview": {
+    "reviewedBy": "root and UI audit",
+    "compactBatchFullFirstRowAndStatus": "pass",
+    "compactBusyNoticeAndCancel": "pass",
+    "partialResultAndRetry": "pass",
+    "windowsCatalogAndWideBuilds": "pass"
+  },
+  "limitations": [
+    "The Windows archive symlink privacy test was still unconditionally skipped in this snapshot. Snapshot 9 removes the platform skip and is the final gate.",
+    "Browser scaling uses CSS viewport and deviceScaleFactor, not native OS DPI.",
+    "Runtime packaging was checked on a fresh hosted Windows runner with isolated child environment, not a consumer PC or Windows Minecraft gameplay."
+  ]
+}

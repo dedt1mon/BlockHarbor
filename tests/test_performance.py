@@ -1,4 +1,5 @@
 import ctypes
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -47,8 +48,8 @@ class PerformanceTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch("main.automatic_heap", return_value=3072),
+            closing(App(Path(tmp))) as app,
         ):
-            app = App(Path(tmp))
             pid = app.store.create("Vanilla", "1.20.1", "vanilla")
             child = Mock()
             child.poll.return_value = 0
@@ -80,8 +81,7 @@ class PerformanceTests(unittest.TestCase):
                     reopened.close()
 
     def test_state_reads_db_independently_of_mod_count_and_sees_external_edits(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            app = App(Path(tmp))
+        with tempfile.TemporaryDirectory() as tmp, closing(App(Path(tmp))) as app:
             pid = app.store.create("Fabric", "1.20.1", "fabric")
             folder = app.store.folder(pid)
             skin_sync.prepare(folder, "1.20.1", "fabric")
@@ -208,6 +208,7 @@ class DistanceSettingsTests(unittest.TestCase):
 
     def test_playing_profile_cannot_apply_and_all_edits_use_normal_action(self):
         app = App(self.root)
+        self.addCleanup(app.close)
         pid = app.store.create("Distance test", "1.20.1", "vanilla")
         options = app.store.folder(pid) / "options.txt"
         options.write_text("renderDistance:12\nsimulationDistance:8\n")

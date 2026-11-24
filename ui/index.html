@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/build-care.css" />
     <link rel="stylesheet" href="/updates.css" />
     <link rel="stylesheet" href="/pack-hub.css" />
+    <link rel="stylesheet" href="/catalog-ux.css" />
   </head>
   <body>
     <aside>
@@ -33,7 +34,7 @@
         <button class="nav" data-view="settings">
           <i data-icon="settings"></i><span>Настройки</span>
         </button>
-        <div class="appversion"><b></b> BlockHarbor <span>2.6.8</span></div>
+        <div class="appversion"><b></b> BlockHarbor <span>2.6.11</span></div>
       </div>
     </aside>
     <main>
@@ -42,7 +43,7 @@
           <span>Лаунчер</span><span class="slash">/</span
           ><strong id="crumb">Главная</strong>
         </div>
-        <div class="header-actions"><button class="icon-button" data-experience="notifications" aria-label="История уведомлений" title="История уведомлений"><i data-icon="bell"></i></button>
+        <div class="header-actions"><button class="icon-button batch-toggle" data-batch-open aria-label="Установка дополнений" title="Установка дополнений" hidden><i data-icon="download"></i></button><button class="icon-button notification-bell" data-experience="notifications" aria-label="История уведомлений" title="История уведомлений"><i data-icon="bell"></i><span class="notification-dot" aria-hidden="true" hidden></span></button>
         <button id="accountChip" class="account-chip" data-view="profile">
           <i data-icon="user"></i><span id="topUser">Мой профиль</span>
         </button>
@@ -67,9 +68,10 @@
       aria-atomic="true"
       hidden
     ></div>
-    <dialog id="dialog">
+    <dialog id="dialog" aria-labelledby="dialogTitle">
       <div class="dialog-top">
         <h2 id="dialogTitle"></h2>
+        <div id="dialogHeaderActions" class="dialog-header-actions" hidden></div>
         <button class="icon-button" aria-label="Закрыть" id="dialogClose">
           <i data-icon="close"></i>
         </button>
@@ -88,6 +90,7 @@
     <script src="/catalog-filters.js"></script>
     <script src="/compatibility.js"></script>
     <script src="/catalog.js"></script>
+    <script src="/batch-install.js"></script>
     <script src="/app.js"></script>
     <script src="/experience.js"></script>
     <script src="/build-care.js"></script>

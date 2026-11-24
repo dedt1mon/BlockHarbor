@@ -14,9 +14,11 @@ class CreateBuildTests(unittest.TestCase):
         data = tempfile.TemporaryDirectory()
         self.addCleanup(data.cleanup)
         self.app = App(Path(data.name))
+        self.addCleanup(self.app.close)
 
     def test_new_data_stays_empty_through_restart_without_seeding_instances(self):
         for app in (self.app, App(self.app.store.root)):
+            self.addCleanup(app.close)
             state = app.state()
             self.assertEqual(state["profiles"], [])
             self.assertEqual(state["active"], "")
@@ -40,6 +42,7 @@ class CreateBuildTests(unittest.TestCase):
         with store.connection() as db:
             db.execute("DELETE FROM settings WHERE key='steamStarterAdded'")
         reopened = App(store.root)
+        self.addCleanup(reopened.close)
         state = reopened.state()
         self.assertEqual([p["id"] for p in state["profiles"]], [fabric, forge])
         self.assertEqual([p["id"] for p in state["deletedProfiles"]], [archived])
@@ -126,6 +129,7 @@ class CreateBuildTests(unittest.TestCase):
             get.assert_called_once()
         self.assertEqual(self.app.version_catalog()[:len(full)], full)
         reopened = App(self.app.store.root)
+        self.addCleanup(reopened.close)
         self.assertEqual(reopened.state()["versions"], updated)
         self.assertEqual(reopened.version_catalog()[:len(full)], full)
         with patch.object(game, "version_catalog", return_value=full) as get:

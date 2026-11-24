@@ -1,0 +1,105 @@
+{
+  "tests": 669,
+  "passed": 667,
+  "failedCases": 1,
+  "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
+  "failed": 0,
+  "errors": 1,
+  "skipped": 1,
+  "expectedFailures": 0,
+  "unexpectedSuccesses": 0,
+  "failures": [
+    {
+      "test": "test_multi_sessions.CoordinatorTests.test_finish_autolaunch_waits_for_handoff_without_owning_legacy_lock",
+      "traceback": "Traceback (most recent call last):\n  File \"D:\\a\\BlockHarbor\\BlockHarbor\\tests\\test_multi_sessions.py\", line 351, in test_finish_autolaunch_waits_for_handoff_without_owning_legacy_lock\n    current = self.coordinator(startup_timeout=2)\n  File \"D:\\a\\BlockHarbor\\BlockHarbor\\tests\\test_multi_sessions.py\", line 28, in coordinator\n    value = SessionCoordinator(self.root, **kwargs)\n  File \"D:\\a\\BlockHarbor\\BlockHarbor\\launcher\\sessions.py\", line 278, in __init__\n    self._require_no_update()\n    ~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"D:\\a\\BlockHarbor\\BlockHarbor\\launcher\\sessions.py\", line 383, in _require_no_update\n    raise ValueError(\"Устанавливается обновление BlockHarbor. Дождись завершения установщика и открой лаунчер снова.\")\nValueError: Устанавливается обновление BlockHarbor. Дождись завершения установщика и открой лаунчер снова.\n"
+    }
+  ],
+  "skips": [
+    {
+      "test": "test_build_archive.BuildArchiveTests.test_privacy_links_in_instance_are_not_exported",
+      "reason": "symlink creation can require developer mode"
+    }
+  ],
+  "slowest": [
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_closing_launcher_cancels_loader_refresh_without_late_cache_publication",
+      "seconds": 9.7094
+    },
+    {
+      "test": "test_notifications.NotificationTests.test_history_remains_bounded_and_ids_remain_increasing",
+      "seconds": 6.176
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_endpoint_keeps_all_categories_available_when_refresh_is_offline",
+      "seconds": 5.2635
+    },
+    {
+      "test": "test_game.GameTests.test_browser_login_checks_state_and_returns_only_java_credentials",
+      "seconds": 4.1191
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_but_game_survives",
+      "seconds": 2.5822
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_and_owned_preparation_process",
+      "seconds": 2.519
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_cold_bootstrap_result_is_consumed_from_environment_per_app",
+      "seconds": 2.1162
+    },
+    {
+      "test": "test_multi_sessions.CoordinatorTests.test_finish_autolaunch_waits_for_handoff_without_owning_legacy_lock",
+      "seconds": 2.0369
+    },
+    {
+      "test": "test_appearance.AppearanceTests.test_explicit_java_png_save_requires_neither_build_changes_nor_login",
+      "seconds": 1.9993
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_download_resumes_after_interruption_before_import",
+      "seconds": 1.7375
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_loader_endpoint_is_authenticated_validated_and_reads_local_cache",
+      "seconds": 1.737
+    },
+    {
+      "test": "test_build_errors.BuildErrorsTest.test_profile_isolation_grouping_redaction_retention_and_reopen",
+      "seconds": 1.6797
+    },
+    {
+      "test": "test_release_manifest.ReleaseManifestTests.test_wrong_version_and_empty_or_oversized_file_are_rejected",
+      "seconds": 1.6502
+    },
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_real_http_disconnect_resumes_with_range_and_validator",
+      "seconds": 1.5658
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_unsupported_create_and_play_keep_selected_version_and_user_files",
+      "seconds": 1.5132
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_purge_only_archived_instance_and_idempotent_retry",
+      "seconds": 1.4721
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_refresh_exposes_and_persists_full_catalog_with_release_only_legacy_field",
+      "seconds": 1.4146
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_unfinished_purge_never_restores_an_incomplete_world",
+      "seconds": 1.4019
+    },
+    {
+      "test": "test_session_record_races.SessionRecordRaceTests.test_real_concurrent_polling_and_replacement_keep_records_valid",
+      "seconds": 1.4008
+    },
+    {
+      "test": "test_loader_compatibility.LoaderCompatibilityApiTests.test_release_picker_can_read_all_categories_without_waiting_for_network",
+      "seconds": 1.3346
+    }
+  ]
+}

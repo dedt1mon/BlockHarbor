@@ -18,10 +18,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import catalog_filters, compatibility, lifecycle, trusted_catalog
+from . import catalog_filters, compatibility, lifecycle, trusted_catalog, staging
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
 from .store import KINDS, MAX_ADDON, PackLoaderMismatch, clean_filename, verify_pack
+from .version import VERSION
 
 _API = "https://api.modrinth.com/v2"
 _TYPES = {"mods": "mod", "shaderpacks": "shader", "resourcepacks": "resourcepack"}
@@ -30,7 +31,7 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/2.6.0 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": f"BlockHarbor/{VERSION} (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):
@@ -400,11 +401,12 @@ def _community_releases(profile, kind, project):
     return sorted(items, key=lambda p: p.published, reverse=True)
 
 
-def _files(folder, kind):
+def _files(folder, kind, *, include_disabled=False):
+    endings = (KINDS[kind], KINDS[kind] + ".disabled") if include_disabled else (KINDS[kind],)
     return [
         f
         for f in folder.iterdir()
-        if f.suffix.lower() == KINDS[kind] and not f.is_symlink() and f.is_file()
+        if f.name.lower().endswith(endings) and not f.is_symlink() and f.is_file()
     ]
 
 
@@ -437,7 +439,7 @@ def _prefer_installed(files, release, loader):
 def versions(store, pid, kind, project, source="all"):
     profile = store.profile(pid)
     releases = _releases(profile, kind, _id(project), source=source)
-    existing = _files(store.content_folder(pid, kind), kind)
+    existing = _files(store.content_folder(pid, kind), kind, include_disabled=True)
     releases = [_prefer_installed(existing, r, profile["loader"]) for r in releases]
     return {
         "versions": [
@@ -786,13 +788,15 @@ def _staged_warnings(local, catalog):
     return warnings
 
 
-def check(store, pid, kind, project, version):
+def check(store, pid, kind, project, version, source="all"):
     request = {"id": pid, "kind": kind, "project": project, "version": version}
+    if source != "all":
+        request["source"] = source
     return check_selection(store, pid, [request], request=request)
 
 
 def check_selection(store, pid, items, *, request=None):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     try:
         selected = _selections(items)
         releases = _plan_items(store, profile, selected)
@@ -872,7 +876,7 @@ def _descriptor_dependencies(profile, missing):
 
 def manual_check(store, pid, kind, name, path):
     name = clean_filename(name)
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     if kind not in KINDS or Path(name).suffix.lower() != KINDS[kind]:
         raise CatalogError("Выбери файл соответствующей категории.")
     verify_pack(path, kind, profile["loader"])
@@ -887,7 +891,7 @@ def manual_check(store, pid, kind, name, path):
 
 
 def manual_plan(store, pid, name, path):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     local = manual_check(store, pid, "mods", name, path)
     _require_no_conflicts(local)
     missing = [row for row in local["required"] if not row["installed"]]
@@ -963,7 +967,7 @@ def _download_compatible(release, target, loader, transfer=None, status=lambda _
     )
 
 
-def _publish_set(store, pid, releases, staged):
+def _publish_set(store, pid, releases, staged, publisher=None):
     lifecycle.check()
     # Recheck all destinations after downloading. Manual imports may have completed
     # during network I/O. The launcher's mutation lock covers just this local commit.
@@ -999,6 +1003,8 @@ def _publish_set(store, pid, releases, staged):
                     )
             known_mods[target] = ids
         pending.append((release, src, target))
+    if publisher is not None:
+        return publisher(pid, pending)
     with lifecycle.guard():
         written = []
         try:
@@ -1071,11 +1077,13 @@ def install(
 def install_selection(
     store, pid, items, status, mutation_lock=None, acknowledgement="", *,
     before_publish=None, transfer=None, after_publish=None, request=None, local_mod=None,
+    on_stage=lambda _stage, _release=None: None, publisher=None,
 ):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     selected = _selections(items) if items or local_mod is None else []
     request = request or {"id": pid, "items": selected}
     roots = {r["project"] for r in selected}
+    on_stage("dependencies")
     status("Проверяем совместимость и обязательные зависимости…")
     releases = _plan_items(store, profile, selected)
     inventory = _inventory(store, pid)
@@ -1084,7 +1092,7 @@ def install_selection(
     warnings = list(catalog["warnings"])
     if warnings and not acknowledgement:
         raise NeedsReview(request, _review_token(request, releases, inventory, warnings), warnings)
-    with tempfile.TemporaryDirectory(dir=store.folder(pid), prefix=".catalog-") as work:
+    with staging.owned_directory(store.root, "catalog-") as work:
         staged = {}
         # Check dependencies declared only inside JARs, including roots already present on disk.
         # Each new dependency goes through the same verified provider and loader checks.
@@ -1104,6 +1112,7 @@ def install_selection(
                         raise PlanConflict(installed.name + ": " + str(exc) + " Удали несовместимый файл и повтори установку.") from exc
                     continue
                 tmp = Path(work) / release.version
+                on_stage("downloading", release)
                 actual = _download_compatible(release, tmp, profile["loader"], transfer, status)
                 changed |= actual.sha512 != release.sha512 or actual.filename != release.filename
                 resolved[(actual.project, actual.version)] = actual
@@ -1136,6 +1145,7 @@ def install_selection(
                 if name.casefold() in {n.casefold() for n in [*active, *additions]}:
                     raise PlanConflict("Файл уже есть в сборке или плане установки: " + name)
                 additions[name] = path
+            on_stage("checking")
             inspected = compatibility.local_report(profile, active, additions)
             _require_no_conflicts(inspected)
             missing = [row for row in inspected["required"] if not row["installed"]]
@@ -1176,9 +1186,11 @@ def install_selection(
                 manual = Package("local-" + digest, "", "mods", "", name, "", "", name, path.stat().st_size, digest, "", ())
                 staged[manual.version] = path
             publish = releases + [manual] if local_mod else releases
+            on_stage("installing")
             if staged and before_publish is not None:
                 before_publish()
-            written = _publish_set(store, pid, publish, staged)
+            written = _publish_set(store, pid, publish, staged, publisher)
+            on_stage("published", releases)
     _save_project_icons(store, pid, releases, status)
     if after_publish is not None:
         after_publish(releases)

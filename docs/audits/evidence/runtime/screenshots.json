@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-24",
+  "screenshots": [
+    {
+      "file": "neoforge-1.21.11-welcome.png",
+      "sha256": "e08f218165b6112ffb5825eb6278623617cf1d58e0d2554095af49237cb79b34",
+      "loader": "neoforge",
+      "minecraft": "1.21.11",
+      "started": "2026-11-24T15:32:21.743408+00:00",
+      "launchIndex": 2,
+      "observation": "Minecraft welcome/accessibility screen after verified EntityCulling 1.12.2 install, cancelled download/range recovery and economy settings; no world/gameplay",
+      "environment": "isolated Linux Xorg dummy display; software graphics; temporary local account",
+      "gameplayVerified": false
+    },
+    {
+      "file": "forge-1.18.2-main-menu.png",
+      "sha256": "4b533217b0b289d9cb6ccc4d0833a8da7665ee460e519c3ad1a45608738c733e",
+      "loader": "forge",
+      "minecraft": "1.18.2",
+      "started": "2026-11-24T15:02:29.528599+00:00",
+      "launchIndex": 2,
+      "observation": "Minecraft main menu, Forge 40.3.0 and 2 mods loaded; no world/gameplay",
+      "environment": "isolated Linux Xorg dummy display; software graphics; temporary local account",
+      "gameplayVerified": false
+    },
+    {
+      "file": "fabric-26.3-graphics-error.png",
+      "sha256": "b1d201ae3f990160060d8a5266dd0c248044dc5a7ca142450baee22d7c57bc76",
+      "loader": "fabric",
+      "minecraft": "26.3",
+      "started": "2026-11-24T14:51:16.359637+00:00",
+      "launchIndex": 2,
+      "observation": "Error dialog: no supported graphics backend, GLX/Vulkan unavailable",
+      "environment": "isolated Linux Xorg dummy display; software graphics; temporary local account",
+      "gameplayVerified": false
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{"Time":"2026-11-24T15:56:23.2931894Z","Action":"start","Package":"command-line-arguments"}
+{"Time":"2026-11-24T15:56:23.3304058Z","Action":"run","Package":"command-line-arguments","Test":"TestSetupAndRepair"}
+{"Time":"2026-11-24T15:56:23.3304058Z","Action":"output","Package":"command-line-arguments","Test":"TestSetupAndRepair","Output":"=== RUN   TestSetupAndRepair\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3433286Z","Action":"output","Package":"command-line-arguments","Test":"TestSetupAndRepair","Output":"--- PASS: TestSetupAndRepair (0.01s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3438732Z","Action":"pass","Package":"command-line-arguments","Test":"TestSetupAndRepair","Elapsed":0.01}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"run","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Output":"=== RUN   TestIncompleteAndInvalidArchive\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Output":"--- PASS: TestIncompleteAndInvalidArchive (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"pass","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Elapsed":0}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"run","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Output":"=== RUN   TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Output":"--- PASS: TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"pass","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Elapsed":0}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"run","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Output":"=== RUN   TestBootstrapNoticeIsIsolatedToTheActualChild\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Output":"--- PASS: TestBootstrapNoticeIsIsolatedToTheActualChild (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"pass","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Elapsed":0}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"run","Package":"command-line-arguments","Test":"TestShippedExecutable"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"=== RUN   TestShippedExecutable\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:23.3529357Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Проверяем встроенный пакет BlockHarbor…\n"}
+{"Time":"2026-11-24T15:56:23.3712142Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 0%\n"}
+{"Time":"2026-11-24T15:56:23.443611Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 10%\n"}
+{"Time":"2026-11-24T15:56:23.4824551Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 20%\n"}
+{"Time":"2026-11-24T15:56:23.5239934Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 30%\n"}
+{"Time":"2026-11-24T15:56:23.9685818Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 40%\n"}
+{"Time":"2026-11-24T15:56:24.0822982Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 50%\n"}
+{"Time":"2026-11-24T15:56:24.1180887Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 60%\n"}
+{"Time":"2026-11-24T15:56:24.1548746Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 70%\n"}
+{"Time":"2026-11-24T15:56:24.3212591Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 80%\n"}
+{"Time":"2026-11-24T15:56:24.3792682Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 90%\n"}
+{"Time":"2026-11-24T15:56:24.4180551Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Подготовка файлов лаунчера · 100%\n"}
+{"Time":"2026-11-24T15:56:24.4189874Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:210: Компоненты готовы. Открываем BlockHarbor.\n"}
+{"Time":"2026-11-24T15:56:24.5235134Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Проверяем встроенный пакет BlockHarbor…\n"}
+{"Time":"2026-11-24T15:56:24.5439465Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 0%\n"}
+{"Time":"2026-11-24T15:56:24.6182089Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 10%\n"}
+{"Time":"2026-11-24T15:56:24.6549495Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 20%\n"}
+{"Time":"2026-11-24T15:56:24.7018116Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 30%\n"}
+{"Time":"2026-11-24T15:56:24.8093174Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 40%\n"}
+{"Time":"2026-11-24T15:56:24.8721904Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 50%\n"}
+{"Time":"2026-11-24T15:56:25.6628208Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 60%\n"}
+{"Time":"2026-11-24T15:56:25.7039527Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 70%\n"}
+{"Time":"2026-11-24T15:56:25.8613316Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 80%\n"}
+{"Time":"2026-11-24T15:56:25.9029944Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 90%\n"}
+{"Time":"2026-11-24T15:56:25.9327754Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Подготовка файлов лаунчера · 100%\n"}
+{"Time":"2026-11-24T15:56:25.9414058Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:226: Компоненты готовы. Открываем BlockHarbor.\n"}
+{"Time":"2026-11-24T15:56:26.2222468Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"--- PASS: TestShippedExecutable (2.87s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:26.2222468Z","Action":"pass","Package":"command-line-arguments","Test":"TestShippedExecutable","Elapsed":2.87}
+{"Time":"2026-11-24T15:56:26.2227673Z","Action":"output","Package":"command-line-arguments","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:56:26.2249772Z","Action":"output","Package":"command-line-arguments","Output":"ok  \tcommand-line-arguments\t2.924s\n"}
+{"Time":"2026-11-24T15:56:26.2249772Z","Action":"pass","Package":"command-line-arguments","Elapsed":2.932}

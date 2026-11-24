@@ -16,6 +16,7 @@ class AppearanceTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.app = App(Path(temp.name))
+        self.addCleanup(self.app.close)
         self.store = self.app.store
         self.pid = self.store.create("Остров друзей", "1.20.1", "fabric")
         image = io.BytesIO()

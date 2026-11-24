@@ -33,7 +33,7 @@ class AliasTests(unittest.TestCase):
         config.write_text('{"Original": "Earlier", "friend": "Green"}')
         with patch.object(aliases, "_ensure_mods") as ensure:
             result = aliases.apply_alias(self.instance, "Original", "New_Name")
-            self.assertEqual(result, config)
+            self.assertEqual(result.resolve(), config.resolve())
             self.assertEqual(
                 json.loads(config.read_text()),
                 {"original": "New_Name", "friend": "Green"},
@@ -86,3 +86,10 @@ class AliasTests(unittest.TestCase):
         ):
             aliases.ensure_skin_support(self.instance)
         self.assertEqual(list(self.mods.iterdir()), [])
+
+    def test_junction_mod_directory_is_rejected_even_inside_instance(self):
+        with (patch.object(Path, "is_junction", lambda path: path == self.mods, create=True),
+              patch.object(aliases, "_download") as download,
+              self.assertRaisesRegex(ValueError, "пределами")):
+            aliases._ensure_mods(self.instance, (aliases.NAME_PROTECTED,))
+        download.assert_not_called()

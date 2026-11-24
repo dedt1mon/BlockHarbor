@@ -1,5 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <path fill="#21824a" d="M24 1 45.5 13v22L24 47 2.5 35V13z"/>
-  <path fill="#3eb866" d="M2.5 13 24 25v22L2.5 35z"/>
-  <path fill="#86eb8d" d="m24 1 21.5 12L24 25 2.5 13z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" shape-rendering="geometricPrecision">
+  <defs>
+    <pattern id="cube-faces" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path fill="#21824a" d="M0 0h48v48H0z"/>
+      <path fill="#3eb866" d="M0 0h24v48H0z"/>
+      <path fill="#86eb8d" d="M-19 1 24 25 67 1v-25h-86z"/>
+    </pattern>
+  </defs>
+  <!-- One painted silhouette gives every outer edge the same antialiasing. -->
+  <path fill="url(#cube-faces)" d="M24 1 45.5 13v22L24 47 2.5 35V13z"/>
 </svg>

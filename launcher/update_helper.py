@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -31,8 +32,21 @@ def _write(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def _redirected(path):
+    """Short Windows names are aliases; real symlinks/reparse points are not."""
+    path = Path(path)
+    for component in (path, *path.parents):
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            return True
+    return False
+
+
 def _validate(path):
-    if path.is_symlink() or path.stat().st_size > 16384:
+    if _redirected(path) or path.stat().st_size > 16384:
         raise ValueError("Некорректный запрос установки.")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("format") != 1 or not re.fullmatch(r"[a-f0-9]{24}", str(data.get("id", ""))):
@@ -50,10 +64,15 @@ def _validate(path):
         source = root / "rollback" / ("BlockHarbor-" + version + ".exe")
     else:
         raise ValueError("Неизвестный способ установки.")
-    if Path(data.get("file", "")) != source or source.is_symlink() or source.parent.is_symlink():
+    supplied_source = Path(data.get("file", ""))
+    if (not supplied_source.is_absolute() or _redirected(supplied_source)
+            or supplied_source.resolve() != source or _redirected(source)):
         raise ValueError("Файл установки перенаправлен.")
+    source = supplied_source
     ready = root / ("ready-" + data["id"] + ".json")
-    if Path(data.get("ready", "")) != ready or ready.is_symlink():
+    supplied_ready = Path(data.get("ready", ""))
+    if (not supplied_ready.is_absolute() or _redirected(supplied_ready)
+            or supplied_ready.resolve() != ready or _redirected(ready)):
         raise ValueError("Файл ответа перенаправлен.")
     if type(data.get("automatic", False)) is not bool:
         raise ValueError("Некорректный режим установки.")
@@ -61,10 +80,12 @@ def _validate(path):
         raise ValueError("Автоматический откат недоступен.")
     if "commit" in data or data.get("automatic"):
         commit = root / ("commit-" + data["id"] + ".json")
-        if Path(data.get("commit", "")) != commit or commit.is_symlink():
+        supplied_commit = Path(data.get("commit", ""))
+        if (not supplied_commit.is_absolute() or _redirected(supplied_commit)
+                or supplied_commit.resolve() != commit or _redirected(commit)):
             raise ValueError("Подтверждение установки перенаправлено.")
     target = Path(data.get("target", ""))
-    if not target.is_absolute() or target.name.lower() != "blockharbor.exe" or target.is_symlink() or not target.is_file():
+    if not target.is_absolute() or target.name.lower() != "blockharbor.exe" or _redirected(target) or not target.is_file():
         raise ValueError("Не найден установленный BlockHarbor.exe.")
     if not re.fullmatch(r"[a-f0-9]{64}", str(data.get("sha256", ""))) or type(data.get("size")) is not int or not 0 < data["size"] <= 512 * 1024**2:
         raise ValueError("Некорректная контрольная сумма или размер.")
@@ -73,13 +94,14 @@ def _validate(path):
         raise ValueError("Некорректный список процессов лаунчера.")
     if "sessionRoot" in data or "launcherSession" in data:
         session_root = Path(data.get("sessionRoot", ""))
-        if not session_root.is_absolute() or session_root.resolve() != session_root or not re.fullmatch(r"[a-f0-9]{24}", str(data.get("launcherSession", ""))):
+        if not session_root.is_absolute() or _redirected(session_root) or not re.fullmatch(r"[a-f0-9]{24}", str(data.get("launcherSession", ""))):
             raise ValueError("Некорректный сеанс установки.")
+        session_root = session_root.resolve()
         shared = session_root / "updates"
         if root != shared and not (root.parent == shared and re.fullmatch(r"window-[1-9][0-9]{0,2}", root.name)):
             raise ValueError("Запрос установки находится вне данных сеанса.")
         directory = session_root / "launcher-sessions"
-        if directory.is_symlink() or directory.resolve().parent != session_root:
+        if _redirected(directory) or directory.resolve().parent != session_root:
             raise ValueError("Каталог сеанса установки перенаправлен.")
     return data, source, target, ready
 
@@ -101,7 +123,7 @@ def _hold_session_gate(data):
 
 
 def _verify(source, data):
-    if source.is_symlink() or source.stat().st_size != data["size"]:
+    if _redirected(source) or source.stat().st_size != data["size"]:
         raise ValueError("Размер установщика изменился.")
     digest = hashlib.sha256()
     with source.open("rb") as stream:
@@ -116,7 +138,7 @@ def _require_commit(data):
     if "commit" not in data:
         return  # Compatibility with already issued manual handoffs.
     path = Path(data["commit"])
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+    if _redirected(path) or not path.is_file() or path.stat().st_size > 4096:
         raise ValueError("Установка отменена при закрытии BlockHarbor.")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("id") != data["id"] or value.get("install") is not True:
@@ -247,7 +269,8 @@ def run(path):
             try:
                 stored = json.loads(gate.read_text(encoding="utf-8"))
                 if stored.get("session") == data["launcherSession"]:
-                    gate.unlink(missing_ok=True)
+                    from launcher.sessions import remove_record
+                    remove_record(gate)
             except (OSError, ValueError):
                 pass
     if restart:

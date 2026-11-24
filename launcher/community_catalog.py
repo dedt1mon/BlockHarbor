@@ -5,9 +5,11 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 import time
 import unicodedata
 from http.client import HTTPException
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -15,6 +17,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from . import build_archive, e4steam, lifecycle, version_ids
 from .pack_hub import CATEGORIES
 from .store import LOADERS, input_profile
+from .staging import owned_directory, prune_abandoned
+from .transfers import TransferNetworkError
 from .version import VERSION
 
 ORIGIN = "https://blockharbor-community-catalog.ded8timon.chatgpt.site"
@@ -133,8 +137,22 @@ class CatalogAPI:
             raise CatalogError(0, "Не удалось связаться с каталогом сборок. Проверь подключение и попробуй ещё раз.") from exc
 
     def json(self, method, path, **kwargs):
-        with self.request(method, path, **kwargs) as response:
-            raw = response.read(MAX_JSON + 1)
+        # A fresh reservation is not idempotent. Part replacement, completion,
+        # reads and owner acknowledgement are safe to repeat after a lost reply.
+        repeatable = method in ("GET", "PUT", "DELETE") or (method == "POST" and path.endswith("/complete"))
+        for attempt in range(3 if repeatable else 1):
+            try:
+                with self.request(method, path, **kwargs) as response:
+                    raw = response.read(MAX_JSON + 1)
+                break
+            except (CatalogError, OSError, HTTPException) as exc:
+                lifecycle.check()
+                transient = not isinstance(exc, CatalogError) or exc.code in (0, 408, 500, 502, 503, 504, 521, 522, 523, 524)
+                if not repeatable or not transient or attempt == 2:
+                    if isinstance(exc, CatalogError):
+                        raise
+                    raise CatalogError(0, "Ответ каталога получен не полностью. Проверь подключение и повтори операцию.") from exc
+                lifecycle.wait(1 + attempt)
         if len(raw) > MAX_JSON:
             raise ValueError("Ответ каталога превышает допустимый размер.")
         if not raw:
@@ -245,14 +263,123 @@ class CommunityCatalog:
     JOBS = {"communityInstall", "communityPublish", "communityUnpublish"}
     ACTIONS = READ_ACTIONS | JOBS
 
-    def __init__(self, store, api=None, mirror=None):
+    def __init__(self, store, api=None, mirror=None, *, transfers=None):
         self.store = store
         self.api = api or CatalogAPI()
         self.mirror = mirror if mirror is not None else GitHubMirror()
+        self.transfers = transfers
+        self._notification_lock = threading.Lock()
+        self._notification_thread = None
+        self._notification_next = 0
         with self.store.connection() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS community_uploads (
                 origin TEXT NOT NULL, pid TEXT NOT NULL, fingerprint TEXT NOT NULL, upload TEXT NOT NULL,
                 token TEXT NOT NULL, listing TEXT, PRIMARY KEY (origin,pid,fingerprint))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS community_receipts (
+                origin TEXT NOT NULL, public_id TEXT NOT NULL, token TEXT NOT NULL,
+                name TEXT NOT NULL, expires INTEGER NOT NULL, next_check INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(origin,public_id))""")
+            db.execute("BEGIN IMMEDIATE")
+            if "notified" not in {column["name"] for column in db.execute("PRAGMA table_info(community_receipts)")}:
+                db.execute("ALTER TABLE community_receipts ADD COLUMN notified INTEGER NOT NULL DEFAULT 0")
+            # Migrate already published records before an expired listing is
+            # pruned or an identical build is republished with a new owner token.
+            rows = db.execute("SELECT token,listing FROM community_uploads WHERE origin=? AND listing IS NOT NULL", (self.api.origin,)).fetchall()
+            for row in rows:
+                try:
+                    listing = _listing(json.loads(row["listing"]))
+                except (ValueError, TypeError):
+                    continue
+                self._remember_receipt(db, listing, row["token"])
+
+    def _remember_receipt(self, db, listing, token):
+        # Pre-retention listings have no expiry. Keep their owner credentials
+        # too: after a server migration their public row may already be gone,
+        # while its authenticated expiry receipt is still waiting for delivery.
+        expiry = listing.get("expiresAt", 0)
+        if type(expiry) is int and expiry >= 0:
+            db.execute("""INSERT INTO community_receipts(origin,public_id,token,name,expires) VALUES(?,?,?,?,?)
+                ON CONFLICT(origin,public_id) DO UPDATE SET expires=CASE
+                WHEN community_receipts.expires=0 THEN excluded.expires ELSE community_receipts.expires END""",
+                       (self.api.origin, listing["id"], token, listing["name"], expiry))
+
+    def tick_notifications(self, notify):
+        """Start a small owned background poll, never blocking UI/session checks."""
+        moment = time.monotonic()
+        with self._notification_lock:
+            if moment < self._notification_next or self._notification_thread and self._notification_thread.is_alive():
+                return
+            self._notification_next = moment + 60
+            scope = lifecycle.current_scope()
+
+            def run():
+                try:
+                    with lifecycle.bind(scope):
+                        self.sync_notifications(notify)
+                except lifecycle.OperationCancelled:
+                    pass
+
+            with lifecycle.guard():
+                self._notification_thread = threading.Thread(target=run, daemon=True, name="bh-publication-notifications")
+                self._notification_thread.start()
+
+    def recover_staging(self):
+        return prune_abandoned(self.store.root, "community-download-")
+
+    def sync_notifications(self, notify):
+        """Save before ACK: process/network crashes cannot lose an owner event."""
+        moment = int(time.time())
+        with self.store.connection() as db:
+            rows = db.execute("SELECT * FROM community_receipts WHERE origin=? AND expires<=? AND next_check<=? ORDER BY next_check,expires LIMIT 8",
+                              (self.api.origin, moment, moment)).fetchall()
+        delivered = 0
+        for row in rows:
+            lifecycle.check()
+            public_id = row["public_id"]
+            path = "publications/" + _build_id(public_id) + "/events"
+            try:
+                if not row["notified"]:
+                    payload = self.api.json("GET", path, token=row["token"])
+                    events = payload.get("events")
+                    if not isinstance(events, list) or len(events) > 1:
+                        raise ValueError("Каталог вернул неверный список уведомлений.")
+                    if not events:
+                        raise ValueError("Сервер ещё не подтвердил удаление публикации.")
+                    event = events[0]
+                    if (not isinstance(event, dict) or event.get("type") != "publicationExpired"
+                            or event.get("id") != "publication-expired:" + public_id or event.get("build") != public_id
+                            or type(event.get("created")) is not int or event["created"] <= 0
+                            or row["expires"] > 0 and event["created"] != row["expires"]
+                            or type(event.get("removedAt")) is not int
+                            or not event["created"] <= event["removedAt"] <= moment + 300):
+                        raise ValueError("Каталог вернул неверное уведомление об удалении.")
+                    event_key = "community:" + hashlib.sha256(self.api.origin.encode()).hexdigest()[:16] + ":" + event["id"]
+                    notify(f"Срок действия ссылки на сборку «{row['name']}» истёк. Сборка автоматически удалена с сервера.",
+                           "info", event_key=event_key, created=event["created"])
+                    with self.store.connection() as db:
+                        db.execute("UPDATE community_receipts SET notified=1 WHERE origin=? AND public_id=?", (self.api.origin, public_id))
+                # notify durably deduplicates across windows and restarts before
+                # this acknowledgement is sent. A lost ACK is harmless.
+                try:
+                    self.api.json("DELETE", path, token=row["token"])
+                except CatalogError as exc:
+                    if exc.code != 404:
+                        raise
+                with self.store.connection() as db:
+                    db.execute("DELETE FROM community_receipts WHERE origin=? AND public_id=?", (self.api.origin, public_id))
+                    db.execute("DELETE FROM community_uploads WHERE origin=? AND json_extract(listing,'$.id')=?", (self.api.origin, public_id))
+                delivered += 1
+            except lifecycle.OperationCancelled:
+                raise
+            except (CatalogError, ValueError, OSError, HTTPException):
+                # Legacy servers have no receipt API. Keep the owner's journal
+                # and do not claim a server deletion which was not confirmed.
+                delay = min(3600, 60 * 2 ** min(row["attempts"], 6))
+                with self.store.connection() as db:
+                    db.execute("UPDATE community_receipts SET next_check=?,attempts=attempts+1 WHERE origin=? AND public_id=?",
+                               (moment + delay, self.api.origin, public_id))
+        return delivered
 
     def search(self, params):
         query = params.get("q", "")
@@ -286,7 +413,7 @@ class CommunityCatalog:
         return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
     def capabilities(self):
-        """Detect whether the live server actually enforces retention and bans.
+        """Detect whether the live server enforces retention and build cooldowns.
 
         Older server versions do not expose this endpoint. Never label those
         sites as enforcing the one-hour rule simply because the client knows it.
@@ -296,18 +423,20 @@ class CommunityCatalog:
         except CatalogError as exc:
             if exc.code == 404:
                 return {"enabled": False, "mode": "legacy",
-                        "message": "Сервер каталога пока не поддерживает автоудаление и антиспам. Публикация может храниться дольше 1 часа."}
+                        "message": "Новые публикации недоступны: сервер ещё не подтверждает срок 60 минут и защиту от спама. Существующие сборки можно скачивать и снимать с публикации."}
             return {"enabled": False, "mode": "unknown",
-                    "message": "Не удалось подтвердить ограничения сервера. Перед публикацией проверь подключение."}
+                    "message": "Новые публикации временно недоступны: не удалось подтвердить ограничения сервера. Проверь подключение и повтори проверку."}
         limits = data.get("publishLimits")
         if (data.get("publicRetentionSeconds") != 3600 or not isinstance(limits, dict)
                 or limits.get("maxArchiveBytes") != MAX_PUBLIC_UPLOAD
-                or limits.get("maxActive") != 3 or limits.get("windowSeconds") != 600
-                or limits.get("maxAttempts") != 10 or limits.get("banSeconds") != 18000):
+                or limits.get("maxActive") != 3 or limits.get("burstAttempts") != 3
+                or limits.get("cooldownSeconds") != 300
+                or limits.get("rateScope") != "publisher-build"
+                or limits.get("stableBuildKeyRequired") is not True):
             return {"enabled": False, "mode": "unsupported",
-                    "message": "Версия сервера не подтверждает часовую очистку и защиту от спама."}
+                    "message": "Новые публикации недоступны: эта версия сервера не подтверждает срок 60 минут и защиту от спама."}
         return {"enabled": True, "mode": "retention",
-                "message": "Подтверждено сервером: 1 час хранения, 256 МиБ и защита от спама.",
+                "message": "Подтверждено сервером: ссылка действует 60 минут, архив до 256 МиБ. Для одной сборки доступны три быстрые попытки, далее — одна в 5 минут. После истечения срока сервер автоматически очищает хранилище.",
                 "publicRetentionSeconds": 3600, "publishLimits": limits}
 
     def _reconcile_legacy(self, pid, item):
@@ -324,10 +453,17 @@ class CommunityCatalog:
             db.execute("""UPDATE community_uploads SET listing=?
                 WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?""",
                 (json.dumps(current, ensure_ascii=False), self.api.origin, pid, public_id))
+            token = db.execute("SELECT token FROM community_uploads WHERE origin=? AND pid=? AND json_extract(listing,'$.id')=?",
+                               (self.api.origin, pid, public_id)).fetchone()
+            if token:
+                self._remember_receipt(db, current, token["token"])
         return current
 
     def _new_upload(self, pid, key, metadata):
-        session = self.api.json("POST", "uploads", payload=metadata)
+        # The profile UUID is stable across renames, content edits and launcher
+        # restarts. It is not an upload token and is never part of a public ZIP.
+        build_key = hashlib.sha256(("BlockHarbor-public-build-v1:" + pid).encode()).hexdigest()
+        session = self.api.json("POST", "uploads", payload={**metadata, "buildKey": build_key})
         upload, token = session.get("upload"), session.get("token")
         if (not isinstance(upload, str) or not re.fullmatch("[a-f0-9]{32}", upload)
                 or not isinstance(token, str) or not re.fullmatch("[a-f0-9]{64}", token)
@@ -384,6 +520,11 @@ class CommunityCatalog:
                 old = None
                 listing = None
 
+            policy = self.capabilities()
+            if not policy["enabled"]:
+                raise ValueError("Новая публикация недоступна: сервер не подтвердил хранение ровно 60 минут и ограничения загрузки. "
+                                 "Существующие сборки можно скачивать и снимать с публикации.")
+
             # If the completion response was lost, recover the published ID
             # before sending another byte. A changed archive gets a new session.
             if old:
@@ -414,6 +555,7 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 db.execute("UPDATE community_uploads SET listing=? WHERE origin=? AND pid=? AND fingerprint=?",
                            (json.dumps(listing, ensure_ascii=False), *args))
+                self._remember_receipt(db, listing, token)
             return listing
 
     def publications(self, pid):
@@ -464,6 +606,7 @@ class CommunityCatalog:
         with self.store.connection() as db:
             db.execute("DELETE FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?",
                        (self.api.origin, pid, row["fingerprint"]))
+            db.execute("DELETE FROM community_receipts WHERE origin=? AND public_id=?", (self.api.origin, public_id))
         return "Сборка " + public_id + " снята с публикации."
 
     def install(self, public_id, allow_without_steam, status):
@@ -482,6 +625,55 @@ class CommunityCatalog:
             raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
         if not allow_without_steam and not e4steam.support(listing["minecraft"], listing["loader"]):
             raise ValueError("Подтверди установку этой сборки без встроенной игры через Steam.")
+        result = (self._install_transferred(listing, from_mirror, status) if self.transfers is not None
+                  else self._install_streamed(listing, from_mirror, status))
+        if allow_without_steam:
+            e4steam.acknowledge_notice(self.store, result["id"], listing["minecraft"], listing["loader"])
+        return result
+
+    def _install_transferred(self, listing, from_mirror, status):
+        """Use the launcher's verified, resumable queue for public archive bytes."""
+        if _expired(listing):
+            raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
+        public_id, size = listing["id"], listing["size"]
+        if shutil.disk_usage(self.store.root).free < size + 16 * 1024**2:
+            raise ValueError("Недостаточно места на диске для архива сборки.")
+        with owned_directory(self.store.root, "community-download-") as folder:
+            destination = Path(folder) / (public_id + ".zip")
+            def receive(mirror):
+                # Never put a publisher token in transfer history or URLs.
+                # Archives are public; only owner actions need Authorization.
+                if mirror:
+                    url = GitHubMirror.archive_url(public_id)
+                    hosts = {"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+                else:
+                    url = self.api.origin + "/v1/builds/" + public_id + "/archive"
+                    hosts = {urlsplit(self.api.origin).hostname}
+                return self.transfers.download(url, destination, title="Сборка «" + listing["name"] + "»",
+                    hashes={"sha256": listing["sha256"]}, size=size, max_size=MAX_ARCHIVE,
+                    hosts=hosts, category="community", status=status, resume=True)
+
+            try:
+                receive(from_mirror)
+            except TransferNetworkError as error:
+                if from_mirror or error.status_code is not None and error.status_code not in FALLBACK_HTTP:
+                    raise
+                if _expired(listing):
+                    raise CatalogError(404, "Срок публикации истёк во время загрузки. Попроси автора опубликовать сборку снова.") from error
+                backup = self.mirror.listing(public_id)
+                if any(backup.get(field) != listing[field] for field in ("id", "size", "sha256")) or _expired(backup):
+                    raise ValueError("Резервный архив не совпадает с записью основного каталога.") from error
+                status("Основной сервер недоступен. Скачиваем проверенную копию из резервного каталога…")
+                receive(True)
+            # Once all bytes are locally verified, import is a local operation.
+            # Expiration on the server must not revoke an already downloaded copy.
+            status("Проверяем и устанавливаем сборку…")
+            with destination.open("rb") as stream:
+                return build_archive.import_build(self.store, stream, catalog_listing=listing, max_bytes=MAX_ARCHIVE)
+
+    def _install_streamed(self, listing, from_mirror, status):
+        """Compatibility transport for standalone consumers without a manager."""
+        public_id = listing["id"]
         size = listing["size"]
         if shutil.disk_usage(self.store.root).free < size:
             raise ValueError("Недостаточно места на диске для архива сборки.")
@@ -515,8 +707,6 @@ class CommunityCatalog:
                     raise ValueError("Размер или контрольная сумма скачанной сборки не совпали.")
             status("Проверяем и устанавливаем сборку…")
             result = build_archive.import_build(self.store, stream, catalog_listing=listing, max_bytes=MAX_ARCHIVE)
-        if allow_without_steam:
-            e4steam.acknowledge_notice(self.store, result["id"], listing["minecraft"], listing["loader"])
         return result
 
     def handle(self, action, params, status=lambda msg: None):

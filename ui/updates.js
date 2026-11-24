@@ -8,9 +8,6 @@
   let lastReleaseMarkup = "";
   let transferHistoryExpanded = false;
   let savingAutomatic = false;
-  let savingChannel = false;
-  let pendingChannel = null;
-  let channelRevision = 0;
   let progressData = null;
   let completedCheck = null;
   const activeTransfers = new Set(["queued", "downloading", "verifying"]);
@@ -102,25 +99,33 @@
   }
 
   function render({embedded = false} = {}) {
-    const actions = button("updateCheck", "Проверить обновления", "refresh");
     const heading = embedded
-      ? `<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div>${actions}</div>`
-      : head("Загрузки и обновления", actions, "Версии лаунчера, очередь файлов и результаты проверки.");
+      ? '<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div></div>'
+      : head("Загрузки и обновления", "", "Версии лаунчера, очередь файлов и результаты проверки.");
     return heading +
-      `<div id="updatesScreen"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" class="field" aria-label="Канал обновлений" ${savingChannel || !data ? "disabled" : ""} ${savingChannel ? 'aria-busy="true"' : ""}><option value="stable">Стабильный</option><option value="test" ${(pendingChannel || data?.channel) === "test" ? "selected" : ""}>Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
+      `<div id="updatesScreen"><section class="panel updater-automatic">
+        <label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label>
+        <p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p>
+        <p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p>
+        <div id="updateRelease" class="updater-details" aria-live="polite">${releaseMarkup()}</div>
+      </section><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div><div class="actions transfer-history-actions">${historyToggleMarkup()}${button("transferClear", "Очистить историю", "trash")}</div></div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
   }
 
   function releaseMarkup() {
-    if (!data) return "";
+    const check = button("updateCheck", data?.autoChecking ? "Проверяем обновления" : "Проверить обновления", "refresh", "", Boolean(data?.autoChecking));
+    if (!data) return `<p class="muted">Получаем состояние обновлений…</p><div class="updater-actions"><div class="actions">${check}</div></div>`;
     const release = data.release;
-    const busy = data.transfers?.tasks.some((task) => task.category === "launcher-update" && ["queued", "downloading", "verifying"].includes(task.state));
-    let actions = "";
-    let heading = `Установлен BlockHarbor ${esc(data.current)}`;
+    const tasks = (data.transfers?.tasks || []).filter(task => task.category === "launcher-update");
+    const download = tasks.find(task => activeTransfers.has(task.state));
+    const recent = tasks.find(task => !release?.version || task.title?.endsWith(release.version));
+    const busy = Boolean(download);
+    let actions = check;
+    let heading = "";
     let body = `<p class="muted">Последняя проверка: ${esc(formatDate(data.checkedAt))}.</p>`;
     if (data.checkStatus?.message) body += `<p class="muted">${esc(data.checkStatus.message)}</p>`;
     if (data.checkStatus?.retryAt > Date.now() / 1000) body += `<p class="muted">Повторная сетевая проверка доступна с: ${esc(formatDate(data.checkStatus.retryAt))}.</p>`;
     if (data.available && release) {
-      heading = `Доступен BlockHarbor ${esc(release.version)}`;
+      heading = `<h3 class="update-release-heading">Доступен BlockHarbor ${esc(release.version)}</h3>`;
       body += `<div class="tags"><span class="pill">${release.prerelease ? "Тестовая версия" : "Стабильная версия"}</span><span class="pill">${fmt(release.size)}</span><span class="pill">${release.compatible ? "Формат данных совместим" : "Нужна миграция данных"}</span></div>`;
       if (!release.compatible) body += '<p class="update-problem">Эта версия использует другой формат данных. Автоматическая установка недоступна.</p>';
       else if (data.ready) {
@@ -131,7 +136,15 @@
       }
       body += `<details class="update-notes"><summary>Что изменилось</summary><div>${esc(release.notes)}</div><a href="${esc(release.url)}" target="_blank" rel="noopener noreferrer">Релиз на GitHub ${ic("link")}</a></details>`;
     } else if (release) {
-      body += '<p class="update-ready">Более новая версия в выбранном канале не найдена.</p>';
+      body += '<p class="update-ready">Более новая версия не найдена.</p>';
+    }
+    if (download) {
+      const total = Math.max(0, Number(download.total) || 0);
+      const bytes = Math.max(0, Number(download.bytes) || 0);
+      const amount = total ? `${fmt(bytes)} / ${fmt(total)}` : bytes ? fmt(bytes) : "";
+      body += `<div class="update-download-progress" aria-live="off"><div><strong>${esc(labels[download.state])}</strong><span>${esc(amount)}</span></div><progress ${total ? `max="${total}" value="${Math.min(bytes, total)}"` : ""} aria-label="Загрузка обновления BlockHarbor"></progress>${download.message ? `<p class="muted">${esc(download.message)}</p>` : ""}</div>`;
+    } else if (!data.ready && recent && ["failed", "interrupted", "cancelled"].includes(recent.state)) {
+      body += `<p class="${recent.state === "cancelled" ? "muted" : "update-problem"}">${esc(recent.message || (recent.state === "cancelled" ? "Загрузка обновления отменена." : "Не удалось скачать обновление. Повтори загрузку."))}</p>`;
     }
     if (data.pending) {
       const stage = data.pending.stage;
@@ -139,19 +152,23 @@
       body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? automatic ? "Автоматическое обновление готово" : "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : automatic ? "Устанавливаем обновление" : "Открываем установщик"}</strong><p>${stage === "queued" ? automatic ? "Закрой другие окна BlockHarbor. После завершения игр, загрузок и операций приложение обновится и откроется снова." : "Закрой другие окна BlockHarbor. После выхода из всех игр и завершения операций откроется установщик." : automatic ? "BlockHarbor ненадолго закроется и автоматически откроется после успешной установки." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
       if (stage !== "launching") actions += button("updateCancelInstall", automatic ? "Отложить до следующего запуска" : "Отменить установку", "close");
     }
-    if (data.rollback && !data.pending) {
-      actions += button("rollbackDialog", `Вернуться к ${data.rollback.version}`, "back", "", !data.windows);
-    }
+    const rollback = data.rollback && !data.pending
+      ? `<div class="updater-rollback">${button("rollbackDialog", "Вернуться к предыдущей версии", "back", "", !data.windows)}</div>` : "";
     if (!data.windows) body += '<p class="muted">Автоматическая установка .exe выполняется в Windows. Сейчас открыт запуск для разработки.</p>';
     if (data.error) body += `<p class="update-problem" role="alert">${esc(data.error)}</p>`;
-    return `<section class="panel updater-release"><div class="update-release-icon">${ic("cube")}</div><div class="update-release-info"><h2>${heading}</h2>${body}<div class="actions">${actions}</div><p class="update-trust">${esc(data.trust)}</p></div></section>`;
+    return `${heading}${body}<div class="updater-actions"><div class="actions">${actions}</div>${rollback}</div>${data.trust ? `<p class="update-trust">${esc(data.trust)}</p>` : ""}`;
+  }
+
+  function historyToggleMarkup() {
+    const count = Math.max(0, (data?.transfers?.tasks?.length || 0) - recentTransferLimit);
+    return `<button class="btn transfer-history-toggle" type="button" data-transfer-history aria-expanded="${transferHistoryExpanded}" aria-controls="transferHistory" ${count ? "" : "disabled"}>${ic("down")}<span>${transferHistoryExpanded ? "Скрыть историю" : "Показать историю"}${count ? ` (${count})` : ""}</span></button>`;
   }
 
   function transfersMarkup() {
     const tasks = data?.transfers?.tasks || [];
     const job = state?.job;
     const liveJob = job?.busy ? `<div class="transfer-stage"><span class="transfer-spinner">${ic("refresh")}</span><div><strong>Текущая операция</strong><p>${esc(job.message)}</p></div></div>` : "";
-    if (!tasks.length) return liveJob + '<div class="empty">Здесь появятся скачиваемые файлы и результаты их проверки.</div>';
+    if (!tasks.length) return liveJob + '<div class="empty">Здесь появятся скачиваемые файлы и результаты их проверки.</div><div id="transferHistory" hidden></div>';
     const row = (task) => {
       const running = ["queued", "downloading", "verifying"].includes(task.state);
       const total = Number(task.total);
@@ -164,21 +181,14 @@
     };
     const recent = tasks.slice(0, recentTransferLimit).map(row).join("");
     const older = tasks.slice(recentTransferLimit);
-    if (!older.length) return liveJob + recent;
+    if (!older.length) return liveJob + recent + '<div id="transferHistory" hidden></div>';
     return liveJob + recent +
-      `<div class="transfer-history-controls"><button class="btn transfer-history-toggle" type="button" data-transfer-history aria-expanded="${transferHistoryExpanded}" aria-controls="transferHistory">${ic("down")}${transferHistoryExpanded ? "Скрыть историю" : "Показать историю"} (${older.length})</button></div>` +
       `<div id="transferHistory" ${transferHistoryExpanded ? "" : "hidden"}>${transferHistoryExpanded ? older.map(row).join("") : ""}</div>`;
   }
 
   function paint() {
     const screen = document.querySelector("#updatesScreen");
     if (!screen || !data) return;
-    const channel = document.querySelector("#updateChannel");
-    if (channel) {
-      channel.disabled = savingChannel;
-      if (savingChannel) channel.value = pendingChannel;
-      else if (document.activeElement !== channel) channel.value = data.channel;
-    }
     const automatic = document.querySelector("#automaticUpdates");
     if (automatic && !savingAutomatic) {
       automatic.checked = Boolean(data.autoEnabled);
@@ -194,10 +204,34 @@
           : data.autoChecking ? "Проверяем обновление в выбранном канале…" : "Автоматическое обновление включено.";
     const release = releaseMarkup();
     if (release !== lastReleaseMarkup) {
-      const open = document.querySelector(".update-notes")?.open;
-      document.querySelector("#updateRelease").innerHTML = release;
-      if (open && document.querySelector(".update-notes")) document.querySelector(".update-notes").open = true;
+      const host = document.querySelector("#updateRelease");
+      const notes = host.querySelector(".update-notes");
+      const open = notes?.open, notesScroll = notes?.querySelector("div")?.scrollTop || 0;
+      const focused = host.contains(document.activeElement) ? document.activeElement : null;
+      const action = focused?.closest("[data-updates-action]")?.dataset.updatesAction;
+      const focusSelector = action ? `[data-updates-action="${CSS.escape(action)}"]:not(:disabled)`
+        : focused?.matches(".update-notes > summary") ? ".update-notes > summary"
+          : focused?.matches(".update-notes > a") ? ".update-notes > a" : null;
+      host.innerHTML = release;
+      const currentNotes = host.querySelector(".update-notes");
+      if (open && currentNotes) {
+        currentNotes.open = true;
+        currentNotes.querySelector("div").scrollTop = notesScroll;
+      }
+      if (focusSelector) {
+        const replacement = host.querySelector(focusSelector)
+          || host.querySelector('[data-updates-action="updateCheck"]:not(:disabled)');
+        replacement?.focus({preventScroll: true});
+      }
       lastReleaseMarkup = release;
+    }
+    const historyToggle = document.querySelector("[data-transfer-history]");
+    if (historyToggle) {
+      const olderCount = Math.max(0, (data.transfers?.tasks?.length || 0) - recentTransferLimit);
+      if (!olderCount) transferHistoryExpanded = false;
+      historyToggle.disabled = !olderCount;
+      historyToggle.setAttribute("aria-expanded", String(transferHistoryExpanded));
+      historyToggle.querySelector("span").textContent = (transferHistoryExpanded ? "Скрыть историю" : "Показать историю") + (olderCount ? ` (${olderCount})` : "");
     }
     const transfers = transfersMarkup();
     if (transfers !== lastTransferMarkup) {
@@ -217,54 +251,15 @@
   async function load(silent = false) {
     if (fetching || !document.querySelector("#updatesScreen")) return;
     fetching = true;
-    const revision = channelRevision;
     try {
-      const result = await api("/api/feature?action=updateState");
-      if (revision === channelRevision) {
-        data = result;
-        paint();
-      }
+      data = await api("/api/feature?action=updateState");
+      paint();
     } catch (error) {
       if (!silent) notice(error.message, true);
     } finally {
       fetching = false;
       clearTimeout(timer);
       if (document.querySelector("#updatesScreen")) timer = setTimeout(() => load(true), 1500);
-    }
-  }
-
-  async function saveChannel(control) {
-    if (savingChannel || !data) return;
-    const previous = data.channel;
-    const selected = control.value;
-    const focused = document.activeElement === control;
-    savingChannel = true;
-    pendingChannel = selected;
-    channelRevision++;
-    control.disabled = true;
-    control.setAttribute("aria-busy", "true");
-    try {
-      await act("updateChannel", {channel: selected});
-      data.channel = selected;
-      notice("Канал обновлений сохранён.");
-    } catch (error) {
-      data.channel = previous;
-      notice(error.message, true);
-    } finally {
-      channelRevision++;
-      savingChannel = false;
-      pendingChannel = null;
-      const current = document.querySelector("#updateChannel");
-      if (current) {
-        current.value = data.channel;
-        current.disabled = false;
-        current.removeAttribute("aria-busy");
-        if (current === control && focused && [control, document.body].includes(document.activeElement)) {
-          current.focus({preventScroll: true});
-        }
-      }
-      await load(true);
-      await tick();
     }
   }
 
@@ -340,26 +335,21 @@
     }
   });
   document.addEventListener("change", async (event) => {
-    if (event.target.id === "updateChannel") return void saveChannel(event.target);
-    const automatic = event.target.id === "automaticUpdates";
-    if (!automatic) return;
+    if (event.target.id !== "automaticUpdates") return;
     const control = event.target;
-    if (automatic) savingAutomatic = true;
+    savingAutomatic = true;
     control.disabled = true;
     try {
-      await act(automatic ? "updateAutomatic" : "updateChannel", automatic ? {enabled: control.checked} : {channel: control.value});
-      if (automatic && data) data.autoEnabled = control.checked;
+      await act("updateAutomatic", {enabled: control.checked});
+      if (data) data.autoEnabled = control.checked;
       await load();
       await tick();
-      notice(automatic ? control.checked ? "Автоматическое обновление включено." : "Автоматическое обновление выключено." : "Канал обновлений сохранён.");
+      notice(control.checked ? "Автоматическое обновление включено." : "Автоматическое обновление выключено.");
     } catch (error) {
       notice(error.message, true);
-      if (data) {
-        if (automatic) control.checked = Boolean(data.autoEnabled);
-        else control.value = data.channel;
-      }
+      if (data) control.checked = Boolean(data.autoEnabled);
     } finally {
-      if (automatic) savingAutomatic = false;
+      savingAutomatic = false;
       control.disabled = false;
     }
   });

@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 
 from . import build_errors, skins
 from .diagnostics import redact
+from .modfiles import file_stamp
 from .store import clean_filename, input_profile
 
 COLORS = ("green", "blue", "purple", "orange", "rose")
@@ -28,7 +29,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
     JOBS = set()
 
     def __init__(self, store):
@@ -43,7 +44,19 @@ class Experience:
                 CREATE TABLE IF NOT EXISTS wardrobe(id TEXT PRIMARY KEY, name TEXT NOT NULL, digest TEXT NOT NULL, model TEXT NOT NULL, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY, created REAL NOT NULL, message TEXT NOT NULL, level TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS gallery_cache(key TEXT PRIMARY KEY, image TEXT NOT NULL, checksum TEXT NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS notification_events(event_key TEXT PRIMARY KEY, created REAL NOT NULL);
             """)
+            # Several launcher windows may open the same pre-migration database.
+            # Serialize the inspection and ALTER; never reset existing history.
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(notifications)")}
+            if "is_read" not in columns:
+                db.execute("ALTER TABLE notifications ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0")
+            # Keep IDs monotonic after Clear history so a delayed acknowledgement
+            # cannot mark a newly created, reused SQLite rowid as read.
+            db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('notificationSequence','0')")
+            largest = db.execute("SELECT COALESCE(MAX(id),0) FROM notifications").fetchone()[0]
+            db.execute("UPDATE settings SET value=CAST(MAX(CAST(value AS INTEGER),?) AS TEXT) WHERE key='notificationSequence'", (largest,))
 
     def metadata(self):
         with self.store.connection() as db:
@@ -57,18 +70,53 @@ class Experience:
     def state(self, pid=None):
         with self.store.connection() as db:
             wardrobe = [dict(row) for row in db.execute("SELECT * FROM wardrobe ORDER BY created DESC LIMIT 80")]
-        return {"details": self.metadata(), "preferences": self.preferences(), "wardrobe": wardrobe}
+        return {"details": self.metadata(), "preferences": self.preferences(), "wardrobe": wardrobe,
+                "notificationUnread": self.notification_unread()}
 
-    def notify(self, message, level="info"):
+    def notification_unread(self):
+        with self.store.connection() as db:
+            return db.execute("SELECT COUNT(*) FROM notifications WHERE is_read=0").fetchone()[0]
+
+    def notifications(self):
+        with self.store.connection() as db:
+            rows = db.execute("SELECT id,created,message,level,is_read FROM notifications ORDER BY id DESC LIMIT 200").fetchall()
+        items = [{"id": row["id"], "created": row["created"], "message": row["message"],
+                  "level": row["level"], "read": bool(row["is_read"])} for row in rows]
+        return {"items": items, "unread": sum(not item["read"] for item in items),
+                "lastId": items[0]["id"] if items else 0}
+
+    def read_notifications(self, through_id):
+        if type(through_id) is not int or not 0 <= through_id <= 2**63 - 1:
+            raise ValueError("Неизвестная отметка прочтения уведомлений.")
+        with self.store.connection() as db:
+            db.execute("UPDATE notifications SET is_read=1 WHERE id<=?", (through_id,))
+            row = db.execute("SELECT COALESCE(SUM(is_read=0),0) AS unread,COALESCE(MAX(id),0) AS lastId FROM notifications").fetchone()
+        return {"ok": True, "unread": row["unread"], "lastId": row["lastId"]}
+
+    def notify(self, message, level="info", *, event_key=None, created=None):
         message = redact(str(message), self.store.root)[:1000]
         if not message:
-            return
+            return False
+        if event_key is not None and (not isinstance(event_key, str) or not 1 <= len(event_key) <= 240):
+            raise ValueError("Неизвестный ключ уведомления.")
+        moment = time.time()
+        if created is not None and (type(created) not in (int, float) or not 0 < created <= moment + 300):
+            raise ValueError("Некорректное время уведомления.")
         with self.store.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if event_key is not None:
+                inserted = db.execute("INSERT OR IGNORE INTO notification_events(event_key,created) VALUES(?,?)", (event_key, moment))
+                if not inserted.rowcount:
+                    return False
             last = db.execute("SELECT message,created FROM notifications ORDER BY id DESC LIMIT 1").fetchone()
-            if last and last["message"] == message and time.time() - last["created"] < 4:
-                return
-            db.execute("INSERT INTO notifications(created,message,level) VALUES(?,?,?)", (time.time(), message, level if level in ("info", "success", "error") else "info"))
+            if event_key is None and last and last["message"] == message and moment - last["created"] < 4:
+                return False
+            db.execute("UPDATE settings SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='notificationSequence'")
+            sequence = int(db.execute("SELECT value FROM settings WHERE key='notificationSequence'").fetchone()[0])
+            db.execute("INSERT INTO notifications(id,created,message,level,is_read) VALUES(?,?,?,?,0)",
+                       (sequence, created if created is not None else moment, message, level if level in ("info", "success", "error") else "info"))
             db.execute("DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT 200)")
+        return True
 
     def media(self, digest):
         if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
@@ -179,10 +227,14 @@ class Experience:
 
     @staticmethod
     def _stamp(info):
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        # Windows path stat exposes creation time as ctime while fstat may
+        # expose ChangeTime (CPython #157671). Compare the same timestamp kind;
+        # content digests and file identity still protect every destructive step.
+        created_or_changed = getattr(info, "st_birthtime_ns", info.st_ctime_ns) if os.name == "nt" else info.st_ctime_ns
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, created_or_changed)
 
     def _shot_key(self, pid, path, info):
-        value = [pid, path.name, *self._stamp(info)]
+        value = [pid, path.name, *self._stamp(info), *file_stamp(path)]
         return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
 
     @staticmethod
@@ -232,6 +284,25 @@ class Experience:
             raise ValueError("Запись об удалении повреждена.") from exc
         return directory, record
 
+    def _trash_snapshot(self, pid, batch):
+        directory, record = self._trash_manifest(pid, batch)
+        available = []
+        for entry in record["images"]:
+            path = directory / entry["name"]
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                # A complete receipt can outlive an interrupted move/restore.
+                continue
+            if not stat.S_ISREG(info.st_mode) or self._redirected(path):
+                raise ValueError("Удалённый скриншот недоступен или перенаправлен.")
+            available.append((entry, info))
+        return directory, record, available
+
+    def _trash_token(self, record, available):
+        value = {"record": record, "files": [[entry["name"], *self._stamp(info)] for entry, info in available]}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
     def _trash_items(self, pid):
         folder = self._gallery_folder(pid)
         trash = folder / SCREENSHOT_TRASH
@@ -246,10 +317,9 @@ class Experience:
         items = []
         for path in batches[:100]:
             try:
-                directory, record = self._trash_manifest(pid, path.name)
-                available = [x for x in record["images"] if (directory / x["name"]).is_file() and not self._redirected(directory / x["name"])]
+                _, record, available = self._trash_snapshot(pid, path.name)
                 if available:
-                    items.append({"id": path.name, "created": record["created"], "count": len(available), "names": [x["name"] for x in available], "size": sum(x["size"] for x in available)})
+                    items.append({"id": path.name, "created": record["created"], "count": len(available), "names": [entry["name"] for entry, _ in available], "size": sum(entry["size"] for entry, _ in available), "token": self._trash_token(record, available)})
             except (OSError, ValueError):
                 continue
         return items
@@ -412,6 +482,54 @@ class Experience:
                 pass
         return {"ok": True, "restored": len(restored), "message": "Восстановлено скриншотов: " + str(len(restored)) + "."}
 
+    def purge_screenshots(self, pid, batch, token):
+        """Permanently remove only the files in one confirmed trash receipt."""
+        if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
+            raise ValueError("Обнови список удалённых скриншотов и подтверди удаление заново.")
+        directory, record, available = self._trash_snapshot(pid, batch)
+        if not available or not secrets.compare_digest(token, self._trash_token(record, available)):
+            raise ValueError("Удалённые скриншоты изменились. Обнови список и проверь выбор.")
+        identity = self._stamp(directory.lstat())[:2]
+        # Preflight the entire group before the first irreversible unlink. The
+        # receipt checksum also catches edits that preserve file timestamps.
+        for entry, info in available:
+            current, _, checksum = self._read_screenshot(directory / entry["name"])
+            if self._stamp(current) != self._stamp(info) or current.st_size != entry["size"] or checksum != entry["checksum"]:
+                raise ValueError("Удалённый скриншот «" + entry["name"] + "» изменился. Удаление отменено.")
+        removed, skipped = [], []
+        for entry, info in available:
+            try:
+                current_directory, current_record = self._trash_manifest(pid, batch)
+                if current_record != record or self._stamp(current_directory.lstat())[:2] != identity:
+                    raise ValueError("Группа удалённых скриншотов изменилась.")
+                path = current_directory / entry["name"]
+                current, _, checksum = self._read_screenshot(path)
+                if self._stamp(current) != self._stamp(info) or checksum != entry["checksum"]:
+                    raise ValueError("Удалённый скриншот изменился.")
+                path.unlink()
+                removed.append(entry["name"])
+            except (OSError, ValueError):
+                skipped.append(entry["name"])
+        if not removed:
+            raise ValueError("Скриншоты изменились или заняты. Обнови список удалённых и повтори.")
+        if not skipped:
+            try:
+                current_directory, current_record = self._trash_manifest(pid, batch)
+                if current_record == record and self._stamp(current_directory.lstat())[:2] == identity:
+                    # Never recurse: foreign files, directories and links in the
+                    # batch are not part of the user's confirmed selection.
+                    if {path.name for path in current_directory.iterdir()} == {"manifest.json"}:
+                        (current_directory / "manifest.json").unlink()
+                        current_directory.rmdir()
+            except (OSError, ValueError):
+                # Already removed images stay removed; a leftover receipt is
+                # harmless and must not turn successful deletion into an error.
+                pass
+        message = "Окончательно удалено скриншотов: " + str(len(removed)) + "."
+        if skipped:
+            message += " Не удалось удалить: " + str(len(skipped)) + ". Обнови список и повтори."
+        return {"ok": True, "deleted": len(removed), "skipped": skipped, "batch": batch, "message": message}
+
     def _favorite(self, p):
         pid, favorite = p.get("id"), p.get("favorite")
         if not isinstance(pid, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", pid):
@@ -496,9 +614,12 @@ class Experience:
             return self.delete_screenshots(p["id"], p.get("images"))
         if action == "experienceRestoreScreenshots":
             return self.restore_screenshots(p["id"], p.get("batch"))
+        if action == "experiencePurgeScreenshots":
+            return self.purge_screenshots(p["id"], p.get("batch"), p.get("token"))
         if action == "experienceNotifications":
-            with self.store.connection() as db:
-                return {"items": [dict(row) for row in db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT 200")]}
+            return self.notifications()
+        if action == "experienceReadNotifications":
+            return self.read_notifications(p.get("throughId"))
         if action == "experienceClearNotifications":
             with self.store.connection() as db:
                 db.execute("DELETE FROM notifications")

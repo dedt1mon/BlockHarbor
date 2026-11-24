@@ -1,0 +1,76 @@
+{
+  "capturedAt": "2026-11-24T15:40:58.701158+00:00",
+  "captureTiming": "AFTER the real attempts, at final evidence review; not a contemporaneous per-attempt source snapshot",
+  "baseRevision": "9a8b93c0ffa98c44c6340841c3db6a49e78dcfb1",
+  "baseMeaning": "Original comparison base only. Actual runs used the modified shared working tree, not the unchanged base revision.",
+  "comparison": "Where a checkpoint checkout exists, equality is measured now against its retained bytes; this does not retroactively prove hashes were captured at launch.",
+  "packages": {
+    "minecraft-launcher-lib": "8.0",
+    "requests": "2.34.2",
+    "Pillow": "13.0.0"
+  },
+  "files": [
+    {
+      "path": "launcher/game.py",
+      "sha256": "077705a983c0b933f209a67a3e02b28a1417e3fbd68e308cf505f08dc41eeb4e",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/preparation.py",
+      "sha256": "4c30e4037813040ff95b8bce4360d3500dbd19644369a384387c0918798f3785",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/transfers.py",
+      "sha256": "d48f2d79a1e753b3f5ef6701a53da2d778538a52be286e63e3a324930087f845",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/lifecycle.py",
+      "sha256": "dc2427b8676385e3e1a787ece28161f1415fad837e58e64ceb28e4db45f2f43a",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/modfiles.py",
+      "sha256": "4569c848ff8f5e2628b6ad90b2889094f9ce092e9a4a9f4abcf4b91c8a2afb4c",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/compatibility.py",
+      "sha256": "dc82975f428a89a1dfe4c1ef275db4e51560a5a766ae6f5eabf77d4bf10bebe4",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/io_errors.py",
+      "sha256": "f461ac1af1640de40085877ed5b87d4e2e99b4148346142569bc8e7aeb015217",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/store.py",
+      "sha256": "793ce4a61b200185005b2a10899f0b8980aea50dd41049697c8e471607d76976",
+      "equalsCheckpoint6": true,
+      "equalsCheckpoint7": true
+    },
+    {
+      "path": "launcher/loader_catalog.py",
+      "sha256": "7f6e21ba28ddabf3234a62788f6feeb683a55429f3fca007faf2ad00d681f896"
+    },
+    {
+      "path": "launcher/legacy_forge.py",
+      "sha256": "1f0f7dfab02028a9baffb373ca7b4536fa1a7f62d3e82f430b576f852eb891d0"
+    },
+    {
+      "path": "tools/smoke_loader_matrix.py",
+      "sha256": "740a95e2e416632597c8a91838ea09eb727546cc854448728ef006e0f63d18f3",
+      "equalsCheckpoint6": false,
+      "equalsCheckpoint7": true
+    }
+  ]
+}

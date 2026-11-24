@@ -278,12 +278,31 @@ class PreparationTests(unittest.TestCase):
             modfiles, "file_hash", side_effect=AssertionError("unnecessary hashing")
         ):
             self.assertIsNone(preparation.runtime_problem(self.root, component, java))
+        # Corruption that preserves file size and mtime must invalidate the index.
+        stamp = dll.stat()
+        dll.write_bytes(b"x" * len(b"vm runtime"))
+        os.utime(dll, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        self.assertIn("jvm.dll", preparation.runtime_problem(self.root, component, java))
         dll.write_bytes(b"")
         self.assertIn(
             "jvm.dll", preparation.runtime_problem(self.root, component, java)
         )
         dll.write_bytes(b"vm runtime")
         self.assertIsNone(preparation.runtime_problem(self.root, component, java))
+
+    def test_interrupted_download_cleanup_preserves_published_and_unrelated_files(self):
+        nested = self.root / "assets" / "objects" / "aa"
+        nested.mkdir(parents=True)
+        discarded = nested / ".blockharbor-download-abc_1234"
+        discarded.write_bytes(b"partial")
+        user_file = nested / ".blockharbor-download-user-document.txt"
+        user_file.write_bytes(b"leave this file")
+        verified = nested / ("a" * 40)
+        verified.write_bytes(b"verified file")
+        self.assertEqual(preparation.cleanup_interrupted_downloads(self.root), 1)
+        self.assertFalse(discarded.exists())
+        self.assertEqual(user_file.read_bytes(), b"leave this file")
+        self.assertEqual(verified.read_bytes(), b"verified file")
 
     def test_metadata_preserves_system_proxy_environment_and_uses_finite_timeout(self):
         raw = io.BytesIO(b'{"ok":true}')

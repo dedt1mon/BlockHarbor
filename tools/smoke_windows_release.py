@@ -54,6 +54,14 @@ def test_runtime(installed, root, version):
     local.mkdir()
     data = root / "data"
     environment = dict(os.environ, LOCALAPPDATA=str(local))
+    # Hosted runners have development tools installed. Exercise the packaged
+    # launcher with only the Windows system paths so a successful start cannot
+    # depend on Python, Go, or Java from the runner's toolchain PATH/environment.
+    windows = Path(os.environ["SystemRoot"])
+    environment["PATH"] = os.pathsep.join((str(windows / "System32"), str(windows)))
+    for variable in ("JAVA_HOME", "JDK_HOME", "PYTHONHOME", "PYTHONPATH",
+                     "PYTHONSTARTUP", "VIRTUAL_ENV", "CONDA_PREFIX", "GOROOT", "GOPATH"):
+        environment.pop(variable, None)
     process = subprocess.Popen([str(installed), "--no-browser", "--data", str(data)],
                                env=environment)
     try:
@@ -103,7 +111,7 @@ def test_runtime(installed, root, version):
             assert isinstance(result, dict), action
         for script in ("app.js", "window.js", "pack-hub.js", "updates.js", "build-care.js"):
             assert len(call(script, auth=False, raw=True)) > 100, script
-        print("PASS: packaged runtime, local API, Russian profile, feature reads, static UI, authentication")
+        print("PASS: packaged runtime with isolated system PATH, local API, Russian profile, feature reads, static UI, authentication")
     finally:
         if process.poll() is None:
             # This is our isolated CI test process tree only.

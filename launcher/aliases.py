@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from . import lifecycle
 from .skins import SkinError, _write_inside, validate_nickname
+from .version import VERSION
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,7 @@ def _download(release: ModRelease) -> bytes:
     lifecycle.check()
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/2.6.8 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": f"BlockHarbor/{VERSION} (Minecraft Java desktop launcher)"},
     )
     try:
         with lifecycle.response(urlopen(request, timeout=30)) as response:
@@ -139,8 +140,10 @@ def _existing(path: Path, spec: dict, release: ModRelease) -> bool:
 
 
 def _ensure_mods(instance: Path, releases: tuple[ModRelease, ...]) -> list[Path]:
+    instance = Path(instance)
     mods = instance / "mods"
-    if mods.resolve().parent != instance:
+    if (mods.is_symlink() or getattr(mods, "is_junction", lambda: False)()
+            or mods.resolve().parent != instance.resolve()):
         raise SkinError("Папка модов находится за пределами сборки.")
     mods.mkdir(parents=True, exist_ok=True)
     active = [
@@ -159,7 +162,7 @@ def _ensure_mods(instance: Path, releases: tuple[ModRelease, ...]) -> list[Path]
             )
         if matches:
             path, meta = matches[0]
-            if path.is_symlink() or not _existing(path, meta, release):
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or not _existing(path, meta, release):
                 raise SkinError(
                     f"В сборке уже есть другая версия {release.title}: {path.name}. "
                     "Чтобы использовать предложенную версию, сначала удалите старую в разделе дополнений."
@@ -230,7 +233,9 @@ def apply_alias(instance_dir: str | Path, real_name: str, nickname: str) -> Path
     instance = Path(instance_dir).resolve()
     config = instance / "config" / "nameprotect.json"
     with _INSTALL_LOCK:
-        if config.is_symlink() or not config.resolve().is_relative_to(instance):
+        if (config.is_symlink() or config.parent.is_symlink()
+                or getattr(config.parent, "is_junction", lambda: False)()
+                or not config.resolve().is_relative_to(instance)):
             raise SkinError("Файл псевдонимов находится за пределами сборки.")
         rules = {}
         if config.exists():

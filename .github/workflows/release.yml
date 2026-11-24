@@ -2,7 +2,7 @@ name: Build and publish Windows release
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'preview/**']
     paths:
       - launcher/version.py
       - .github/workflows/release.yml
@@ -12,12 +12,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: blockharbor-stable-release
+  group: blockharbor-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   tests:
-    if: github.repository == 'dedt1mon/BlockHarbor' && github.ref == 'refs/heads/main'
+    if: github.repository == 'dedt1mon/BlockHarbor' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/preview/'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -34,8 +34,8 @@ jobs:
         with:
           node-version: '22'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Run full Python suite
+        run: python -m pip install -r requirements.txt playwright==1.62.0
+      - name: Verify Python behavior and shipped static assets
         run: python -m unittest discover -s tests -q
       - name: Validate JavaScript syntax
         shell: bash
@@ -47,10 +47,20 @@ jobs:
           node --test community-registry/worker.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py
+      - name: Check streamlined settings, dialog alignment and direct actions
+        run: python tools/smoke_ui_refinements.py --output artifacts/ui-refinements
+      - name: Save focused UI preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ui-refinements
+          path: artifacts/ui-refinements
+          if-no-files-found: ignore
+          retention-days: 14
 
   release:
     needs: tests
-    if: github.repository == 'dedt1mon/BlockHarbor' && github.ref == 'refs/heads/main'
+    if: github.repository == 'dedt1mon/BlockHarbor' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/preview/'))
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -70,7 +80,7 @@ jobs:
           go-version: '1.27.4'
           cache: false
 
-      - name: Determine stable version
+      - name: Determine release version
         shell: pwsh
         run: |
           $version = (python -c "from launcher.version import VERSION; print(VERSION)").Trim()
@@ -141,7 +151,7 @@ jobs:
           python tools/smoke_windows_release.py --setup $setup --portable $portable --version $env:RELEASE_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Windows install and packaged runtime smoke test failed" }
 
-      - name: Publish stable GitHub Release
+      - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -156,5 +166,11 @@ jobs:
           )
           $notes = "docs/releases/v$env:RELEASE_VERSION.md"
           if (!(Test-Path $notes)) { throw "Missing release notes: $notes" }
-          gh release create "v$env:RELEASE_VERSION" $files --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "BlockHarbor $env:RELEASE_VERSION — каталог и публикации" --notes-file $notes --latest
+          $releaseFlags = @("--latest")
+          $releaseTitle = "BlockHarbor $env:RELEASE_VERSION"
+          if ($env:GITHUB_REF.StartsWith("refs/heads/preview/")) {
+            $releaseFlags = @("--prerelease", "--latest=false")
+            $releaseTitle += " — предварительный выпуск"
+          }
+          gh release create "v$env:RELEASE_VERSION" $files --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title $releaseTitle --notes-file $notes @releaseFlags
           if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed" }

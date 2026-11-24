@@ -26,6 +26,8 @@ from launcher import (
     aliases,
     build_archive,
     cards,
+    catalog_batch,
+    catalog_search,
     distances,
     e4steam,
     friends,
@@ -37,6 +39,7 @@ from launcher import (
     skin_sync,
     skins,
     steam_network,
+    staging,
     version_ids,
 )
 from launcher.memory import automatic_heap
@@ -67,6 +70,7 @@ STATIC = {
     "/": "index.html",
     "/app.js": "app.js",
     "/catalog.js": "catalog.js",
+    "/batch-install.js": "batch-install.js",
     "/compatibility.js": "compatibility.js",
     "/catalog-filters.js": "catalog-filters.js",
     "/style.css": "style.css",
@@ -82,6 +86,7 @@ STATIC = {
     "/updates.css": "updates.css",
     "/pack-hub.js": "pack-hub.js",
     "/pack-hub.css": "pack-hub.css",
+    "/catalog-ux.css": "catalog-ux.css",
 }
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -142,8 +147,10 @@ class App:
         self.auth_generation = 0
         self.lock = threading.RLock()
         self.catalog_lock = threading.Lock()
+        self.catalog_search = catalog_search.SearchService(self.scope)
         self.jobs_lock = threading.Lock()
         self.job = {"id": "", "busy": False, "message": "", "ok": True}
+        self.catalog_scope = None
         self.last_seen = time.monotonic()
         self.child = None
         self.games = {}
@@ -164,8 +171,9 @@ class App:
         self.metrics = SessionMetrics(self.store)
         self.performance = PerformanceProfiles(self.store, self.care.before_change, self.metrics)
         self.packs = PackHub(self.store, self.transfers)
-        self.community = CommunityCatalog(self.store)
-        self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running)
+        self.community = CommunityCatalog(self.store, transfers=self.transfers)
+        self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running,
+                                   commit_changes=self.care._transaction)
         self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update,
                                      namespace=self.coordinator.namespace, install_guard=self.coordinator.update_guard, handoff_metadata=self.coordinator.handoff,
                                      cancel_handoff=self.coordinator.cancel_update)
@@ -184,6 +192,10 @@ class App:
         else:
             self.care._recover()
             self.initial_recovery = True
+        self.sharing.recover_staging()
+        self.community.recover_staging()
+        self.packs.recover_staging()
+        staging.prune_abandoned(self.store.root, "catalog-")
 
     def _signal_close(self, reason):
         with self.lifecycle_lock:
@@ -414,7 +426,8 @@ class App:
         # Read-only queries, cancel controls and the atomic favorite flag stay
         # responsive during downloads without acquiring the game-files lock.
         concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
-                      "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState", "experienceFavorite"}
+                      "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState", "experienceFavorite",
+                      "experienceReadNotifications", "experienceClearNotifications"}
         if read or action in reads | concurrent:
             return self._feature_action(action, params, read=read)
         with self.coordinator.operation():
@@ -433,7 +446,7 @@ class App:
         if read and action not in reads:
             raise ValueError("Это действие требует запроса на изменение.")
         # Downloads are independent of Minecraft and must remain cancellable.
-        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceFavorite"}
+        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceReadNotifications", "experienceFavorite"}
         if action in reads or action in {"packPreview", "shareCreate", "shareInvite", "shareInspect", "shareCompare"}:
             return service.handle(action, params)
         with self.lock:
@@ -489,6 +502,7 @@ class App:
         return {
             "appVersion": VERSION,
             "experience": {"preferences": self.experience.preferences()},
+            "notificationUnread": self.experience.notification_unread(),
             "profiles": profiles,
             "deletedProfiles": s.deleted(),
             "active": pid,
@@ -627,8 +641,7 @@ class App:
                     pass  # Always finish process cleanup even if the journal is unavailable.
             self.coordinator.release(pid)
             self.metrics.finish(pid, code)
-            if self.store.get("careAutoWorldBackup:" + pid) == "1":
-                self.pending_world_backups.add(pid)
+            self.pending_world_backups.add(pid)
         if code:
             self.game_exit = {
                 "id": secrets.token_hex(6),
@@ -656,6 +669,7 @@ class App:
         finally:
             self.lock.release()
         if not self.closing.is_set():
+            self.community.tick_notifications(self.experience.notify)
             self.updates.tick_auto()
             self.updates.monitor_pending()
 
@@ -745,35 +759,64 @@ class App:
         progress["transfers"] = {"tasks": [row for row in tasks if row.get("state") in active]
                                  + [row for row in tasks if row.get("state") not in active][:6]}
         snapshot["updater"] = progress
+        snapshot["notificationUnread"] = self.experience.notification_unread()
         snapshot["startupNotice"] = ({"id": self.coordinator.session + ":bootstrap", "ok": True,
                                       "message": "Компоненты BlockHarbor подготовлены. Лаунчер готов к работе."}
                                      if self.bootstrap_prepared else None)
         return snapshot
 
-    def start_job(self, fn, *, profile=None):
+    def start_job(self, fn, *, profile=None, job_data=None, cancellable=False):
         self.require_mutations_allowed()
         with self.jobs_lock:
             if self.job["busy"]:
                 raise ValueError("Дождись завершения текущей операции.")
             jid = secrets.token_hex(5)
-            self.job = {"id": jid, "busy": True, "ok": True, "message": "Подготовка…"}
+            self.job = {**(job_data or {}), "id": jid, "busy": True, "ok": True, "message": "Подготовка…"}
+            operation_scope = lifecycle.CancellationScope() if cancellable else self.scope
+            self.catalog_scope = operation_scope if cancellable else None
+            if cancellable:
+                self.job["cancellable"] = True
+        remove_cancel = self.scope.on_cancel(operation_scope.cancel) if cancellable else lambda: None
 
         def status(msg):
-            self.scope.check()
+            lifecycle.check()
             with self.jobs_lock:
                 self.job["message"] = str(msg)[:700]
+
+        def progress(snapshot):
+            with self.jobs_lock:
+                if self.job["id"] == jid:
+                    self.job.update(snapshot)
+
+        status.progress = progress
+
+        def finish(final):
+            with self.jobs_lock:
+                if self.job["id"] != jid:
+                    return
+                if self.job.get("kind") == "catalog-install" and "items" not in final:
+                    state = "cancelled" if final.get("cancelled") else "error"
+                    items = [{**row, "status": state, "error": final["message"], "detail": ""}
+                             if row["status"] not in catalog_batch.TERMINAL else dict(row)
+                             for row in self.job.get("items", [])]
+                    final.update(items=items, summary=catalog_batch.summary(items))
+                self.job.update(final)
+                self.job["cancellable"] = False
+                if self.catalog_scope is operation_scope:
+                    self.catalog_scope = None
 
         def worker():
             try:
                 with self.activity():
-                    with self.coordinator.operation(wait=True, status=status):
+                    with lifecycle.bind(operation_scope), self.coordinator.operation(wait=True, status=status):
                         self.scope.check()
                         if profile:
                             self.require_profile_idle(profile)
                         result = fn(status)
-                final = {"message": result or "Готово.", "ok": True, "busy": False}
+                final = ({**result, "busy": False} if isinstance(result, dict)
+                         else {"message": result or "Готово.", "ok": True, "busy": False})
             except lifecycle.OperationCancelled:
-                final = {"message": "Лаунчер закрыт. Операция остановлена.", "ok": False, "busy": False, "cancelled": True}
+                final = {"message": "Лаунчер закрыт. Операция остановлена." if self.closing.is_set() else "Установка отменена. Уже установленные группы сохранены.", "ok": False, "busy": False, "cancelled": True}
             except modrinth.NeedsReview as exc:
                 final = {
                     "message": str(exc),
@@ -804,8 +847,7 @@ class App:
                     self.experience.notify(final["message"], "success" if final["ok"] else "error")
             except (OSError, sqlite3.Error):
                 pass  # A history failure must not hide the operation's result.
-            with self.jobs_lock:
-                self.job.update(final)
+            finish(final)
 
         def owned_worker():
             try:
@@ -814,8 +856,9 @@ class App:
                 with self.activity():
                     worker()
             except lifecycle.OperationCancelled:
-                with self.jobs_lock:
-                    self.job.update(message="Лаунчер закрыт. Операция остановлена.", ok=False, busy=False, cancelled=True)
+                finish({"message": "Лаунчер закрыт. Операция остановлена.", "ok": False, "busy": False, "cancelled": True})
+            finally:
+                remove_cancel()
 
         with self.lifecycle_lock:
             self.scope.check()
@@ -944,6 +987,16 @@ class App:
 
     def action(self, action, p):
         self.scope.check()
+        if action == "cancelCatalogInstall":
+            with self.jobs_lock:
+                if p.get("job") != self.job["id"] or self.job.get("kind") != "catalog-install":
+                    raise ValueError("Эта установка уже завершена или заменена новой операцией.")
+                scope = self.catalog_scope if self.job["busy"] else None
+                if scope is not None:
+                    self.job["cancelRequested"] = True
+            if scope is not None:
+                scope.cancel()
+            return {"ok": True, "cancelRequested": scope is not None}
         if action == "diagnostics" or any(action in service.ACTIONS for service in self.features):
             return self.feature_action(action, p)
         # Window-specific selection can change while another window prepares a
@@ -988,15 +1041,18 @@ class App:
                 request = {"id": pid, "items": selected}
             else:
                 request = {key: p[key] for key in ("id", "kind", "project", "version")}
+                if p.get("source", "all") != "all":
+                    request["source"] = p["source"]
                 selected = [request]
             return self.start_job(
-                lambda status: modrinth.install_selection(
+                lambda status: catalog_batch.install(
                     s, pid, selected, status, self.lock, p.get("acknowledgement", ""),
                     before_publish=lambda: self.care.before_change(pid, "Установка дополнений"),
                     transfer=self.transfers,
                     after_publish=lambda releases: [self.care.remember_project(pid, release, {"title": release.title, "description": release.description}) for release in releases],
-                    request=request,
-                ), profile=pid
+                    on_progress=status.progress, review_request=request,
+                    publisher=self.care.publish_addons,
+                ), profile=pid, job_data=catalog_batch.initial_snapshot(pid, selected), cancellable=True
             )
         if action == "create":
             name, version, loader = input_profile(
@@ -1553,14 +1609,14 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path in ("/api/modrinth/check", "/api/catalog/check"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 result = modrinth.check(
-                    self.app.store, q["id"], q["kind"], q["project"], q["version"]
+                    self.app.store, q["id"], q["kind"], q["project"], q["version"], source=q.get("source", "all")
                 )
                 self.reply(200, result)
             elif u.path in ("/api/modrinth/search", "/api/modrinth/versions", "/api/catalog/search", "/api/catalog/versions"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 store = self.app.store
                 if u.path.endswith("/search"):
-                    result = modrinth.search(
+                    result = self.app.catalog_search.search(
                         store.profile(q["id"]),
                         q["kind"],
                         q.get("q", ""),
@@ -1568,6 +1624,7 @@ class Handler(BaseHTTPRequestHandler):
                         json.loads(q.get("filters", "{}")),
                         q.get("sort", "relevance"),
                         source=q.get("source", "all"),
+                        installed_files=modrinth._files(store.content_folder(q["id"], q["kind"]), q["kind"], include_disabled=True),
                     )
                 else:
                     result = modrinth.versions(store, q["id"], q["kind"], q["project"], source=q.get("source", "all"))
@@ -1657,7 +1714,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Выбранный список дополнений слишком большой.")
                 data = json.loads(self.rfile.read(length))
                 with lifecycle.bind(self.app.scope):
-                    result = modrinth.check_selection(self.app.store, data["id"], data["items"])
+                    result = catalog_batch.check_selection(self.app.store, data["id"], data["items"])
                 return self.reply(200, result)
             if u.path in ("/api/build-export", "/api/mrpack-export"):
                 if not 0 < length <= 1024:
@@ -1789,6 +1846,7 @@ class Handler(BaseHTTPRequestHandler):
                                     transfer=self.app.transfers,
                                     before_publish=lambda: self.app.care.before_change(pid, "Добавление мода с зависимостями"),
                                     after_publish=lambda releases: [self.app.care.remember_project(pid, r) for r in releases],
+                                    publisher=self.app.care.publish_addons,
                                 )
                             except modrinth.NeedsReview as exc:
                                 return self.reply(200, {"review": exc.review})

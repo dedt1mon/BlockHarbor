@@ -1,13 +1,13 @@
 """Render representative production UI controls in a real Chromium browser.
 
 The fixture loads every production stylesheet in the index's cascade order.
-No server, account, mod download, or browser library is required.
+Requires Playwright and an installed Chromium, as does the production UI matrix.
+No server, account or mod download is required.
 """
+import json
 from pathlib import Path
 import re
 import shutil
-import subprocess
-import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 UI = ROOT / "ui"
@@ -34,13 +34,14 @@ FIXTURE = r"""
     <div class="pack-search"><input class="field" id="packSearch" type="search"><button class="btn">Найти</button></div>
     <div class="pack-filters"><label>Версия<select class="field"><option>1.20.1</option></select></label><label>Категория<select class="field"><option>Приключения</option></select></label><label>Загрузчик<select class="field"><option>NeoForge</option></select></label><label>Сортировка<select class="field"><option>Релевантность</option></select></label></div>
     <div class="pack-grid"><article class="pack-card"><h4>Модпак</h4><p>Описание</p><div class="pack-card-footer"><span class="meta">BH-AB1234567890</span><button class="btn">Скачать</button></div></article></div>
-    <form class="community-publish"><label>Имя<input class="field" value="Публикация"></label><div class="field-group"><label>Версия<input class="field" readonly value="1.20.1"></label><label>Загрузчик<input class="field" readonly value="Forge"></label></div><div class="dialog-actions community-publish-actions"><button class="btn" type="button">Закрыть</button><button class="btn main" type="button">Опубликовать</button></div></form>
+    <div class="dialog-header-actions"><button id="communityPublishSubmit" class="btn main" type="submit" form="communityPublishForm">Опубликовать</button></div><form id="communityPublishForm" class="community-publish"><label>Имя<input class="field" value="Публикация"></label><div class="field-group"><label>Версия<input class="field" readonly value="1.20.1"></label><label>Загрузчик<input class="field" readonly value="Forge"></label></div></form>
   </section>
-  <section class="panel updater-channel"><div><h2>Загрузки и обновления</h2><p>Канал обновления</p></div><label>Канал<select class="field"><option>Стабильный</option></select></label></section>
-  <section class="panel"><label class="updater-auto-control"><span><strong>Автоматические обновления</strong><span>Проверка при запуске</span></span><input type="checkbox" checked></label><article class="transfer-row"><span class="transfer-icon">+</span><div class="transfer-info"><div class="transfer-title"><strong>очень-длинное-название-файла.jar</strong><span class="pill">Выполняется</span></div><progress value="50" max="100"></progress></div><div class="transfer-actions"><button class="btn">Отмена</button></div></article></section>
+  <section class="panel updater-automatic"><label class="updater-auto-control"><span><strong>Автоматические обновления</strong><span>Проверка при запуске</span></span><input type="checkbox" checked></label><article class="transfer-row"><span class="transfer-icon">+</span><div class="transfer-info"><div class="transfer-title"><strong>очень-длинное-название-файла.jar</strong><span class="pill">Выполняется</span></div><progress value="50" max="100"></progress></div><div class="transfer-actions"><button class="btn">Отмена</button></div></article></section>
   <div class="gallery-grid"><figure class="gallery-card selected"><figcaption>Скриншот</figcaption></figure></div>
 </main>
 <script>
+window.addEventListener("load", async () => {
+// Geometry reads flush layout; these assertions do not require a painted frame.
 const errors = [];
 const check = (value, message) => { if (!value) errors.push(message); };
 const q = s => document.querySelector(s);
@@ -56,9 +57,13 @@ for (const selector of fields) {
 }
 check(equal(rect("#primary").height, 44), "primary button height");
 check(equal(rect(".catalog-mark").height, rect(".catalog-mark").width), "catalog + button is square");
-const before=rect("#name"); q("#name").focus();
+const before=rect("#name"); q("#name").focus({preventScroll:true});
+// Reduced motion still gives CSS transitions a 0.01ms duration. getAnimations
+// flushes the focus style change; wait for its actual completion, not a timer.
+await Promise.all(q("#name").getAnimations().map(animation => animation.finished));
 check(css("#name","outlineStyle")==="none", "duplicate outer input outline");
-check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable");
+check(q("#name").matches(":focus"), "input focus selector inactive: documentFocus="+document.hasFocus());
+check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable: focused="+document.activeElement?.id+", input="+css("#name","borderTopColor")+", idle="+css("#loader","borderTopColor")+", hover="+q("#name").matches(":hover")+", focus="+q("#name").matches(":focus")+", documentFocus="+document.hasFocus()+", shadow="+css("#name","boxShadow"));
 check(equal(before.width,rect("#name").width)&&equal(before.height,rect("#name").height),"field geometry changed on focus");
 q("#name").blur();
 check(css(".nav.sel","backgroundColor")===css(".tabs .on","backgroundColor"),"inconsistent selection fill");
@@ -66,43 +71,68 @@ check(css(".build-row.active","backgroundColor")===css(".gallery-card.selected",
 check(css("#empty","borderTopWidth")==="0px","nested empty-state border");
 const pane=q("main");
 check(pane.scrollWidth<=pane.clientWidth+1, "horizontal overflow "+pane.scrollWidth+"/"+pane.clientWidth);
-for(const selector of [".field-group",".care-list",".pack-grid",".community-publish-actions",".updater-channel"]) {
+for(const selector of [".field-group",".care-list",".pack-grid",".dialog-header-actions",".updater-automatic"]) {
   const r=rect(selector), p=pane.getBoundingClientRect();
   check(r.left>=p.left-1 && r.right<=p.right+1, selector+" outside main");
 }
-check(equal(rect(".community-publish-actions .btn").height,q(".community-publish-actions .btn:last-child").getBoundingClientRect().height),"unequal publish buttons");
+check(q("#communityPublishSubmit").form === q("#communityPublishForm"), "publish header button lost its form");
 document.body.dataset.layoutResult=errors.length ? "FAIL" : "PASS";
 document.body.dataset.layoutErrors=errors.join("; ");
+}, {once:true});
 </script>
 """
 
 
 def main():
-    browser = next((p for name in ("google-chrome", "chromium", "chromium-browser") if (p := shutil.which(name))), None)
-    if not browser:
+    from playwright.sync_api import sync_playwright
+
+    browser_path = next((p for name in ("google-chrome", "chromium", "chromium-browser") if (p := shutil.which(name))), None)
+    if not browser_path:
         raise RuntimeError("Chromium is required for the layout smoke test")
     index = (UI / "index.html").read_text(encoding="utf-8")
     names = re.findall(r'<link rel="stylesheet" href="/([^"]+)"', index)
     assert len(names) >= 5
     css = "\n".join((UI / name).read_text(encoding="utf-8") for name in names)
-    html = '<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body>' + FIXTURE + '</body></html>'
-    with tempfile.TemporaryDirectory(prefix="bh-layout-") as tmp:
-        root = Path(tmp)
-        page = root / "layout.html"
-        page.write_text(html, encoding="utf-8")
-        for width, height in ((1440, 900), (900, 700), (520, 760)):
-            result = subprocess.run(
-                [browser, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
-                 "--disable-gpu", "--disable-background-networking", "--no-first-run",
-                 "--force-device-scale-factor=1", "--user-data-dir=" + str(root / str(width)),
-                 f"--window-size={width},{height}", "--dump-dom", page.as_uri()],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=45, check=True,
-            )
-            if 'data-layout-result="PASS"' not in result.stdout:
-                errors = re.search(r'data-layout-errors="([^"]*)"', result.stdout)
-                raise AssertionError(f"Layout {width}x{height}: " + (errors[1] if errors else "no browser result"))
-            print(f"PASS: Chromium layout {width}x{height}, controls, focus, selection, responsive widths")
+    html = '<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>'
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch(executable_path=browser_path, headless=True,
+                                        args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            for width, height in ((1440, 900), (900, 700), (520, 760)):
+                context = browser.new_context(viewport={"width": width, "height": height},
+                                              device_scale_factor=1, color_scheme="dark", reduced_motion="reduce")
+                page = context.new_page()
+                errors = []
+                observed = None
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                try:
+                    page.bring_to_front()
+                    page.set_content(html, wait_until="load", timeout=30000)
+                    observed = page.evaluate("[innerWidth, innerHeight, devicePixelRatio]")
+                    assert observed == [width, height, 1], f"Unexpected layout viewport: {observed}"
+                    # Await the assertion result under the browser's real clock;
+                    # a virtual-time DOM dump can finish before focus styles settle.
+                    page.wait_for_function("['PASS', 'FAIL'].includes(document.body.dataset.layoutResult)",
+                                           polling=50, timeout=10000)
+                    assert not errors, "Browser script errors: " + "; ".join(errors)
+                    body = page.locator("body")
+                    assert body.get_attribute("data-layout-result") == "PASS", f"Layout {width}x{height}: " + (body.get_attribute("data-layout-errors") or "no browser result")
+                    print(f"PASS: Chromium layout {width}x{height}, controls, focus, selection, responsive widths")
+                except Exception as error:
+                    evidence = ROOT / "artifacts" / "ui-audit"
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    stem = f"controls-layout-{width}x{height}"
+                    try:
+                        (evidence / (stem + "-diagnostics.json")).write_text(json.dumps({"error": str(error), "javascript": errors, "viewport": observed}, ensure_ascii=False, indent=2), encoding="utf-8")
+                        (evidence / (stem + ".html")).write_text(page.content(), encoding="utf-8")
+                        page.screenshot(path=str(evidence / (stem + ".png")))
+                    except Exception as capture_error:
+                        print(f"Could not save layout diagnostics: {capture_error}")
+                    raise
+                finally:
+                    context.close()
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":

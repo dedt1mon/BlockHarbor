@@ -1,7 +1,7 @@
 .pack-hub { padding: 22px; }
 dialog[open]:has(.pack-dialog) { display: flex; flex-direction: column; width: min(940px,94vw); height: min(700px,89dvh); max-height: 89dvh; overflow: hidden; }
 dialog:has(.pack-dialog) .dialog-top { flex: none; }
-dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
+dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden; scrollbar-gutter: auto; }
 .pack-dialog { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
 .pack-dialog .pack-hub { display: flex; flex-direction: column; flex: 1; padding: 0; min-height: 0; }
 .pack-intro { display: flex; gap: 18px; justify-content: space-between; align-items: center; margin: 0 0 16px; flex: none; }
@@ -41,7 +41,14 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .pack-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pack-card-footer .btn { font-size: 12px; padding: 8px 10px; min-height: var(--control-compact); }
 .pack-card-footer .meta { font-size: 11px; }
-.pack-pager { display: flex; justify-content: center; gap: 20px; align-items: center; padding-top: 20px; }
+.pack-pagination { flex: none; position: sticky; bottom: 0; background: var(--bg); padding-top: 10px; }
+.pack-pagination:has(.pack-pager) { border-top: 1px solid var(--line); }
+.pack-pagination > :empty { display: none; }
+.pack-pager { display: flex; justify-content: center; gap: 16px; align-items: center; min-width: 0; }
+.pack-pager .meta { min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.pack-pager > .btn { flex: none; }
+.pack-pagination > div + div:not(:empty) { margin-top: 8px; }
+.pack-pagination > :empty + div { margin-top: 0; }
 .pack-release label,.pack-preview > label { display: grid; gap: 8px; margin: 18px 0; }
 .pack-preview .tags { margin: 16px 0; }
 .pack-optional { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
@@ -64,7 +71,8 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .community-publish .field-group { margin: 0; }
 .community-publish input[readonly] { color: var(--muted); }
 .community-publish > .community-config-toggle { display: flex; align-items: center; gap: 9px; }
-.community-config-toggle input { accent-color: var(--lime); }
+.community-config-toggle input { accent-color: var(--lime); margin: 0; flex: 0 0 var(--checkbox-size); align-self: center; }
+.community-config-toggle span { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
 .community-publication-status { color: var(--lime); font-size: 13px; margin: 14px 0 10px; }
 .community-publish:not(.is-published) .community-publication-status { color: var(--muted); }
 .community-feedback,
@@ -72,7 +80,6 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .community-feedback { font-size: 13px; }
 .community-feedback:empty { display: none; }
 
-.community-publish .community-publish-actions,
 .community-published-actions,
 .community-confirm-actions,
 .community-retry-actions {
@@ -82,7 +89,6 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
   width: 100%;
   margin-top: 16px;
 }
-.community-publish-actions > .btn,
 .community-published-actions > .btn,
 .community-confirm-actions > .btn,
 .community-retry-actions > .btn {
@@ -95,8 +101,7 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .community-publish:is(.is-published, .is-checking) > label,
 .community-publish:is(.is-published, .is-checking) > .field-group,
 .community-publish:is(.is-published, .is-checking) > #communityConfigHelp,
-.community-publish:is(.is-published, .is-checking) > .community-publish-description,
-.community-publish:is(.is-published, .is-checking) > .community-publish-actions {
+.community-publish:is(.is-published, .is-checking) > .community-publish-description {
   display: none;
 }
 .community-receipt {
@@ -129,12 +134,12 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
 .community-id > .btn { width: 100%; min-width: 0; }
 .community-confirm { margin-top: 3px; }
 .community-confirm p { margin: 0; font-size: 13px; line-height: 1.5; }
+.community-published-actions, .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
 .community-retry-actions { margin-top: 12px; }
 .build-settings.is-published { color: var(--lime); border-color: var(--selection-border); background: var(--selection-fill); }
 
 @media (max-width: 520px) {
   .community-id,
-  .community-publish .community-publish-actions,
   .community-published-actions,
   .community-confirm-actions,
   .community-retry-actions { grid-template-columns: minmax(0, 1fr); }
@@ -177,4 +182,25 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; }
   .pack-search { flex-wrap: wrap; }
   .pack-search > .field { flex-basis: 100%; }
   .pack-search > .btn { width: 100%; }
+}
+
+.pack-source-results[aria-busy="true"]:empty,
+.community-results .pack-grid[aria-busy="true"]:empty { min-height: 150px; }
+.pack-card > p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+@media (max-height: 560px) {
+  dialog:has(.pack-dialog) #dialogBody { overflow: auto; scrollbar-gutter: stable; }
+  .pack-dialog { height: auto; min-height: 100%; }
+  .pack-dialog .pack-hub { display: block; }
+  .pack-dialog .pack-results { overflow-y: auto; max-height: 40dvh; min-height: 160px; }
+}
+
+/* Release selection grows with its content; only the catalog keeps a fixed list viewport. */
+dialog:has(.pack-dialog[data-pack-view="releases"]) #dialogBody { flex: 0 1 auto; overflow-y: auto; scrollbar-gutter: stable; }
+.pack-dialog[data-pack-view="releases"] { height: auto; min-height: 0; }
+.pack-dialog[data-pack-view="releases"] .pack-release { flex: none; overflow: visible; }
+.pack-release > h3 { margin-top: 0; overflow-wrap: anywhere; }
+.pack-release > p { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .pack-pager { gap: 8px; }
+  .pack-pager > .btn { padding-inline: 10px; }
 }

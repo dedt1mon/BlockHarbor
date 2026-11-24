@@ -7,6 +7,7 @@
   const categories = {adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"};
   const community = {page: null, busy: false, error: "", needsSearch: true, controller: null};
   const publicationCache = new Map();
+  const communityDownloads = new Set();
   let publicationRequest = 0;
   let pendingPublication = null, selectedCommunity = null;
   const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim());
@@ -39,12 +40,12 @@
     community.busy = false;
   }
 
-  function packModal(title, content, page) {
+  function packModal(title, content, page, options = {}) {
     if (!catalogOpen) {
       returnFocus = document.activeElement !== document.body ? document.activeElement : document.querySelector('[data-act="packCatalog"]');
       catalogOpen = true;
     }
-    modal(title, `<div class="pack-dialog" data-pack-view="${page}">${content}</div>`);
+    modal(title, `<div class="pack-dialog" data-pack-view="${page}">${content}</div>`, options);
   }
 
   function rememberCatalog() {
@@ -80,8 +81,8 @@
 
   function pager() {
     const page = catalog.page;
-    if (!page) return "";
-    return `<div class="pack-pager">${button('data-pack-page="previous"' + (catalog.offset <= 0 || catalog.busy ? " disabled" : ""), "Назад", "back")}<span class="meta">${page.total ? `${page.offset + 1}–${Math.min(page.total, page.offset + page.limit)} из ${number.format(page.total)}` : "0 результатов"}</span>${button('data-pack-page="next"' + (catalog.offset + page.limit >= page.total || catalog.busy ? " disabled" : ""), "Далее", "arrow")}</div>`;
+    if (!page || exactCommunityId()) return "";
+    return `<div class="pack-pager" aria-label="Страницы модпаков">${button('data-pack-page="previous"' + (catalog.offset <= 0 || catalog.busy ? " disabled" : ""), "Назад", "back")}<span class="meta">Модпаки · ${page.total ? `${page.offset + 1}–${Math.min(page.total, page.offset + page.limit)} из ${number.format(page.total)}` : "0 результатов"}</span>${button('data-pack-page="next"' + (catalog.offset + page.limit >= page.total || catalog.busy ? " disabled" : ""), "Далее", "arrow")}</div>`;
   }
 
   function communityResults() {
@@ -96,11 +97,23 @@
       status = '<p class="pack-status" role="status">Основной сервер ещё не подтверждает часовое автоудаление публикаций.</p>';
     const cards = (page?.hits || []).map(item => `<article class="pack-card"><h4>${esc(item.name)}</h4>
       <p>Minecraft ${esc(item.minecraft)} · ${esc(loaders[item.loader] || item.loader)} · ${esc(categories[item.category] || item.category)}</p>
-      <div class="pack-card-footer"><span class="meta">${esc(item.id)} · ${fmt(item.size)}</span>${button(`data-pack-community="${esc(item.id)}"`, "Скачать", "download")}</div></article>`).join("");
-    const navigation = page && page.total > page.limit ? `<div class="pack-pager">${button('data-pack-community-page="prev"' + (community.busy || !page.offset ? " disabled" : ""), "Назад", "back")}
-      <span class="meta">${page.offset + 1}–${Math.min(page.total, page.offset + page.limit)} из ${number.format(page.total)}</span>
-      ${button('data-pack-community-page="next"' + (community.busy || page.offset + page.limit >= page.total ? " disabled" : ""), "Далее", "arrow")}</div>` : "";
-    return `<h3 class="pack-source-title">Сборки игроков BlockHarbor</h3>${status}<div class="pack-grid" aria-busy="${community.busy}">${cards}</div>${navigation}`;
+      <div class="pack-card-footer"><span class="meta">${esc(item.id)} · ${fmt(item.size)}</span>${button(`data-pack-community="${esc(item.id)}"${communityDownloads.has(item.id) ? ' disabled aria-busy="true"' : ""}`, "Скачать", "download")}</div></article>`).join("");
+    return `<h3 class="pack-source-title">Сборки игроков BlockHarbor</h3>${status}<div class="pack-grid" aria-busy="${community.busy}">${cards}</div>`;
+  }
+
+  function communityPager() {
+    const page = community.page;
+    if (!page || page.total <= page.limit) return "";
+    return `<div class="pack-pager" aria-label="Страницы сборок игроков">${button('data-pack-community-page="prev"' + (community.busy || !page.offset ? " disabled" : ""), "Назад", "back")}
+      <span class="meta">Игроки · ${page.offset + 1}–${Math.min(page.total, page.offset + page.limit)} из ${number.format(page.total)}</span>
+      ${button('data-pack-community-page="next"' + (community.busy || page.offset + page.limit >= page.total ? " disabled" : ""), "Далее", "arrow")}</div>`;
+  }
+
+  function updateCommunityResults(host) {
+    if (!host?.isConnected) return;
+    host.innerHTML = communityResults();
+    const pagination = host.closest(".pack-hub")?.querySelector(".community-page-host");
+    if (pagination) pagination.innerHTML = communityPager();
   }
 
   async function searchCommunity(offset = 0) {
@@ -111,7 +124,7 @@
     community.needsSearch = true;
     community.error = "";
     const host = document.querySelector(".community-results");
-    if (host) host.innerHTML = communityResults();
+    updateCommunityResults(host);
     try {
       const page = await feature("communitySearch", {q: catalog.q, category: catalog.category, version: catalog.version, loader: catalog.loader, offset}, {signal: controller.signal});
       if (controller.signal.aborted) return;
@@ -123,14 +136,16 @@
       if (community.controller === controller) {
         community.controller = null;
         community.busy = false;
-        if (host?.isConnected) host.innerHTML = communityResults();
+        updateCommunityResults(host);
       }
     }
   }
 
   function searchCatalog() {
-    community.page = null;
-    catalog.page = null;
+    // Retain the previous cards while both sources refresh. Clearing their
+    // heights first makes the second source jump underneath the pointer.
+    community.needsSearch = true;
+    catalog.needsSearch = true;
     updateResults();
     document.querySelector(".pack-results")?.scrollTo(0, 0);
     searchCommunity();
@@ -194,14 +209,6 @@
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
       <div class="community-published-actions" role="group" aria-label="Действия с публикацией ${esc(row.name)}">
         ${button(`data-pack-withdraw="${esc(row.build)}"`, "Удалить публикацию", "trash", "danger")}
-        ${button('data-act="close"', "Закрыть")}
-      </div>
-      <div class="community-confirm" hidden>
-        <p>Удалить публикацию из общего каталога? Её ID перестанет работать. Уже скачанные копии останутся у игроков.</p>
-        <div class="community-confirm-actions" role="group" aria-label="Подтверждение удаления">
-          ${button("data-pack-keep", "Отмена")}
-          ${button(`data-pack-withdraw-confirm="${esc(row.build)}"`, "Подтвердить удаление", "trash", "danger")}
-        </div>
       </div>
     </section>`).join("")}</div>`;
   }
@@ -216,6 +223,7 @@
       host.innerHTML = publicationRows(publications);
       form.classList.remove("is-checking");
       form.classList.toggle("is-published", publications.length > 0);
+      syncPublicationSubmit(form);
       form.querySelector(".community-publication-status").textContent = publications.length
         ? publications.some(row => row.statusUnverified)
           ? "Статус: опубликовано, но часовая очистка не подтверждена сервером."
@@ -227,26 +235,44 @@
     } catch (error) {
       if (!form.isConnected || host.dataset.revision !== revision) return;
       form.classList.add("is-checking");
+      syncPublicationSubmit(form);
       form.querySelector(".community-publication-status").textContent = "Не удалось проверить статус публикации.";
       host.innerHTML = `<p class="pack-error" role="alert">${esc(error.message)}</p>
         <div class="community-retry-actions" role="group">
           ${button("data-pack-publication-retry", "Повторить проверку")}
-          ${button('data-act="close"', "Закрыть")}
         </div>`;
     }
   }
 
+  function syncPublicationSubmit(form) {
+    // Form-associated controls remain in form.elements even when in the header.
+    const submit = form.elements.namedItem("communityPublishSubmit");
+    if (!submit) return;
+    submit.hidden = form.classList.contains("is-checking") || form.classList.contains("is-published");
+    submit.disabled = submit.hidden || form.dataset.policyVerified !== "true" || form.getAttribute("aria-busy") === "true";
+  }
+
   async function readPublicationCapabilities(form) {
     const status = form.querySelector(".community-policy-status");
+    const retry = form.querySelector("[data-pack-policy-retry]");
+    form.dataset.policyVerified = "false";
+    syncPublicationSubmit(form);
+    if (retry) retry.disabled = true;
     try {
       const policy = await feature("communityCapabilities");
       if (!form.isConnected || !status) return;
       status.textContent = policy?.message || "Не удалось подтвердить правила публикации на сервере.";
       status.dataset.mode = policy?.enabled === true ? "verified" : "unverified";
+      form.dataset.policyVerified = String(policy?.enabled === true);
+      syncPublicationSubmit(form);
+      if (retry) retry.hidden = policy?.enabled === true;
     } catch (error) {
       if (!form.isConnected || !status) return;
       status.textContent = "Невозможно проверить сервер. Часовое удаление и антиспам не подтверждены.";
       status.dataset.mode = "unverified";
+      if (retry) retry.hidden = false;
+    } finally {
+      if (retry?.isConnected) retry.disabled = false;
     }
   }
 
@@ -256,23 +282,23 @@
     const previous = (publicationCache.get(id)?.publications || []).filter(row =>
       !row.expiresAt || row.expiresAt * 1000 > Date.now());
     const knownPublished = previous.length > 0;
-    modal("Поделиться сборкой", `<form class="community-publish ${knownPublished ? "is-published" : "is-checking"}" data-pack-publish="${esc(id)}">
+    modal("Поделиться сборкой", `<form id="communityPublishForm" class="community-publish ${knownPublished ? "is-published" : "is-checking"}" data-pack-publish="${esc(id)}">
       <label>Название в каталоге<input class="field" name="name" value="${esc(profile.name)}" required maxlength="48"></label>
       <div class="field-group"><label>Версия Minecraft<input class="field" readonly value="${esc(profile.version)}"></label>
       <label>Загрузчик<input class="field" readonly value="${esc(loaders[profile.loader] || profile.loader)}"></label></div>
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
-      <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
+      <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"><span>Включить настройки модов</span></label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note community-publish-description">Максимальный размер нового ZIP — 256 МиБ. После обновления сервера сборки хранятся 1 час, одновременно разрешены 3 активные публикации, а после 10 попыток за 10 минут новые публикации блокируются на 5 часов. Пока сервер не подтвердил эти правила, автоматическое удаление не гарантируется. Миры, журналы и данные учётных записей не публикуются.</p>
+      <p class="note community-publish-description">Максимальный размер ZIP — 256 МиБ. Новая публикация доступна 60 минут, одновременно разрешены 3 активные публикации. Для одной сборки разрешены 3 попытки подряд, затем — не более одной новой попытки каждые 5 минут. Публикация станет доступна после подтверждения этих правил сервером. Миры, журналы и данные учётных записей не публикуются.</p>
       <p role="status" class="community-policy-status">Проверяем, действуют ли новые ограничения на сервере…</p>
+      <button type="button" class="linkbtn" data-pack-policy-retry hidden>Повторить проверку сервера</button>
       <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
-      <div class="dialog-actions community-publish-actions" role="group" aria-label="Действия публикации">
-        ${button('data-act="close"', "Закрыть")}
-        <button class="btn main" type="submit">${ic("share")}Опубликовать</button>
-      </div>
-    </form>`);
+    </form>`, {
+      contentSized: true,
+      headerActions: `<button id="communityPublishSubmit" class="btn main" type="submit" form="communityPublishForm" data-pack-publish-submit disabled hidden>${ic("share")}Опубликовать</button>`,
+    });
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
     readPublicationCapabilities(form);
@@ -281,25 +307,24 @@
 
   function setPublicationBusy(form, busy, message) {
     form.setAttribute("aria-busy", String(busy));
-    for (const control of form.querySelectorAll('input[name], select, [type="submit"], [data-pack-withdraw], [data-pack-withdraw-confirm], [data-pack-keep]')) control.disabled = busy;
+    for (const control of form.querySelectorAll('input[name], select, [data-pack-withdraw]')) control.disabled = busy;
+    syncPublicationSubmit(form);
     form.querySelector(".community-feedback").textContent = message;
   }
 
   function showPublicationBan(details) {
-    const seconds = Math.max(0, Math.min(5 * 3600, Number(details?.retryAfterSeconds) || 5 * 3600));
+    const seconds = Math.max(0, Number(details?.retryAfterSeconds) || 300);
     const totalMinutes = Math.ceil(seconds / 60);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    const remaining = hours + " ч " + String(minutes).padStart(2, "0") + " мин";
+    const remaining = totalMinutes + " мин";
     const until = Number(details?.blockedUntil);
     const date = Number.isSafeInteger(until) && until > Date.now() / 1000 &&
-      until < Date.now() / 1000 + 5 * 3600 + 300
+      until < Date.now() / 1000 + seconds + 60
         ? new Date(until * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})
         : "";
-    modal("Публикация временно заблокирована", `
+    modal("Повторная публикация", `
       <section class="community-ban-dialog" role="alert">
-        <h3>Слишком много попыток публикации</h3>
-        <p>Превышен лимит: 10 попыток за 10 минут. Новые публикации временно заблокированы на 5 часов.</p>
+        <h3>Подожди перед следующей попыткой</h3>
+        <p>Для этой сборки использованы 3 быстрые попытки. Следующая попытка станет доступна после паузы; далее можно пробовать не чаще одного раза в 5 минут.</p>
         <p><strong>Осталось: ${esc(remaining)}</strong>${date ? " · До " + esc(date) : ""}</p>
         <p class="note">Остальные возможности BlockHarbor работают как обычно: ты можешь запускать Minecraft, устанавливать моды и скачивать сборки игроков.</p>
         <div class="dialog-actions community-ban-actions">
@@ -348,21 +373,6 @@
     }
   }
 
-  function showCommunityBuild(id) {
-    const item = community.page?.hits.find(hit => hit.id === id);
-    if (!item) return;
-    selectedCommunity = id;
-    selectedProject = null;
-    rememberCatalog();
-    stopSearch();
-    packModal("Скачать сборку игрока", `${button('data-pack-back="catalog"', "К каталогу", "back", "pack-back")}
-      <section class="pack-preview"><h3>${esc(item.name)}</h3><p class="meta">${esc(item.id)}</p><div class="tags">
-      <span class="pill">Minecraft ${esc(item.minecraft)}</span><span class="pill">${esc(loaders[item.loader] || item.loader)}</span>
-      <span class="pill">${esc(categories[item.category] || item.category)}</span><span class="pill">${fmt(item.size)}</span></div>
-      <p>Сборка будет установлена отдельно. Моды могут выполнять код при запуске Minecraft. Устанавливай сборки авторов, которым доверяешь.</p>
-      <div class="dialog-actions">${button(`data-pack-community-install="${esc(id)}"`, "Установить отдельную сборку", "download", "main")}</div></section>`, "community");
-  }
-
   function renderPacks() {
     return `<section class="pack-hub"><div class="pack-intro"><p>Готовые сборки устанавливаются отдельно, со своей версией Minecraft и настройками.</p></div><form class="pack-search" data-pack-search role="search"><input type="search" class="field" name="q" maxlength="180" placeholder="Название сборки или ID" aria-label="Название сборки или ID" value="${esc(catalog.q)}"><button class="btn main" type="submit">${ic("search")}Найти</button></form>
       <div class="pack-filters"><label>Minecraft<select class="field" data-pack-filter="version">${option("", "Все версии", catalog.version)}${(state.versions || []).map(v => option(v, v, catalog.version)).join("")}</select></label>
@@ -370,7 +380,7 @@
       <label>Категория<select class="field" data-pack-filter="category">${Object.entries({"": "Все категории", ...categories}).map(([v, label]) => option(v, label, catalog.category)).join("")}</select></label>
       <label>Сортировка<select class="field" data-pack-filter="sort">${Object.entries({relevance: "По релевантности", downloads: "По загрузкам", follows: "По подписчикам", newest: "Сначала новые", updated: "Недавно обновлённые"}).map(([v, label]) => option(v, label, catalog.sort)).join("")}</select></label></div>
       <div class="pack-results"><section class="community-results" aria-label="Сборки игроков BlockHarbor">${communityResults()}</section>
-      <section class="pack-modrinth" aria-label="Модпаки"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div><div class="pack-page-host">${pager()}</div></section></div></section>`;
+      <section class="pack-modrinth" aria-label="Модпаки"${exactCommunityId() ? " hidden" : ""}><h3 class="pack-source-title">Модпаки</h3><p class="pack-status${catalog.error ? " pack-error" : ""}" role="status">${esc(catalog.error || (catalog.busy ? "Загружаем каталог…" : ""))}</p><div class="pack-source-results" aria-busy="${catalog.busy}">${results()}</div></section></div><footer class="pack-pagination"><div class="community-page-host">${communityPager()}</div><div class="pack-page-host">${pager()}</div></footer></section>`;
   }
 
   function loadArt() {
@@ -453,7 +463,10 @@
     releaseController = controller;
     selectedProject = project;
     selectedCommunity = null;
-    packModal("Выпуски модпака", `${button('data-pack-back="catalog"', "К каталогу", "back", "pack-back")}<div class="pack-release" role="status">Получаем версии…</div>`, "releases");
+    packModal("Выбрать выпуск", '<div class="pack-release" role="status">Получаем версии…</div>', "releases", {
+      contentSized: true,
+      headerActions: button('data-pack-back="catalog"', "К каталогу", "back") + button("data-pack-prepare disabled", "Подготовить установку", "download", "main"),
+    });
     const host = document.querySelector(".pack-release");
     try {
       const data = await feature("packVersions", {project}, {signal: controller.signal});
@@ -462,7 +475,8 @@
       const selected = data.versions.find(v => v.id === choices.get(project))?.id || data.versions.find(v => v.type === "release")?.id || data.versions[0]?.id;
       if (!selected) {host.innerHTML = empty("У этого модпака нет доступных выпусков .mrpack."); return;}
       choices.set(project, selected);
-      host.innerHTML = `<h3>${esc(data.title)}</h3><p>${esc(data.description)}</p><label>Выпуск<select class="field" data-pack-version="${esc(project)}">${data.versions.map(v => option(v.id, `${v.number || v.name} · ${v.minecraft.join(", ")} · ${v.loaders.join(", ")}${v.type !== "release" ? " · " + v.type : ""}`, selected)).join("")}</select></label><p class="note">Перед установкой покажем точную версию игры, размер загрузки и необязательные компоненты.</p><div class="dialog-actions">${button("data-pack-prepare", "Подготовить установку", "download", "main")}</div>`;
+      host.innerHTML = `<h3>${esc(data.title)}</h3><p>${esc(data.description)}</p><label>Выпуск<select class="field" data-pack-version="${esc(project)}">${data.versions.map(v => option(v.id, `${v.number || v.name} · ${v.minecraft.join(", ")} · ${v.loaders.join(", ")}${v.type !== "release" ? " · " + v.type : ""}`, selected)).join("")}</select></label><p class="note">Перед установкой покажем точную версию игры, размер загрузки и необязательные компоненты.</p>`;
+      document.querySelector("#dialogHeaderActions [data-pack-prepare]").disabled = false;
       host.querySelector("select")?.focus({preventScroll: true});
     } catch (error) {
       if (host.isConnected && !controller.signal.aborted) host.textContent = error.message;
@@ -487,7 +501,7 @@
     const form = event.target;
     if (form.matches("[data-pack-publish]")) {
       event.preventDefault();
-      if (form.classList.contains("is-checking") || form.classList.contains("is-published")) return;
+      if (form.classList.contains("is-checking") || form.classList.contains("is-published") || form.dataset.policyVerified !== "true") return;
       const data = new FormData(form);
       const name = data.get("name").trim();
       if (!name) {form.elements.name.focus(); return notice("Введи название сборки.", true);}
@@ -507,7 +521,7 @@
     if (filter) {
       catalog[filter] = event.target.value;
       catalog.q = document.querySelector("[data-pack-search] input")?.value || catalog.q;
-      search(0);
+      searchCatalog();
     }
     const project = event.target.dataset.packVersion;
     if (project) choices.set(project, event.target.value);
@@ -526,24 +540,29 @@
         catch {notice("ID выделен. Нажми Ctrl+C, чтобы скопировать.");}
         return;
       }
-      if (d.packWithdraw || "packKeep" in d) {
-        const row = target.closest(".community-receipt");
-        row.querySelector(".community-confirm").hidden = !d.packWithdraw;
-        row.querySelector(".community-published-actions").hidden = !!d.packWithdraw;
-        row.querySelector(d.packWithdraw ? "[data-pack-keep]" : "[data-pack-withdraw]").focus();
-        return;
-      }
-      if (d.packWithdrawConfirm) return await publicationAction(target.closest("form"), "communityUnpublish", {build: d.packWithdrawConfirm});
+      if (d.packWithdraw) return await publicationAction(target.closest("form"), "communityUnpublish", {build: d.packWithdraw});
       if ("packPublicationRetry" in d) return await readPublications(target.closest("form"));
-      if (d.packCommunity) return showCommunityBuild(d.packCommunity);
-      if (d.packCommunityInstall) {
-        const item = community.page?.hits.find(hit => hit.id === d.packCommunityInstall);
-        if (!item) return;
+      if ("packPolicyRetry" in d) return await readPublicationCapabilities(target.closest("form"));
+      if (d.packCommunity) {
+        const item = community.page?.hits.find(hit => hit.id === d.packCommunity);
+        if (!item || communityDownloads.has(item.id)) return;
+        communityDownloads.add(item.id);
+        selectedCommunity = item.id;
+        selectedProject = null;
+        rememberCatalog();
+        const host = target.closest(".pack-dialog");
         target.disabled = true;
-        const confirmation = await confirmSteamCompatibility({version: item.minecraft, loader: item.loader}, {isCurrent: () => target.isConnected && document.querySelector("#dialog").open});
-        if (!confirmation) return;
-        await runJob("communityInstall", {build: item.id, allowWithoutSteam: confirmation.allowWithoutSteam});
-        if (target.isConnected) closeDialog();
+        target.setAttribute("aria-busy", "true");
+        try {
+          const confirmation = await confirmSteamCompatibility({version: item.minecraft, loader: item.loader}, {isCurrent: () => host?.isConnected && document.querySelector("#dialog").open});
+          if (!confirmation) return;
+          await runJob("communityInstall", {build: item.id, allowWithoutSteam: confirmation.allowWithoutSteam});
+          if (host?.isConnected) closeDialog();
+        } finally {
+          communityDownloads.delete(item.id);
+          const current = document.querySelector(`[data-pack-community="${CSS.escape(item.id)}"]`);
+          if (current) { current.disabled = false; current.removeAttribute("aria-busy"); }
+        }
         return;
       }
       if ("packCommunityRetry" in d) return await searchCommunity(community.page?.offset || 0);
@@ -562,7 +581,7 @@
       }
       if (d.packProject) return await showReleases(d.packProject);
       if ("packPrepare" in d) {
-        const host = target.closest(".pack-release");
+        const host = document.querySelector("#dialog .pack-release");
         const project = selectedProject;
         const version = choices.get(project);
         const release = releaseRows.get(project)?.find(row => row.id === version);
@@ -597,7 +616,9 @@
         return;
       }
     } catch (error) {notice(error.message, true);}
-    finally {if (target.isConnected) target.disabled = false;}
+    finally {
+      if (target.isConnected && !(d.packWithdraw && target.closest("form")?.getAttribute("aria-busy") === "true")) target.disabled = false;
+    }
   });
 
   document.querySelector("#dialog").addEventListener("close", () => {

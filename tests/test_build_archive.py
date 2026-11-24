@@ -29,6 +29,13 @@ def sample_zip(extra=(), **meta):
             ),
         )
         for name, data in extra:
+            if isinstance(name, str) and "\\" in name:
+                # ZipInfo(name) normalizes Windows backslashes before writing.
+                # Populate the raw member name after construction so this is
+                # genuinely an unsafe ZIP on every test platform.
+                raw = zipfile.ZipInfo()
+                raw.filename = raw.orig_filename = name
+                name = raw
             zipped.writestr(name, data)
     result.seek(0)
     return result
@@ -160,6 +167,14 @@ class BuildArchiveTests(unittest.TestCase):
         self.assertEqual(self.store.get("active"), old)
         self.assertEqual(len(list(self.store.instances.iterdir())), len(before))
 
+    def test_backslash_member_is_present_on_wire_and_rejected(self):
+        payload = sample_zip([("mods\\file.jar", b"!")])
+        self.assertEqual(payload.getvalue().count(b"mods\\file.jar"), 2)
+        with zipfile.ZipFile(payload) as zipped:
+            self.assertEqual(zipped.infolist()[1].orig_filename, "mods\\file.jar")
+        with self.assertRaises(ValueError):
+            archive.import_build(self.store, payload)
+
     def test_download_capability_requires_correct_cookie_and_can_only_be_used_once(
         self,
     ):
@@ -173,12 +188,18 @@ class BuildArchiveTests(unittest.TestCase):
             files.take(ticket, cookie)
         f.close()
 
-    @unittest.skipIf(os.name == "nt", "symlink creation can require developer mode")
     def test_privacy_links_in_instance_are_not_exported(self):
-        private = Path(tempfile.mkstemp(dir=self.store.root)[1])
+        descriptor, name = tempfile.mkstemp(dir=self.store.root)
+        os.close(descriptor)
+        private = Path(name)
         private.write_text("private")
-        (self.folder / "mods/normal.jar").symlink_to(private)
-        (self.folder / "config").symlink_to(private.parent, target_is_directory=True)
+        try:
+            (self.folder / "mods/normal.jar").symlink_to(private)
+            (self.folder / "config").symlink_to(private.parent, target_is_directory=True)
+        except OSError as error:
+            if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows denied symbolic-link creation (ERROR_PRIVILEGE_NOT_HELD)")
+            raise
         f = io.BytesIO()
         archive.export_build(self.store, self.pid, f)
         self.assertEqual(zipfile.ZipFile(f).namelist(), [archive.MANIFEST])

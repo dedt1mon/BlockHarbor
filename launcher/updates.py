@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
+from contextlib import closing
 from html.parser import HTMLParser
 from http.client import HTTPException
 from pathlib import Path
@@ -1117,7 +1118,7 @@ class UpdateService:
         self.rollback_binary = {"version": self.current_version, "target": str(target), "sha256": digest, "size": destination.stat().st_size, "dataSchema": DATA_SCHEMA, "rollbackSafe": rollback_safe}
         # SQLite's backup API produces a consistent snapshot even in WAL mode.
         backup = folder / ("settings-before-" + self.current_version + "-" + secrets.token_hex(6) + ".sqlite3")
-        with sqlite3.connect(self.store.db) as source, sqlite3.connect(backup) as destination_db:
+        with closing(sqlite3.connect(self.store.db)) as source, closing(sqlite3.connect(backup)) as destination_db:
             source.backup(destination_db, pages=128, progress=lambda *_: self._require_open())
         self._save()
 

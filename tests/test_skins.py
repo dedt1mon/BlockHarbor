@@ -80,9 +80,7 @@ class SkinTests(unittest.TestCase):
         listing = json.loads((root / "CustomSkinLoader.json").read_text())["loadlist"][
             0
         ]
-        self.assertEqual(
-            root / listing["skin"].replace("{USERNAME}", "Player_A"), first
-        )
+        self.assertTrue((root / listing["skin"].replace("{USERNAME}", "Player_A")).samefile(first))
         self.assertTrue(second.is_file())
         self.assertNotEqual(first, second)
         with Image.open(first) as data:

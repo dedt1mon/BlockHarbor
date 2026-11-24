@@ -1,12 +1,14 @@
 import hashlib
 import io
 import json
+import sqlite3
 import tempfile
 import threading
 import time
 import unittest
 from email.utils import formatdate
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from unittest.mock import Mock, patch
 
@@ -44,6 +46,8 @@ class UpdatesTest(unittest.TestCase):
         self.service = updates.UpdateService(self.store, self.transfers, "2.0.0", can_install=lambda: True, request_shutdown=Mock())
 
     def tearDown(self):
+        self.service.close(timeout=1)
+        self.transfers.close(timeout=1)
         self.directory.cleanup()
 
     def info(self, version="2.1.0", schema=1):
@@ -159,6 +163,27 @@ class UpdatesTest(unittest.TestCase):
         self.assertEqual(self.service.rollback_binary["sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
         self.assertTrue(list((self.service.root / "rollback").glob("settings-before-*.sqlite3")))
         self.assertEqual(self.store.get("nickname"), "Timon")
+
+    def test_backup_closes_both_real_sqlite_handles_before_returning(self):
+        target = self.root / "installed" / "BlockHarbor.exe"
+        target.parent.mkdir()
+        target.write_bytes(b"working launcher")
+        opened = []
+        original = sqlite3.connect
+        def connect(*args, **kwargs):
+            connection = original(*args, **kwargs)
+            opened.append(connection)
+            return connection
+        with patch.object(updates.sqlite3, "connect", side_effect=connect), patch.object(self.service, "_save"):
+            self.service._preserve_current(target)
+        self.assertEqual(len(opened), 2)
+        for connection in opened:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        backup, = (self.service.root / "rollback").glob("settings-before-*.sqlite3")
+        moved = backup.with_suffix(".moved")
+        backup.rename(moved)
+        moved.unlink()
 
     def test_resume_process_does_not_auto_close_user_session(self):
         self.ready()
@@ -456,6 +481,16 @@ class HelperTest(unittest.TestCase):
         self.data["file"] = str(self.target)
         self.request.write_text(json.dumps(self.data))
         with self.assertRaisesRegex(ValueError, "перенаправлен"):
+            update_helper._validate(self.request)
+
+    def test_helper_rejects_reparse_parent_before_resolving_payload_alias(self):
+        original = Path.lstat
+        def information(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            if path == self.source.parent:
+                return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400)
+            return value
+        with patch.object(Path, "lstat", information), self.assertRaisesRegex(ValueError, "перенаправлен"):
             update_helper._validate(self.request)
 
 

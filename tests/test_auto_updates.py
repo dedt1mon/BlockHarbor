@@ -397,7 +397,7 @@ class SilentHelperTests(unittest.TestCase):
         with patch.object(update_helper, "ProcessHandles"), patch.object(update_helper.subprocess, "Popen", return_value=process) as spawn:
             update_helper.run(self.request)
         spawn.assert_called_once()
-        result = json.loads((self.updates / ("result-" + self.request_id + ".json")).read_text())
+        result = json.loads((self.updates / ("result-" + self.request_id + ".json")).read_text(encoding="utf-8"))
         self.assertFalse(result["ok"])
         self.assertIn("кодом 2", result["error"])
 

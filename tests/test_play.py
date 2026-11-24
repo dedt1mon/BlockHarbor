@@ -18,6 +18,7 @@ class PlayTests(unittest.TestCase):
         self.addCleanup(networking.stop)
         self.root = Path(directory.name)
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         self.pid = self.app.store.create("Остров друзей", "1.20.1", "fabric")
 
     def wait_for_job(self):
@@ -36,6 +37,7 @@ class PlayTests(unittest.TestCase):
         world.parent.mkdir(parents=True)
         world.write_bytes(b"save fixture")
         updated = App(self.root)
+        self.addCleanup(updated.close)
         self.assertEqual(updated.state()["active"], self.pid)
         self.assertEqual(updated.state()["mode"], "local")
         self.assertEqual(updated.state()["nickname"], "WorldKeeper")
@@ -45,7 +47,9 @@ class PlayTests(unittest.TestCase):
         self.app.store.set("mode", "alias")
         self.app.store.set("nickname", "AliasAfterUpdate")
         self.app.store.set("realName", "OfficialName")
-        self.assertEqual(App(self.root).player_name(), "AliasAfterUpdate")
+        reopened = App(self.root)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.player_name(), "AliasAfterUpdate")
 
     def test_one_click_launches_selected_native_java_and_reports_exit(self):
         native = Mock()

@@ -167,7 +167,7 @@ class BuildCareTests(unittest.TestCase):
 
         def failing(source, dest):
             nonlocal failed
-            if not failed and str(source).endswith("/new/config"):
+            if not failed and Path(source).name == "config" and Path(source).parent.name == "new":
                 failed = True
                 raise OSError("simulated full disk")
             return replace(source, dest)
@@ -304,17 +304,36 @@ class BuildCareTests(unittest.TestCase):
         self.care.clone(self.pid, "Copy")
         self.assertIsNone(self.store.get("performanceMemory:" + self.store.get("active"), None))
 
-    def test_auto_world_backup_is_opt_in_and_skips_unchanged_world(self):
+    def test_auto_world_backup_is_mandatory_and_skips_unchanged_world(self):
         world = self.world()
-        self.assertEqual("", self.care.backup_after_game(self.pid))
+        self.assertTrue(self.care.state(self.pid)["autoWorldBackup"])
         self.assertEqual([], self.care.state(self.pid)["snapshots"])
-        self.care.handle("careAutoBackup", {"id": self.pid, "enabled": True})
-        self.care.backup_after_game(self.pid)
+        self.assertIn("сохранено миров: 1", self.care.backup_after_game(self.pid))
+        point = self.care.state(self.pid)["snapshots"][0]
+        self.assertEqual("world", point["scope"])
+        archive, _ = self.care._snapshot(self.pid, point["id"])
+        with zipfile.ZipFile(archive) as copy:
+            self.assertEqual(b"world one", copy.read("payload/saves/World/level.dat"))
+            self.assertNotIn("payload/saves/World/session.lock", copy.namelist())
+        # Old installations may still contain the former opt-out setting.
+        self.store.set("careAutoWorldBackup:" + self.pid, "0")
         self.care.backup_after_game(self.pid)
         self.assertEqual(1, len(self.care.state(self.pid)["snapshots"]))
         (world / "level.dat").write_bytes(b"updated world")
         self.care.backup_after_game(self.pid)
+        self.assertTrue(self.care.state(self.pid)["autoWorldBackup"])
         self.assertEqual(2, len(self.care.state(self.pid)["snapshots"]))
+        newest = self.care.state(self.pid)["snapshots"][0]
+        archive, _ = self.care._snapshot(self.pid, newest["id"])
+        with zipfile.ZipFile(archive) as copy:
+            self.assertEqual(b"updated world", copy.read("payload/saves/World/level.dat"))
+
+    def test_legacy_auto_backup_action_cannot_disable_mandatory_copies(self):
+        for enabled in (False, None, 0, "false"):
+            with self.assertRaisesRegex(ValueError, "отключить их нельзя"):
+                self.care.handle("careAutoBackup", {"id": self.pid, "enabled": enabled})
+        self.assertTrue(self.care.handle("careAutoBackup", {"id": self.pid, "enabled": True})["ok"])
+        self.assertTrue(self.care.state(self.pid)["autoWorldBackup"])
 
     def test_purge_recovery_requires_permanent_delete_and_cleans_data(self):
         self.care.snapshot(self.pid)

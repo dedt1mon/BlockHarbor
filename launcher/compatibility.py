@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -52,6 +53,59 @@ class Metadata:
     direct: set = field(default_factory=set)
     rules: list = field(default_factory=list)
     nested: list = field(default_factory=list)
+    server_only: bool = False
+
+
+def installation_profile(store, pid):
+    """Add locally confirmed platform versions without changing stored profiles.
+
+    A marker alone is not proof: it must describe this profile and this launcher's
+    cache, and both the installed and base manifests must agree with it. Never
+    execute a Java path from an imported marker to discover its version.
+    """
+    from . import game, version_ids
+
+    profile = dict(store.profile(pid))
+    directory = store.root / "game-cache"
+    cache = directory.resolve()
+    if directory.is_symlink() or cache.parent != store.root.resolve():
+        return profile
+    marker = store.folder(pid) / game.STAMP
+
+    def read(path, maximum):
+        if path.is_symlink() or not 0 < path.stat().st_size <= maximum:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+
+    try:
+        record = read(marker, 16 * 1024)
+        if (record.get("version") != profile["version"]
+                or record.get("loader") != profile["loader"]
+                or record.get("cache") != str(cache)
+                or not version_ids.valid(record.get("id"))):
+            return profile
+        installed = game._manifest_path(cache, record["id"])
+        base = game._manifest_path(cache, profile["version"])
+        if (installed.resolve().parent.parent != cache / "versions"
+                or base.resolve().parent.parent != cache / "versions"):
+            return profile
+        manifest, vanilla = read(installed, 4 * 1024**2), read(base, 4 * 1024**2)
+        if (manifest.get("id") != record["id"]
+                or manifest.get("inheritsFrom", manifest.get("id")) != profile["version"]
+                or vanilla.get("id") != profile["version"]):
+            return profile
+        pin = record.get("loader_version")
+        if isinstance(pin, str) and version_ids.valid(pin):
+            profile["loader_version"] = pin
+        # A custom/legacy executable may differ from the managed Java manifest.
+        # Leave that case unknown rather than claiming a verified major version.
+        major = vanilla.get("javaVersion", {}).get("majorVersion")
+        if not record.get("java") and type(major) is int and 6 <= major <= 99:
+            profile["java_major"] = major
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass  # Uninstalled/interrupted builds require review for platform bounds.
+    return profile
 
 
 def _pairs(data):
@@ -87,6 +141,7 @@ def _read(jar, loader):
             continue
         if label == "fabric.mod.json":
             if data.get("environment") == "server":
+                info.server_only = True
                 break
             _add(info, data.get("id"), data.get("name"), data.get("version"))
             for key in _entries(data.get("provides")):
@@ -107,6 +162,10 @@ def _read(jar, loader):
                             key, _, bounds = dependency.partition("@")
                             _rule(info, "required", key, bounds or "*")
         elif label == "quilt.mod.json":
+            minecraft = data.get("minecraft", {})
+            if isinstance(minecraft, dict) and minecraft.get("environment") == "dedicated_server":
+                info.server_only = True
+                break
             q = data.get("quilt_loader", {})
             if not isinstance(q, dict):
                 break
@@ -286,6 +345,14 @@ def local_report(profile, existing, additions):
     result = report()
     loader = profile["loader"]
     providers = {"minecraft": [("", "Minecraft", profile["version"])]}
+    platform = {"java": str(profile.get("java_major") or "")}
+    loader_id = {"fabric": "fabricloader", "quilt": "quilt_loader", "forge": "forge", "neoforge": "neoforge"}.get(loader)
+    if loader_id:
+        platform[loader_id] = str(profile.get("loader_version") or "")
+    if loader == "quilt":
+        # Quilt exports Fabric Loader compatibility, but its version is not the
+        # Quilt Loader version. Check a declared bound only when it is known.
+        platform["fabricloader"] = ""
     mods = {}
     for name, path in [*existing.items(), *additions.items()]:
         meta = _metadata(path, file_stamp(path), loader)
@@ -294,7 +361,11 @@ def local_report(profile, existing, additions):
             providers.setdefault(key, []).append((name, label, version))
     for name, meta in mods.items():
         incoming = name in additions
-        if incoming and not meta.provided:
+        if incoming and meta.server_only:
+            result["conflicts"].append(
+                f"{name} предназначен только для выделенного сервера и не загружается клиентом Minecraft."
+            )
+        if incoming and not meta.provided and not meta.server_only:
             result["warnings"].append(
                 f"{name}: в архиве нет читаемого описания зависимостей для этого загрузчика."
             )
@@ -308,6 +379,27 @@ def local_report(profile, existing, additions):
                         )
         for relation, key, bounds in meta.rules:
             if key in _PLATFORM:
+                if incoming and relation in ("required", "hard", "soft"):
+                    version = platform.get(key, "")
+                    # A bundled platform library may supply a more precise value.
+                    matches = providers.get(key, [])
+                    states = ([_any_match(v, bounds) for _, _, v in matches]
+                              or ([_any_match(version, bounds)] if key in platform else [None]))
+                    expr = " / ".join(bounds)
+                    if relation == "required" and all(value is False for value in states):
+                        result["conflicts"].append(
+                            f"{name} требует {key} {expr}. В сборке используется {version or matches[0][2]}."
+                        )
+                    elif relation == "required" and True not in states:
+                        result["warnings"].append(
+                            f"{name} требует {key} {expr}. Версия этой части сборки пока не подтверждена. Подготовь игру и повтори проверку."
+                        )
+                    elif relation in ("hard", "soft") and any(value is not False for value in states):
+                        group = "conflicts" if relation == "hard" and all(value is True for value in states) else "warnings"
+                        result[group].append(
+                            f"{name}: несовместимость с {key} {expr}."
+                            if group == "conflicts" else f"{name}: возможна несовместимость с {key} {expr}."
+                        )
                 continue
             matches = providers.get(key, [])
             if not incoming and not any(f in additions for f, _, _ in matches):

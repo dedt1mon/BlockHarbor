@@ -1,0 +1,157 @@
+name: Validate stabilization branch (no release)
+
+on:
+  push:
+    branches: ['audit/**']
+    paths-ignore: ['docs/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blockharbor-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Install application and browser test dependencies
+        run: python -m pip install -r requirements.txt playwright==1.62.0
+      - name: Python regressions and authenticated HTTP integration
+        run: python tools/run_test_suite.py --output artifacts/tests-linux.json
+      - name: JavaScript and server contract tests
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          for file in ui/*.js; do node --check "$file"; done
+          node tests/window-lifecycle.cjs
+          node tests/ui-ordering.cjs
+          node --test community-registry/worker.test.mjs
+      - name: Installer payload and cleanup regressions
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          go test -json tools/bootstrap_payload.go tools/bootstrap_payload_test.go | tee artifacts/go-bootstrap-linux.jsonl
+          cd tools/data_cleanup
+          go test -json ./... | tee ../../artifacts/go-cleanup-linux.jsonl
+      - name: Shared control geometry
+        if: ${{ !cancelled() }}
+        run: python tools/smoke_ui_layout.py
+      - name: Production UI scripts at 24 resolution and scaling combinations
+        if: ${{ !cancelled() }}
+        run: python tools/smoke_ui_browser.py --output artifacts/ui-audit
+      - name: Save browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-browser-linux
+          path: |
+            artifacts/ui-audit
+            artifacts/tests-linux.json
+            artifacts/go-*-linux.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare isolated audit output directory
+        shell: pwsh
+        run: |
+          $auditOutput = Join-Path $env:RUNNER_TEMP 'blockharbor-audit'
+          "BH_AUDIT_OUTPUT=$auditOutput" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Install application and browser test dependencies
+        run: python -m pip install -r requirements.txt playwright==1.62.0
+      - name: Python regressions on a fresh Windows runner
+        timeout-minutes: 10
+        run: python -u tools/run_test_suite.py --output artifacts/tests-windows.json
+      - name: Build portable application without publishing
+        if: ${{ !cancelled() }}
+        id: portable
+        run: python tools/build_windows.py --output "$env:BH_AUDIT_OUTPUT\portable"
+      - name: Native Windows cleanup and actual EXE payload regressions
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $env:BLOCKHARBOR_RELEASE_EXE = "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe"
+          go test -json tools/bootstrap_payload.go tools/bootstrap_payload_test.go | Tee-Object -FilePath artifacts/go-bootstrap-windows.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bootstrap regressions failed' }
+          Push-Location tools/data_cleanup
+          try {
+            go test -json ./... | Tee-Object -FilePath ../../artifacts/go-cleanup-windows.jsonl
+            if ($LASTEXITCODE -ne 0) { throw 'Native Windows cleanup regressions failed' }
+          } finally { Pop-Location }
+      - name: Install Unicode x64 NSIS
+        if: ${{ !cancelled() }}
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: mingw-w64-clang-x86_64-nsis
+      - name: Build and exercise actual Windows installer
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' && steps.msys2.outcome == 'success' }}
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $version = (python -c "from launcher.version import VERSION; print(VERSION)").Trim()
+          $compiler = Join-Path $env:MSYS2_LOCATION 'clang64\bin\makensis.exe'
+          $nsisRoot = Join-Path $env:MSYS2_LOCATION 'clang64\share\nsis'
+          python tools/build_installer.py --launcher "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe" --output "$env:BH_AUDIT_OUTPUT\BlockHarbor-audit-Setup.exe" --version $version --makensis $compiler --nsisdir $nsisRoot --go go --project-url 'https://github.com/dedt1mon/BlockHarbor'
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+          python tools/smoke_windows_release.py --setup "$env:BH_AUDIT_OUTPUT\BlockHarbor-audit-Setup.exe" --portable "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe" --version $version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows setup and runtime smoke failed' }
+      - name: Chromium UI scenarios on Windows
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $browser = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          if (!(Test-Path $browser)) { throw 'Installed Chrome was not found' }
+          python tools/smoke_ui_browser.py --browser $browser --output artifacts/ui-audit
+          if ($LASTEXITCODE -ne 0) { throw 'Windows browser matrix failed' }
+      - name: Save Windows validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-windows-validation
+          path: |
+            artifacts/ui-audit
+            artifacts/tests-windows.json
+            artifacts/go-*-windows.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

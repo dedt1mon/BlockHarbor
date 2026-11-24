@@ -1,0 +1,95 @@
+{
+  "tests": 672,
+  "passed": 672,
+  "failedCases": 0,
+  "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "expectedFailures": 0,
+  "unexpectedSuccesses": 0,
+  "failures": [],
+  "skips": [],
+  "slowest": [
+    {
+      "test": "test_notifications.NotificationTests.test_history_remains_bounded_and_ids_remain_increasing",
+      "seconds": 6.5167
+    },
+    {
+      "test": "test_game.GameTests.test_browser_login_checks_state_and_returns_only_java_credentials",
+      "seconds": 4.0779
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_but_game_survives",
+      "seconds": 2.583
+    },
+    {
+      "test": "test_lifecycle.RealProcessClosureTests.test_real_http_x_exits_launcher_and_owned_preparation_process",
+      "seconds": 2.5656
+    },
+    {
+      "test": "test_builds.CreateBuildTests.test_upgrade_preserves_both_original_profile_names_and_custom_data",
+      "seconds": 2.3111
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_cold_bootstrap_result_is_consumed_from_environment_per_app",
+      "seconds": 2.2186
+    },
+    {
+      "test": "test_builds.CreateBuildTests.test_release_catalog_initial_offline_refresh_and_legacy_cache",
+      "seconds": 2.1492
+    },
+    {
+      "test": "test_build_errors.BuildErrorsTest.test_profile_isolation_grouping_redaction_retention_and_reopen",
+      "seconds": 1.9388
+    },
+    {
+      "test": "test_builds.CreateBuildTests.test_vanilla_and_old_releases_can_be_created_offline",
+      "seconds": 1.7738
+    },
+    {
+      "test": "test_community_catalog.CommunityCatalogTests.test_managed_archive_download_resumes_after_interruption_before_import",
+      "seconds": 1.7515
+    },
+    {
+      "test": "test_optional_steam.OptionalSteamAppTests.test_unsupported_create_and_play_keep_selected_version_and_user_files",
+      "seconds": 1.7348
+    },
+    {
+      "test": "test_lifecycle.AppLifecycleTests.test_manual_x_wins_over_acknowledged_update_handoff_timer",
+      "seconds": 1.6643
+    },
+    {
+      "test": "test_transfer_reliability.TransferReliabilityTests.test_real_http_disconnect_resumes_with_range_and_validator",
+      "seconds": 1.5565
+    },
+    {
+      "test": "test_game_window_lifecycle.GameProcessLifecycleTests.test_failed_preparation_spawn_and_immediate_jvm_exit_never_hide_frame",
+      "seconds": 1.4649
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_unfinished_purge_never_restores_an_incomplete_world",
+      "seconds": 1.3955
+    },
+    {
+      "test": "test_friends.FriendsTests.test_prepares_networking_before_java_or_prism",
+      "seconds": 1.3558
+    },
+    {
+      "test": "test_performance.PerformanceTests.test_auto_and_existing_manual_setting_reach_game_launch",
+      "seconds": 1.3287
+    },
+    {
+      "test": "test_play.PlayTests.test_one_click_launches_selected_native_java_and_reports_exit",
+      "seconds": 1.3237
+    },
+    {
+      "test": "test_progress_api.ProgressApiTests.test_real_job_stage_and_final_error_are_delivered_alongside_update_progress",
+      "seconds": 1.3216
+    },
+    {
+      "test": "test_build_removal.BuildRemovalTests.test_purge_only_archived_instance_and_idempotent_retry",
+      "seconds": 1.3013
+    }
+  ]
+}

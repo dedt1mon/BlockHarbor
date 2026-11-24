@@ -1,0 +1,32 @@
+{"Time":"2026-11-24T15:52:20.654810164Z","Action":"start","Package":"blockharbor.local/data-cleanup"}
+{"Time":"2026-11-24T15:52:20.656098458Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestSessionRecordsDoNotTreatCorruptionAsIdle"}
+{"Time":"2026-11-24T15:52:20.656139349Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestSessionRecordsDoNotTreatCorruptionAsIdle","Output":"=== RUN   TestSessionRecordsDoNotTreatCorruptionAsIdle\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656326502Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestSessionRecordsDoNotTreatCorruptionAsIdle","Output":"--- PASS: TestSessionRecordsDoNotTreatCorruptionAsIdle (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656344899Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestSessionRecordsDoNotTreatCorruptionAsIdle","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.656355883Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestOrphanGameBlocksAndReusedPIDDoesNot"}
+{"Time":"2026-11-24T15:52:20.656360923Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestOrphanGameBlocksAndReusedPIDDoesNot","Output":"=== RUN   TestOrphanGameBlocksAndReusedPIDDoesNot\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656389495Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestOrphanGameBlocksAndReusedPIDDoesNot","Output":"--- PASS: TestOrphanGameBlocksAndReusedPIDDoesNot (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656414772Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestOrphanGameBlocksAndReusedPIDDoesNot","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.656419835Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestRecordFilesAreBoundedAndLinksAreRejected"}
+{"Time":"2026-11-24T15:52:20.656421742Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestRecordFilesAreBoundedAndLinksAreRejected","Output":"=== RUN   TestRecordFilesAreBoundedAndLinksAreRejected\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656965466Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestRecordFilesAreBoundedAndLinksAreRejected","Output":"--- PASS: TestRecordFilesAreBoundedAndLinksAreRejected (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.656976204Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestRecordFilesAreBoundedAndLinksAreRejected","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.656979905Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestProtectedRemovalKeepsBarriersAndExternalLinks"}
+{"Time":"2026-11-24T15:52:20.656982296Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestProtectedRemovalKeepsBarriersAndExternalLinks","Output":"=== RUN   TestProtectedRemovalKeepsBarriersAndExternalLinks\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.657765039Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestProtectedRemovalKeepsBarriersAndExternalLinks","Output":"--- PASS: TestProtectedRemovalKeepsBarriersAndExternalLinks (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.65777424Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestProtectedRemovalKeepsBarriersAndExternalLinks","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.657776978Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks"}
+{"Time":"2026-11-24T15:52:20.65777869Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks","Output":"=== RUN   TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.658701668Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks","Output":"--- PASS: TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.658720226Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestGamePreflightChecksAllFilesBeforeRemovalAndSkipsLinks","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.65872332Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestBarrierNamesUseWindowsCaseComparison"}
+{"Time":"2026-11-24T15:52:20.658725054Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestBarrierNamesUseWindowsCaseComparison","Output":"=== RUN   TestBarrierNamesUseWindowsCaseComparison\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.658908078Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestBarrierNamesUseWindowsCaseComparison","Output":"--- PASS: TestBarrierNamesUseWindowsCaseComparison (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.658917398Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestBarrierNamesUseWindowsCaseComparison","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.658921462Z","Action":"run","Package":"blockharbor.local/data-cleanup","Test":"TestEmptyFinalRemoveDoesNotSweepNewData"}
+{"Time":"2026-11-24T15:52:20.658923698Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestEmptyFinalRemoveDoesNotSweepNewData","Output":"=== RUN   TestEmptyFinalRemoveDoesNotSweepNewData\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.659083599Z","Action":"output","Package":"blockharbor.local/data-cleanup","Test":"TestEmptyFinalRemoveDoesNotSweepNewData","Output":"--- PASS: TestEmptyFinalRemoveDoesNotSweepNewData (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.659088238Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Test":"TestEmptyFinalRemoveDoesNotSweepNewData","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.65909135Z","Action":"output","Package":"blockharbor.local/data-cleanup","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.659294376Z","Action":"output","Package":"blockharbor.local/data-cleanup","Output":"ok  \tblockharbor.local/data-cleanup\t0.004s\n"}
+{"Time":"2026-11-24T15:52:20.661581408Z","Action":"pass","Package":"blockharbor.local/data-cleanup","Elapsed":0.007}

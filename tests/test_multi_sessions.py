@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from launcher import game, lifecycle
-from launcher.sessions import FileMutex, SessionCoordinator, StartupCancelled, WindowStore, atomic_json, process_alive, process_identity
+from launcher.sessions import FileMutex, SessionCoordinator, StartupCancelled, WindowStore, atomic_json, process_alive, process_identity, remove_record
 from launcher.singleton import SingleInstance
 from main import App
 
@@ -340,17 +340,22 @@ class CoordinatorTests(unittest.TestCase):
         path = directory / "update.json"
         atomic_json(path, {"session": "a" * 24, "helper": process_identity(os.getpid()), "targetVersion": "2.1.0"})
         acquired = []
+        errors = []
         def finish():
-            lock = FileMutex(self.root / "activation-v10" / ".session" / "owner.lock")
-            acquired.append(lock.acquire())
-            lock.close()
-            path.unlink()
+            try:
+                lock = FileMutex(self.root / "activation-v10" / ".session" / "owner.lock")
+                acquired.append(lock.acquire())
+                lock.close()
+                remove_record(path)  # Same bounded cleanup as the real helper.
+            except Exception as error:
+                errors.append(error)
         timer = threading.Timer(0.2, finish)
         timer.start()
         try:
             current = self.coordinator(startup_timeout=2)
         finally:
             timer.join()
+        self.assertEqual(errors, [])
         self.assertEqual(acquired, [True])
         self.assertEqual(current.snapshot()["launcherCount"], 1)
 

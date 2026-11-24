@@ -43,8 +43,10 @@ class Response:
 class TransfersTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.manager = transfers.TransferManager(self.root)
+        self.addCleanup(self.manager.close)
         self.payload = b"verified data " * 1000
         self.options = {
             "hashes": {"sha256": hashlib.sha256(self.payload).hexdigest(), "sha512": hashlib.sha512(self.payload).hexdigest()},
@@ -53,16 +55,13 @@ class TransfersTest(unittest.TestCase):
         self.url = "https://cdn.modrinth.com/data/mod/version/mod.jar"
         self.destination = self.root / "files" / "mod.jar"
 
-    def tearDown(self):
-        self.directory.cleanup()
-
     def task(self, background=False):
         return self.manager._new(self.url, self.destination, "Mod", self.options["hashes"], self.options["size"], self.options["max_size"], self.options["hosts"], "content", True, background)
 
     def test_verified_publish_and_snapshot_hides_paths_and_urls(self):
         with patch.object(transfers, "open_https", return_value=Response(self.payload)):
             result = self.manager.download(self.url, self.destination, **self.options)
-        self.assertEqual(result, self.destination)
+        self.assertTrue(result.samefile(self.destination))
         self.assertEqual(result.read_bytes(), self.payload)
         task = self.manager.snapshot()["tasks"][0]
         self.assertEqual(task["state"], "completed")
@@ -179,6 +178,7 @@ class TransfersTest(unittest.TestCase):
     def test_recovery_marks_interrupted_and_preserves_safe_retry(self):
         task_id = self.task(background=True)
         other = transfers.TransferManager(self.root)
+        self.addCleanup(other.close)
         row = other.snapshot()["tasks"][0]
         self.assertEqual(row["id"], task_id)
         self.assertEqual(row["state"], "interrupted")

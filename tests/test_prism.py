@@ -15,7 +15,9 @@ class PrismTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        # launch() supplies canonical paths to its internal instance builder.
+        # Windows TemporaryDirectory can otherwise use the same directory's 8.3 alias.
+        self.root = Path(tmp.name).resolve(strict=True)
         self.folder = self.root / "old BlockHarbor instance"
         self.folder.mkdir()
         self.data = self.root / "engine data"
@@ -72,7 +74,7 @@ class PrismTests(unittest.TestCase):
                     self.data, self.folder, "Остров", "1.20.1", loader, 6144
                 )
                 base = self.data / "instances" / ident
-                pack = json.loads((base / "mmc-pack.json").read_text())
+                pack = json.loads((base / "mmc-pack.json").read_text(encoding="utf-8"))
                 self.assertEqual(pack["components"][-1]["version"], pinned)
                 self.assertEqual(pack["components"][0]["uid"], "net.minecraft")
                 self.assertEqual(pack["formatVersion"], 1)
@@ -92,10 +94,10 @@ class PrismTests(unittest.TestCase):
         args = (self.data, self.folder, "Test", "1.20.1", "fabric", 4096)
         key = prism._instance(*args)
         p = self.data / "instances" / key / "instance.cfg"
-        p.write_text(p.read_text() + "lastLaunchTime=12345\n")
+        p.write_text(p.read_text(encoding="utf-8") + "lastLaunchTime=12345\n", encoding="utf-8")
         self.mock_rows.reset_mock()
         self.assertEqual(prism._instance(*args), key)
-        self.assertIn("lastLaunchTime=12345", p.read_text())
+        self.assertIn("lastLaunchTime=12345", p.read_text(encoding="utf-8"))
         self.mock_rows.assert_not_called()
 
     def test_pin_from_direct_profiles_preserved(self):
@@ -152,10 +154,8 @@ class PrismTests(unittest.TestCase):
             )
             self.assertIs(cmd, child)
             argv = popen.call_args.args[0]
-            self.assertEqual(
-                argv[:4],
-                [str(exe), "--dir", str(self.root / "prism" / "data"), "--launch"],
-            )
+            self.assertEqual((argv[0], argv[1], argv[3]), (str(exe), "--dir", "--launch"))
+            self.assertTrue(Path(argv[2]).samefile(self.root / "prism" / "data"))
             self.assertTrue(
                 (Path(argv[2]) / "instances" / argv[4] / "minecraft").samefile(
                     self.folder

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import lifecycle, version_ids
 from .content_icons import IconCache
-from .modfiles import DESCRIPTORS, read_archive_entry
+from .modfiles import DESCRIPTORS, file_stamp, read_archive_entry
 
 LOADERS = ("fabric", "vanilla", "forge", "neoforge", "quilt")
 KINDS = {"mods": ".jar", "shaderpacks": ".zip", "resourcepacks": ".zip"}
@@ -447,11 +447,7 @@ class Store:
                                     "size": stat.st_size,
                                     "icon": self.icons.icon(
                                         folder / entry.name,
-                                        (
-                                            stat.st_size,
-                                            stat.st_mtime_ns,
-                                            stat.st_ctime_ns,
-                                        ),
+                                        file_stamp(folder / entry.name),
                                     ),
                                 }
                             )

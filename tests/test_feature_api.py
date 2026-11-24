@@ -3,6 +3,7 @@
 import http.cookiejar
 import io
 import json
+import re
 import tempfile
 import threading
 import unittest
@@ -13,6 +14,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from unittest.mock import Mock, patch
 
 from main import App, Handler, Server
+from launcher.version import VERSION
 
 
 class FeatureApiTests(unittest.TestCase):
@@ -33,6 +35,7 @@ class FeatureApiTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
+        self.app.close()
 
     def call(self, path, data=None, *, auth=True, origin=None, raw=False):
         headers = {"Authorization":"Bearer " + self.app.token} if auth else {}
@@ -51,9 +54,13 @@ class FeatureApiTests(unittest.TestCase):
                 result = self.call(f"/api/feature?action={action}&id={self.pid}")
                 self.assertIsInstance(result, dict)
         state = self.call("/api/state")
-        self.assertEqual(state["appVersion"], "2.6.8")
-        for name in ("experience", "build-care", "pack-hub", "updates"):
-            self.assertGreater(len(self.call("/" + name + ".js",auth=False,raw=True)), 100)
+        self.assertEqual(state["appVersion"], VERSION)
+        index = self.call("/", auth=False, raw=True).decode("utf-8")
+        assets = set(re.findall(r'(?:src|href)="(/[^\"]+\.(?:css|js))"', index))
+        self.assertTrue(assets)
+        for path in assets:
+            with self.subTest(asset=path):
+                self.assertGreater(len(self.call(path, auth=False, raw=True)), 100)
 
     def test_get_cannot_mutate_and_cross_origin_is_blocked(self):
         for path, auth, origin, expected in ((f"/api/feature?action=careRemove&id={self.pid}", True,None,400),("/api/feature?action=updateState",False,None,403),("/api/state",True,"https://other.example",403)):
@@ -87,7 +94,7 @@ class FeatureApiTests(unittest.TestCase):
         self.assertEqual(len(self.app.store.all()),1)  # preview never installs silently
 
     def test_auto_world_backup_is_deferred_outside_state_poll(self):
-        self.app.store.set("careAutoWorldBackup:"+self.pid,"1")
+        self.app.store.set("careAutoWorldBackup:"+self.pid,"0")
         with patch.object(self.app.care,"backup_after_game",return_value="Копия готова") as backup:
             self.app._game_finished(0,"Мир",self.pid)
             self.assertEqual(self.app.pending_world_backups,{self.pid})

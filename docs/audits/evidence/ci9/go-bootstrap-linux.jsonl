@@ -1,0 +1,25 @@
+{"Time":"2026-11-24T15:52:20.459250428Z","Action":"start","Package":"command-line-arguments"}
+{"Time":"2026-11-24T15:52:20.460499434Z","Action":"run","Package":"command-line-arguments","Test":"TestSetupAndRepair"}
+{"Time":"2026-11-24T15:52:20.460548621Z","Action":"output","Package":"command-line-arguments","Test":"TestSetupAndRepair","Output":"=== RUN   TestSetupAndRepair\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.461905125Z","Action":"output","Package":"command-line-arguments","Test":"TestSetupAndRepair","Output":"--- PASS: TestSetupAndRepair (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.461923002Z","Action":"pass","Package":"command-line-arguments","Test":"TestSetupAndRepair","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.461932774Z","Action":"run","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive"}
+{"Time":"2026-11-24T15:52:20.461935085Z","Action":"output","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Output":"=== RUN   TestIncompleteAndInvalidArchive\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462234651Z","Action":"output","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Output":"--- PASS: TestIncompleteAndInvalidArchive (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462243008Z","Action":"pass","Package":"command-line-arguments","Test":"TestIncompleteAndInvalidArchive","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.46225134Z","Action":"run","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork"}
+{"Time":"2026-11-24T15:52:20.462253408Z","Action":"output","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Output":"=== RUN   TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462570347Z","Action":"output","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Output":"--- PASS: TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462580264Z","Action":"pass","Package":"command-line-arguments","Test":"TestSilentPreparationKeepsLogsAndReportsOnlyCompletedWork","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.462584504Z","Action":"run","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild"}
+{"Time":"2026-11-24T15:52:20.462586865Z","Action":"output","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Output":"=== RUN   TestBootstrapNoticeIsIsolatedToTheActualChild\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462594676Z","Action":"output","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Output":"--- PASS: TestBootstrapNoticeIsIsolatedToTheActualChild (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462597498Z","Action":"pass","Package":"command-line-arguments","Test":"TestBootstrapNoticeIsIsolatedToTheActualChild","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.462609108Z","Action":"run","Package":"command-line-arguments","Test":"TestShippedExecutable"}
+{"Time":"2026-11-24T15:52:20.462611381Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"=== RUN   TestShippedExecutable\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462614607Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"    bootstrap_payload_test.go:203: set BLOCKHARBOR_RELEASE_EXE to check the release\n"}
+{"Time":"2026-11-24T15:52:20.46261771Z","Action":"output","Package":"command-line-arguments","Test":"TestShippedExecutable","Output":"--- SKIP: TestShippedExecutable (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462622668Z","Action":"skip","Package":"command-line-arguments","Test":"TestShippedExecutable","Elapsed":0}
+{"Time":"2026-11-24T15:52:20.462624376Z","Action":"output","Package":"command-line-arguments","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-24T15:52:20.462884665Z","Action":"output","Package":"command-line-arguments","Output":"ok  \tcommand-line-arguments\t0.003s\n"}
+{"Time":"2026-11-24T15:52:20.462902543Z","Action":"pass","Package":"command-line-arguments","Elapsed":0.004}

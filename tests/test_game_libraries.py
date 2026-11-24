@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -184,6 +185,34 @@ class GameLibraryTests(unittest.TestCase):
         self._put({"path": self._maven_relative(name)}, self.artifact_bytes)
         self.assertEqual(self._missing(), artifact.name)
 
+    def test_same_size_library_corruption_is_detected_and_repaired(self):
+        library = self._artifact_library("org.example:integrity:1")
+        self._write_metadata([library])
+        entry = library["downloads"]["artifact"]
+        artifact = self._put(entry, self.artifact_bytes)
+        self.assertIsNone(self._missing())
+        artifact.write_bytes(b"x" * len(self.artifact_bytes))
+        self.assertEqual(self._missing(), artifact.name)
+        with patch.object(mc.install, "install_minecraft_version", side_effect=lambda *_args, **_kwargs: artifact.write_bytes(self.artifact_bytes)) as install:
+            self.assertEqual(game.install(self.version, "vanilla", self.cache, self.instance), self.version)
+            install.assert_called_once()
+        self.assertIsNone(self._missing())
+
+    def test_same_size_client_corruption_is_detected_without_network(self):
+        self.metadata["downloads"]["client"]["sha1"] = hashlib.sha1(b"game").hexdigest()
+        self._write_metadata([])
+        self.assertIsNone(self._missing())
+        self.jar.write_bytes(b"xxxx")
+        self.assertEqual(self._missing(), self.jar.name)
+
+    def test_unchanged_artifact_hashes_reuse_the_stamp_cache(self):
+        library = self._artifact_library("org.example:cached:1")
+        self._write_metadata([library])
+        self._put(library["downloads"]["artifact"], self.artifact_bytes)
+        self.assertIsNone(self._missing())
+        with patch.object(hashlib, "file_digest", side_effect=AssertionError("unchanged artifact rehashed")):
+            self.assertIsNone(self._missing())
+
     def test_actual_artifact_with_native_classifier_coordinate_is_required(self):
         library = self._artifact_library("org.lwjgl:lwjgl:3.3.3:natives-windows")
         self._write_metadata([library])
@@ -259,6 +288,9 @@ class GameLibraryTests(unittest.TestCase):
                 self.subTest(system=system, architecture=bits),
                 patch("platform.system", return_value=system),
                 patch("platform.architecture", return_value=(bits + "bit", "")),
+                # Native selection is simulated, but these are real host paths.
+                # A Linux ':' classpath cannot encode a Windows C: drive.
+                patch("minecraft_launcher_lib.command.get_classpath_separator", return_value=os.pathsep),
             ):
                 for entry in library["downloads"]["classifiers"].values():
                     (self.cache / "libraries" / entry["path"]).unlink(missing_ok=True)

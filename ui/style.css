@@ -23,12 +23,26 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --scrollbar-thumb: #59695d;
+  --checkbox-size: 17px;
+  --switch-width: 40px;
+  --switch-height: 24px;
+  --switch-thumb: 16px;
+  --switch-travel: 16px;
+  --motion-fast: 150ms;
   font-family: Inter, "Segoe UI", Arial, sans-serif;
   font-size: 15px;
 }
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
+[hidden]:not([hidden="until-found"]) { display: none !important; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border: 2px solid transparent; background-clip: padding-box; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background-color: #7a8d7e; }
 html {
   height: 100%;
   background: #0b0f10;
@@ -96,6 +110,11 @@ a.btn {
 :where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--lime);
 }
+:where(input[type="checkbox"]:not([role="switch"]), input[type="radio"]) {
+  width: var(--checkbox-size);
+  height: var(--checkbox-size);
+  flex-shrink: 0;
+}
 aside {
   min-height: 0;
   overflow-y: auto;
@@ -113,8 +132,9 @@ aside {
   margin: 0 6px 47px;
 }
 .brand img {
-  width: 41px;
-  height: 41px;
+  display: block;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
 }
 .brand > div {
@@ -182,6 +202,8 @@ main {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   padding: 0 clamp(22px, 3.6vw, 70px) 42px;
 }
 header {
@@ -522,6 +544,65 @@ small,
 .stack > * + * {
   margin-top: 12px;
 }
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.settings-grid > .panel {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.profile-panels,
+.friends-panels {
+  display: grid;
+  gap: 20px;
+}
+.profile-panels { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.friends-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+.profile-panels > .panel,
+.friends-panels > .panel {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.profile-panels .side-panel {
+  grid-template-columns: minmax(100px, .4fr) minmax(0, 1fr);
+}
+.profile-panels .side-panel > .stack { min-width: 0; }
+.profile-panels .side-panel .actions { align-items: stretch; }
+.profile-panels .side-panel .actions > .btn { flex: 1 1 0; min-width: 0; white-space: normal; }
+.friends-panels > .friends-join { grid-column: 1 / -1; }
+.build-errors-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.build-errors-heading h2 { margin: 0; }
+@media (max-width: 1100px) {
+  .profile-panels .side-panel { grid-template-columns: 1fr; }
+  .profile-panels .skin-stage { min-height: 180px; }
+}
+@media (max-width: 800px) {
+  .profile-panels, .friends-panels { grid-template-columns: minmax(0, 1fr); }
+}
+.settings-card {
+  display: flex;
+  flex-direction: column;
+}
+.settings-card > * {
+  min-width: 0;
+}
+.settings-card > .actions {
+  margin-top: auto;
+  padding-top: 16px;
+}
+#settingsPanel .panel p {
+  max-width: none;
+}
 .side-panel {
   display: grid;
   grid-template-columns: 185px 1fr;
@@ -630,11 +711,22 @@ small,
   gap: 12px;
 }
 .archive-actions {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 6px;
-  flex-wrap: wrap;
+  width: max-content;
+  max-width: 100%;
   margin-inline-start: auto;
+}
+.archive-actions > button {
+  align-self: stretch;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 11px 15px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .build-row .mini-icon {
   flex: none;
@@ -780,7 +872,7 @@ label > .field {
   display: block;
   margin-top: 6px;
 }
-.field:hover:not(:disabled):not([readonly]) {
+.field:hover:not(:focus):not(:disabled):not([readonly]) {
   border-color: var(--control-hover);
 }
 .field:focus,
@@ -893,11 +985,75 @@ dialog {
   padding: 24px;
   width: min(520px, 92vw);
   border: 1px solid #4b5c53;
-  border-radius: 14px;
+  border-radius: var(--surface-radius);
   background: #192120;
   color: var(--text);
   box-shadow: 0 25px 80px #0008;
-  max-height: 86vh;
+  max-width: calc(100vw - 24px);
+  max-height: min(90vh, calc(100dvh - 24px));
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+#dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
+#dialog > .dialog-top { flex: none; }
+#dialog.dialog-large { width: min(1120px, calc(100vw - 24px)); }
+/* A modal has opposing block insets in the browser stylesheet. `auto` stretches
+   between them; fit-content keeps the panel sized to its actual contents. */
+#dialog.dialog-content-sized { height: fit-content; min-height: 0; }
+.dialog-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 4px 48px;
+  padding: 4px;
+  margin: -4px -4px 14px;
+}
+.dialog-top h2 {
+  flex: 1 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+.dialog-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+.dialog-header-actions[hidden] { display: none; }
+.dialog-header-actions .btn {
+  flex: none;
+  min-height: 36px;
+  max-width: none;
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+  scroll-margin-inline: 4px 48px;
+}
+/* Keep the close control visible while full titles and actions scroll as one row.
+   This also covers the independent Steam compatibility dialog. */
+.dialog-top > .icon-button {
+  position: sticky;
+  inset-inline-end: 0;
+  z-index: 1;
+  align-self: center;
+  background: #192120;
+  box-shadow: -8px 0 0 #192120;
+}
+.dialog-top > .icon-button:hover { background: var(--control-fill); color: var(--text); }
+#dialogBody {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 dialog::backdrop {
   background: #060c0cd9;
@@ -947,6 +1103,18 @@ dialog p {
   font-weight: 550;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+/* A modal owns its status message. Reserve space for it so a persistent job
+   notice cannot cover the dialog's actions in a short or scaled window. */
+dialog[open] > #notice {
+  position: static;
+  flex: none;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  max-height: min(25dvh, 120px);
+  margin-top: var(--space-3);
+  box-shadow: none;
 }
 #notice i {
   width: 24px;
@@ -1072,8 +1240,8 @@ dialog p {
     font-size: 20px;
   }
   .brand img {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
   }
   main {
     padding: 0 22px 35px;
@@ -1261,6 +1429,8 @@ select.field,
   cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* base-select's chosen option otherwise paints beyond the bounded control. */
+  overflow: hidden;
 }
 select.field:hover:not(:disabled),
 .build-picker select:hover:not(:disabled) {
@@ -1275,6 +1445,14 @@ select option {
   .build-picker select,
   ::picker(select) {
     appearance: base-select;
+  }
+  select.field,
+  .build-picker select {
+    /* A label's block-field rule must not replace the selectable control's
+       internal flex layout. Center the chosen value at every control height. */
+    display: flex;
+    align-items: center;
+    line-height: 1.4;
   }
   select::picker-icon {
     display: none;
@@ -1364,7 +1542,11 @@ select option {
 }
 .friends-panels h3 {
   overflow-wrap: anywhere;
+  line-height: 1.3;
 }
+.friends-panels > .panel > .line { align-items: flex-start; column-gap: 8px; }
+.friends-panels > .panel > .line > i { flex: 0 0 20px; margin-top: 2px; }
+.friends-panels > .panel > .line > h3 { flex: 1 1 calc(100% - 28px); min-width: 0; }
 .steam-steps {
   margin: 14px 0 0;
   padding: 0 0 0 22px;
@@ -1424,8 +1606,8 @@ select option {
 dialog[open]:has(.catalog) {
   display: flex;
   flex-direction: column;
-  width: min(720px, 94vw);
-  height: min(656px, 89dvh);
+  width: min(960px, 94vw);
+  height: min(850px, 89dvh);
   max-height: 89dvh;
   overflow: hidden;
 }
@@ -1435,6 +1617,8 @@ dialog:has(.catalog) .dialog-top {
 dialog:has(.catalog) #dialogBody {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 .catalog {
   height: 100%;
@@ -1447,9 +1631,12 @@ dialog:has(.catalog) #dialogBody {
 }
 .catalog .catalog-context {
   flex: none;
-  margin: -9px 0 18px;
+  margin: 0 0 18px;
   color: var(--muted);
   overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .catalog-output {
   flex: 1;
@@ -1502,6 +1689,7 @@ dialog:has(.catalog) #dialogBody {
 }
 .catalog-result {
   width: 100%;
+  min-height: 104px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -1546,6 +1734,14 @@ dialog:has(.catalog) #dialogBody {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.catalog-copy strong,
+.catalog-copy .catalog-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.catalog-selection-error { display: block; margin-top: 6px; color: var(--danger-text); font-size: 12px; }
 .catalog-icon {
   display: grid;
   grid-template: minmax(0, 1fr) / minmax(0, 1fr);
@@ -1712,6 +1908,14 @@ dialog:has(.catalog) #dialogBody {
 .catalog-toolbar select.field {
   width: auto;
   max-width: 65%;
+}
+@media (max-height: 560px) {
+  dialog:has(.catalog) #dialogBody { overflow: auto; scrollbar-gutter: stable; }
+  .catalog { height: auto; min-height: 100%; }
+  .catalog-output { flex: none; display: block; }
+  .catalog-browse { grid-template-rows: auto auto minmax(160px, 40dvh) 40px; }
+  .catalog-detail { height: auto; overflow: visible; }
+  .catalog .catalog-filter-panel { min-height: 220px; max-height: 75dvh; }
 }
 .catalog-filter-panel {
   min-height: 0;
@@ -1938,4 +2142,83 @@ select.field:focus,
   .build-row .build-remove { min-height: var(--control-compact); }
   .build-row .meta { min-width: 0; overflow-wrap: anywhere; }
   .build-picker select { max-width: 100%; flex: 1 1 120px; }
+}
+
+/* Shared asynchronous-operation UI. Counts and status changes never resize controls. */
+.notification-bell, .batch-toggle { position: relative; flex: none; }
+.notification-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f25b64;
+  box-shadow: 0 0 0 2px var(--bg);
+  pointer-events: none;
+}
+.batch-toggle.is-active { color: var(--lime); }
+#dialog[open]:has(.batch-panel) { width: min(900px, 94vw); }
+.batch-panel { min-width: 0; }
+.batch-context { overflow-wrap: anywhere; }
+.batch-overview { border: 1px solid var(--line); border-radius: var(--surface-radius); padding: var(--space-3); background: var(--control-fill); }
+.batch-summary { min-height: 42px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.operation-progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  accent-color: var(--lime);
+  background: var(--line);
+}
+.operation-progress::-webkit-progress-bar { background: var(--line); }
+.operation-progress::-webkit-progress-value { background: var(--lime); border-radius: 999px; }
+.operation-progress::-moz-progress-bar { background: var(--lime); }
+.batch-items { list-style: none; padding: 0 var(--space-2) 0 0; margin: var(--space-4) 0; max-height: min(44dvh, 540px); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.batch-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); min-height: 84px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--card); }
+.batch-item + .batch-item { margin-top: var(--space-2); }
+.batch-item-main { min-width: 0; overflow-wrap: anywhere; }
+.batch-item-title { display: block; font-size: 14px; line-height: 1.5; }
+.batch-item-status { display: block; margin-top: 5px; min-height: 18px; font-size: 12px; color: var(--muted); }
+.batch-item[data-status="installed"] .batch-item-status,
+.batch-item[data-status="already_installed"] .batch-item-status { color: var(--lime); }
+.batch-item[data-status="error"] .batch-item-status,
+.batch-item[data-status="incompatible"] .batch-item-status,
+.batch-item-error, .batch-request-error { color: var(--danger-text); }
+.batch-item-error.is-warning { color: #e9cd87; }
+.batch-item[data-status="needs_review"] .batch-item-status { color: #e9cd87; }
+.batch-item .batch-item-error { margin: 7px 0 0; font-size: 12px; }
+.batch-item > .btn { flex: none; min-height: var(--control-compact); font-size: 12px; padding: 7px 10px; }
+.batch-review { margin-top: var(--space-4); padding: var(--space-3); border: 1px solid #705d35; background: #3b321c33; border-radius: var(--surface-radius); overflow-wrap: anywhere; }
+.batch-review h3 { font-size: 16px; }
+.batch-review li { font-size: 13px; line-height: 1.5; margin-block: 8px; }
+.batch-actions { position: sticky; bottom: 0; background: var(--card); padding-top: var(--space-3); }
+@media (max-width: 540px) {
+  .batch-item { align-items: flex-start; flex-wrap: wrap; }
+  .batch-item > .btn { margin-left: auto; }
+  .batch-actions > .btn { flex: 1 1 auto; }
+  .batch-summary { min-height: 58px; }
+}
+@media (max-height: 560px) {
+  #dialog[open]:has(.batch-panel) { padding: 12px; max-height: calc(100dvh - 16px); }
+  #dialog:has(.batch-panel) .dialog-top { margin-bottom: 6px; }
+  #dialog:has(.batch-panel) .dialog-top h2 { font-size: 20px; }
+  .batch-panel .batch-context { margin: 0 0 6px; font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .batch-overview { padding: 8px; }
+  .batch-panel .batch-summary { min-height: 0; margin: 0 0 4px; font-size: 11px; line-height: 1.4; }
+  .batch-panel .operation-progress { height: 4px; }
+  .batch-items { min-height: 96px; max-height: min(38dvh, 180px); margin: 8px 0; }
+  .batch-item { min-height: 76px; padding: 8px; gap: 8px; }
+  .batch-item-title { font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .batch-item-status { min-height: 16px; margin-top: 4px; font-size: 11px; line-height: 1.4; }
+  /* In a short window actions remain reachable in the body scroll. Keeping
+     them sticky would cover the only visible item instead of helping it. */
+  .batch-actions { position: static; margin-top: 8px; padding-top: 0; gap: 8px; }
+  .batch-actions > .btn { min-height: var(--control-compact); padding: 7px 10px; font-size: 12px; }
+  #dialog:has(.batch-panel) > #notice { margin-top: 6px; padding: 5px 8px; gap: 6px; max-height: min(20dvh, 64px); font-size: 11px; line-height: 1.4; }
+  #dialog:has(.batch-panel) > #notice i { width: 16px; height: 16px; }
+  #dialog:has(.batch-panel) > #notice i svg { width: 12px; height: 12px; }
 }

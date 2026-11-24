@@ -37,6 +37,7 @@ var (
 	ole                = syscall.NewLazyDLL("ole32.dll")
 	user               = syscall.NewLazyDLL("user32.dll")
 	getFinalPath       = kernel.NewProc("GetFinalPathNameByHandleW")
+	getLongPath        = kernel.NewProc("GetLongPathNameW")
 	lockFile           = kernel.NewProc("LockFileEx")
 	setFileInformation = kernel.NewProc("SetFileInformationByHandle")
 	getProcessTimes    = kernel.NewProc("GetProcessTimes")
@@ -97,6 +98,19 @@ func finalPath(handle syscall.Handle) (string, error) {
 	return normalizePath(syscall.UTF16ToString(buf[:n])), nil
 }
 
+func longNamePath(name string) (string, error) {
+	pointer, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]uint16, 32768)
+	n, _, nativeErr := getLongPath.Call(uintptr(unsafe.Pointer(pointer)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 || n >= uintptr(len(buf)) {
+		return "", nativeError(nativeErr)
+	}
+	return normalizePath(syscall.UTF16ToString(buf[:n])), nil
+}
+
 func openNative(name string, access, sharing, creation, flags uint32) (syscall.Handle, error) {
 	pointer, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
@@ -129,7 +143,15 @@ func pinDirectory(name string, allowLink, deletable bool) (*directoryPin, error)
 		return nil, err
 	}
 	actual, err := finalPath(h)
-	if err != nil || !strings.EqualFold(actual, normalizePath(name)) {
+	expected := normalizePath(name)
+	if err == nil && !strings.EqualFold(actual, expected) {
+		// Expand DOS 8.3 component names, not reparse targets. The original
+		// OPEN_REPARSE_POINT handle stays pinned throughout this check. An
+		// ancestor junction must still differ from its resolved finalPath;
+		// resolving both sides through another handle would hide that redirect.
+		expected, err = longNamePath(name)
+	}
+	if err != nil || !strings.EqualFold(actual, expected) {
 		pin.close()
 		return nil, errors.New("канонический путь каталога изменён")
 	}

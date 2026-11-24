@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import queue
 import re
 import secrets
 import shutil
+import ssl
 import threading
 import time
 from contextlib import ExitStack
@@ -24,16 +26,31 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import lifecycle
+from .io_errors import storage_message
+from .version import VERSION
 
 MAX_BYTES = 8 * 1024**3
 MAX_HISTORY = 100
 MAX_PENDING = 24
 CHUNK = 128 * 1024
+MAX_TRANSFER_SECONDS = 30 * 60
 ACTIVE = {"queued", "downloading", "verifying"}
 
 
 class TransferCancelled(ValueError):
     pass
+
+
+class TransferDeadline(TimeoutError):
+    pass
+
+
+class TransferNetworkError(ValueError):
+    """Exhausted transport/HTTP failure, distinct from integrity and local storage."""
+
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def allowed_url(url, hosts):
@@ -74,7 +91,7 @@ def open_https(url, hosts, *, headers=None, timeout=15):
     request = Request(
         url,
         headers={
-            "User-Agent": "BlockHarbor/2.6.0 (desktop launcher; dedt1mon/BlockHarbor)",
+            "User-Agent": f"BlockHarbor/{VERSION} (desktop launcher; dedt1mon/BlockHarbor)",
             "Accept-Encoding": "identity",
             **(headers or {}),
         },
@@ -179,30 +196,44 @@ class TransferManager:
         if not path.is_absolute():
             path = self.root / path
         path = Path(os.path.abspath(path))
-        if not path.resolve().is_relative_to(self.root) or path == self.root:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.root) or resolved == self.root:
             raise ValueError("Файл загрузки должен находиться в данных BlockHarbor.")
-        check = path
-        while check != self.root:
-            if check.is_symlink():
+        # Windows 8.3 aliases such as RUNNER~1 resolve inside the long root but
+        # never become lexically equal to it. Path.parents is finite; comparing
+        # canonical ancestors avoids an endless loop at C:\ (whose parent is C:\).
+        for check in (path, *path.parents):
+            if check.is_symlink() or getattr(check, "is_junction", lambda: False)():
                 raise ValueError("Папка или файл загрузки перенаправлены.")
-            check = check.parent
-        return path
+            if check.resolve() == self.root:
+                return resolved
+        raise ValueError("Не удалось подтвердить папку назначения загрузки.")
 
     def _load(self):
         try:
             if self.index.is_symlink() or self.index.stat().st_size > 2 * 1024 * 1024:
                 return
             saved = json.loads(self.index.read_text(encoding="utf-8"))
-            for row in saved[-MAX_HISTORY:]:
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(saved, list):
+            return
+        for row in saved[-MAX_HISTORY:]:
+            try:
                 if (not isinstance(row, dict)
                     or not isinstance(row.get("id"), str)
                     or not re.fullmatch(r"[a-f0-9]{24}", row["id"])
-                    or not isinstance(row.get("created"), (int, float))
+                    or any(type(row.get(key)) not in (int, float) or not math.isfinite(row[key]) for key in ("created", "updated"))
                     or not isinstance(row.get("config"), dict)
                     or row.get("state") not in ACTIVE | {"completed", "cancelled", "failed", "interrupted"}):
                     continue
                 config = row["config"]
-                self._inside(config["destination"])
+                if (not isinstance(config.get("hosts"), list) or not 0 < len(config["hosts"]) <= 20
+                        or not all(isinstance(host, str) for host in config["hosts"])
+                        or type(config.get("max_size")) is not int or not 0 < config["max_size"] <= MAX_BYTES
+                        or (config.get("size") is not None and (type(config["size"]) is not int or not 0 <= config["size"] <= config["max_size"]))):
+                    continue
+                config["destination"] = str(self._inside(config["destination"]))
                 allowed_url(config["url"], config["hosts"])
                 _hashes(config["hashes"])
                 if row.get("state") in ACTIVE:
@@ -213,8 +244,10 @@ class TransferManager:
                     row["retryable"] = False
                 self.tasks[row["id"]] = row
                 self.cancel_flags[row["id"]] = threading.Event()
-        except (OSError, ValueError, TypeError, AttributeError, KeyError):
-            self.tasks.clear()
+            except (OSError, ValueError, TypeError, AttributeError, KeyError):
+                # One interrupted/corrupt record must not discard unrelated
+                # resumable transfers and their verified content identity.
+                continue
 
     def _persist(self):
         with self.lock:
@@ -404,6 +437,18 @@ class TransferManager:
 
     def _run(self, task_id, status):
         thread = threading.current_thread()
+        parent_scope = lifecycle.current_scope()
+        def cancel_owned_transfer():
+            with self.lock:
+                flag = self.cancel_flags.get(task_id)
+                if flag is not None:
+                    flag.set()
+                opened = self.responses.get(task_id)
+            if opened is not None:
+                lifecycle.abort_response(opened)
+        remove_parent = (parent_scope.on_cancel(cancel_owned_transfer)
+                         if parent_scope is not None and parent_scope is not self.scope
+                         else lambda: None)
         with self.lock:
             self.runners.add(thread)
         try:
@@ -414,6 +459,7 @@ class TransferManager:
             self._persist()
             raise TransferCancelled(str(exc)) from None
         finally:
+            remove_parent()
             with self.lock:
                 self.runners.discard(thread)
 
@@ -427,11 +473,12 @@ class TransferManager:
             with self.lock:
                 config = dict(self.tasks[task_id]["config"])
                 title = self.tasks[task_id]["title"]
+            deadline = time.monotonic() + MAX_TRANSFER_SECONDS
             for attempt in range(1, 4):
                 self._update(task_id, state="downloading", message="Загружаем файл…", attempt=attempt)
                 self._persist()
                 try:
-                    result = self._receive(task_id, config, title, status)
+                    result = self._receive(task_id, config, title, status, deadline=deadline)
                     self._check_cancel(task_id)
                     self._update(task_id, state="completed", message="Файл загружен и проверен.", rate=0)
                     self._persist()
@@ -444,11 +491,19 @@ class TransferManager:
                     code = exc.code
                     exc.close()
                     if code not in {408, 429, 500, 502, 503, 504} or attempt == 3:
-                        raise ValueError(f"Источник вернул HTTP {code}. Повтори загрузку позже.") from None
+                        raise TransferNetworkError(f"Источник вернул HTTP {code}. Повтори загрузку позже.", status_code=code) from None
                 except (OSError, URLError, TimeoutError, HTTPException) as exc:
                     self._check_cancel(task_id)
+                    local = storage_message(exc)
+                    if local:
+                        raise ValueError(local) from exc
+                    reason = exc.reason if isinstance(exc, URLError) else exc
+                    if isinstance(reason, ssl.SSLCertVerificationError):
+                        raise ValueError("Не удалось проверить сертификат источника. Проверь системное время и настройки подключения.") from exc
+                    if isinstance(exc, TransferDeadline):
+                        raise ValueError("Превышено время загрузки. Уже скачанная часть сохранена; повтори операцию после восстановления подключения.") from exc
                     if attempt == 3:
-                        raise ValueError("Связь с источником прервалась. Проверь подключение и повтори загрузку.") from exc
+                        raise TransferNetworkError("Связь с источником прервалась. Проверь подключение и повтори загрузку.") from exc
                 self._update(task_id, message="Связь прервалась. Повторяем подключение…", rate=0)
                 if self.cancel_flags[task_id].wait(attempt):
                     self._check_cancel(task_id)
@@ -464,12 +519,19 @@ class TransferManager:
             if acquired:
                 self.slots.release()
 
-    def _receive(self, task_id, config, title, status):
+    def _receive(self, task_id, config, title, status, *, deadline=None):
         destination = self._inside(config["destination"])
         partial = self.cache / (task_id + ".part")
         metadata = self.cache / (task_id + ".json")
         if partial.is_symlink() or metadata.is_symlink():
             raise ValueError("Частичная загрузка перенаправлена.")
+        if deadline is None:
+            deadline = time.monotonic() + MAX_TRANSFER_SECONDS
+        self._check_deadline(deadline)
+        if self._reuse_verified(task_id, destination, config):
+            partial.unlink(missing_ok=True)
+            metadata.unlink(missing_ok=True)
+            return destination
         start = 0
         saved = {}
         try:
@@ -558,8 +620,11 @@ class TransferManager:
             with partial.open("ab" if start else "wb") as out:
                 while True:
                     self._check_cancel(task_id)
-                    block = response.read(CHUNK)
+                    # read1 permits cancellation/deadline checks between received
+                    # chunks even when a peer keeps a large read alive by trickling.
+                    block = getattr(response, "read1", response.read)(CHUNK)
                     self._check_cancel(task_id)
+                    self._check_deadline(deadline)
                     if not block:
                         break
                     received += len(block)
@@ -587,6 +652,32 @@ class TransferManager:
             contexts.close()
             if response is not None:
                 response.close()
+
+    @staticmethod
+    def _check_deadline(deadline):
+        if time.monotonic() > deadline:
+            raise TransferDeadline("Превышено время загрузки.")
+
+    def _reuse_verified(self, task_id, destination, config):
+        """Reuse a published cache file only after checking all caller-supplied hashes."""
+        if not destination.is_file():
+            return False
+        size = destination.stat().st_size
+        if size > config["max_size"] or (config["size"] is not None and size != config["size"]):
+            return False
+        checks = {name: hashlib.new(name) for name in config["hashes"]}
+        self._update(task_id, state="verifying", message="Проверяем ранее скачанный файл…", rate=0)
+        with destination.open("rb") as source:
+            while block := source.read(1024 * 1024):
+                self._check_cancel(task_id)
+                for digest in checks.values():
+                    digest.update(block)
+        if any(digest.hexdigest() != config["hashes"][name] for name, digest in checks.items()):
+            self._update(task_id, state="downloading", message="Восстанавливаем файл…")
+            return False
+        self._check_cancel(task_id)
+        self._update(task_id, bytes=size, total=size)
+        return destination
 
     def _verify(self, task_id, partial, config):
         self._update(task_id, state="verifying", message="Проверяем контрольные суммы…", rate=0)

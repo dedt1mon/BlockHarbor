@@ -362,7 +362,7 @@ class LoaderCatalogTests(unittest.TestCase):
         self.assertEqual(requests.call_count, 4)
         self.assertIs(result["fabric"]["supported"], True)
         self.assertEqual(result["fabric"]["source"], "live")
-        self.assertIn(future, json.loads(self.path.read_text())["providers"]["fabric"]["versions"])
+        self.assertIn(future, json.loads(self.path.read_text(encoding="utf-8"))["providers"]["fabric"]["versions"])
         with patch.object(loader_catalog, "_fetch_provider", side_effect=AssertionError("second refresh")):
             reopened = by_loader(loader_catalog.availability(self.cache, future))
         self.assertIs(reopened["fabric"]["supported"], True)
@@ -415,6 +415,7 @@ class LoaderCompatibilityApiTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.worker.join(timeout=2)
+        self.app.close()
 
     def call(self, path, data=None, *, auth=True):
         headers = {"Authorization": "Bearer " + self.app.token} if auth else {}
@@ -470,6 +471,7 @@ class LoaderCompatibilityApiTests(unittest.TestCase):
         self.assertNotIn("b1.6 Test Build 3", result["versions"])
         self.assertEqual(result["allVersions"][:3], rows)
         reopened = App(self.app.store.root)
+        self.addCleanup(reopened.close)
         self.assertEqual(reopened.version_catalog()[:3], rows)
         self.assertEqual(reopened.store.profile(self.pid)["version"], "1.20.1")
 

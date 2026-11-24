@@ -21,3 +21,4 @@ logs/
 *.sqlite
 *.sqlite3
 .session/
+artifacts/

@@ -11,6 +11,7 @@ from main import App
 
 class FriendsTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("launcher.aliases.ensure_skin_support"))
         data = tempfile.TemporaryDirectory()
         self.addCleanup(data.cleanup)
         self.app = App(Path(data.name))

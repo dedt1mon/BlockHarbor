@@ -28,6 +28,7 @@ from launcher import (
     cards,
     catalog_batch,
     catalog_search,
+    catalog_sources,
     distances,
     e4steam,
     friends,
@@ -37,6 +38,7 @@ from launcher import (
     preparation,
     room_bridge,
     skin_sync,
+    skin_network,
     skins,
     steam_network,
     staging,
@@ -427,7 +429,7 @@ class App:
         # responsive during downloads without acquiring the game-files lock.
         concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
                       "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState", "experienceFavorite",
-                      "experienceReadNotifications", "experienceClearNotifications"}
+                      "experienceReadNotifications", "experienceClearNotifications", "experienceNotify"}
         if read or action in reads | concurrent:
             return self._feature_action(action, params, read=read)
         with self.coordinator.operation():
@@ -446,12 +448,12 @@ class App:
         if read and action not in reads:
             raise ValueError("Это действие требует запроса на изменение.")
         # Downloads are independent of Minecraft and must remain cancellable.
-        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceReadNotifications", "experienceFavorite"}
+        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceReadNotifications", "experienceFavorite", "experienceNotify"}
         if action in reads or action in {"packPreview", "shareCreate", "shareInvite", "shareInspect", "shareCompare"}:
             return service.handle(action, params)
         with self.lock:
             self.scope.check()
-            if action not in {"updateCancelInstall", "updateAutomatic", "transferCancel", "transferClear"}:
+            if action not in {"updateCancelInstall", "updateAutomatic", "transferCancel", "transferClear", "experienceNotify"}:
                 self.require_mutations_allowed()
             if self.job_snapshot()["busy"] and action not in concurrent:
                 raise ValueError("Дождись завершения текущей операции.")
@@ -524,7 +526,7 @@ class App:
                     else "Для этой версии и загрузчика нет совместимого комплекта e4steam и Public Servers."
                 ),
             },
-            "skinNetwork": skin_sync.support(version, loader),
+            "skinNetwork": bool(aliases.skin_release(version, loader)) or skin_sync.support(version, loader),
             "skinSupport": bool(aliases.skin_release(version, loader)),
             "canUseFabricSkin": loader == "vanilla"
             and bool(aliases.skin_release(version, "fabric")),
@@ -1367,16 +1369,11 @@ class App:
                 self.metrics.prepare(pro["id"])
                 image = self.skin_path()
                 target = nick if mode == "local" else self.player_name()
-                if (
-                    image.is_file()
-                    and target
-                    and aliases.skin_release(pro["version"], pro["loader"])
-                ):
-                    status("Применяем скин персонажа…")
-                    aliases.ensure_skin_support(folder, pro["version"], pro["loader"])
-                    skins.install_local_skin(
-                        image, folder, target, s.get("model", "classic")
-                    )
+                skin_network.prepare_player(
+                    s, folder, pro["version"], pro["loader"], target,
+                    image if image.is_file() else None, s.get("model", "classic"),
+                    mode=mode, status=status, notify=self.experience.notify,
+                )
                 if e4steam.ensure_if_supported(
                     folder,
                     pro["version"],
@@ -1581,6 +1578,9 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.lock:
                     state = self.app.state()
                 self.reply(200, state)
+            elif u.path == "/api/catalog/sources":
+                q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                self.reply(200, catalog_sources.describe(self.app.store.profile(q["id"]), q["kind"], q.get("q", "")))
             elif u.path in ("/api/modrinth/filters", "/api/catalog/filters"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 options = modrinth.catalog_filters.schema(q["kind"])

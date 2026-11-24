@@ -44,10 +44,10 @@ jobs:
       - name: Window lifecycle and community API contracts
         run: |
           node tests/window-lifecycle.cjs
-          node --test community-registry/worker.test.mjs
+          node --test community-registry/worker.test.mjs community-registry/skin-registry.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py
-      - name: Check direct actions and accessible dialog headers
+      - name: Check changed UX and notification history
         run: python -u tools/smoke_ui_refinements.py --output artifacts/ui-refinements
       - name: Save focused UI preview
         if: always()

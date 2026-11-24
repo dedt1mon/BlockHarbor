@@ -41,8 +41,8 @@ dialog:has(.pack-dialog) #dialogBody { flex: 1; min-height: 0; overflow: hidden;
 .pack-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pack-card-footer .btn { font-size: 12px; padding: 8px 10px; min-height: var(--control-compact); }
 .pack-card-footer .meta { font-size: 11px; }
-.pack-pagination { flex: none; position: sticky; bottom: 0; background: var(--bg); padding-top: 10px; }
-.pack-pagination:has(.pack-pager) { border-top: 1px solid var(--line); }
+.pack-pagination { flex: none; background: transparent; padding-top: 10px; }
+.pack-pagination:has(.pack-pager) { border-top: 0; }
 .pack-pagination > :empty { display: none; }
 .pack-pager { display: flex; justify-content: center; gap: 16px; align-items: center; min-width: 0; }
 .pack-pager .meta { min-width: 0; text-align: center; overflow-wrap: anywhere; }
@@ -204,3 +204,9 @@ dialog:has(.pack-dialog[data-pack-view="releases"]) #dialogBody { flex: 0 1 auto
   .pack-pager { gap: 8px; }
   .pack-pager > .btn { padding-inline: 10px; }
 }
+
+.community-publish-footer { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
+.community-publish-footer > .btn { flex: none; min-height: 44px; }
+.community-publish-footer .community-publication-status { flex: 1; min-width: 0; margin: 0; line-height: 1.5; }
+
+.community-publish.is-unverified .community-publication-status { color: var(--muted); }

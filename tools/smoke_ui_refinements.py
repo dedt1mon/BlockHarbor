@@ -1,4 +1,4 @@
-"""Focused 2.6.11 UX checks, using production UI and a stateful local API fixture."""
+"""Focused 2.6.12 UX checks, using production UI and a stateful local API fixture."""
 from __future__ import annotations
 
 import argparse
@@ -38,12 +38,18 @@ class RefinementAPI(FixtureAPI):
         self.downloads = {}
         self.download_receipts = []
         self.pending_job = None
+        self.steam_supported = True
+        self.snapshots = [
+            {"id": "copy-a", "label": "Перед изменением модов", "scope": "build", "world": "", "created": 1770000000, "size": 2048},
+            {"id": "copy-b", "label": "Копия мира после игры", "scope": "world", "world": "Мой мир", "created": 1770000001, "size": 4096},
+        ]
+        self.snapshot_delete_fail_once = True
         self.publications = {"profile-b": [
             {"build": "BH-0123456789AB", "name": "Вторая сборка", "expiresAt": 9999999999}]}
 
     def state(self):
         data = super().state()
-        data.update(appVersion="2.6.11", profiles=copy.deepcopy(self.profiles),
+        data.update(appVersion="2.6.12", profiles=copy.deepcopy(self.profiles),
                     deletedProfiles=copy.deepcopy(self.deleted), active=self.active)
         return data
 
@@ -59,8 +65,13 @@ class RefinementAPI(FixtureAPI):
             pid = (query or {}).get("id", [""])[0]
             return {"publications": copy.deepcopy(self.publications.get(pid, []))}
         result = super().feature(action)
+        if action == "experienceState":
+            result["wardrobe"] = [{"id": "skin-a", "name": "Исследователь", "model": "classic", "preview": "a" * 64},
+                                  {"id": "skin-b", "name": "Строитель", "model": "slim", "preview": "b" * 64}]
+        if action == "careState":
+            result["snapshots"] = copy.deepcopy(self.snapshots)
         if action == "updateState":
-            result.update(current="2.6.11", rollback={"version": "2.6.10"})
+            result.update(current="2.6.12", rollback={"version": "2.6.11"})
         return result
 
     def start_job(self, action, data):
@@ -81,17 +92,29 @@ class RefinementAPI(FixtureAPI):
                 row for row in self.publications.get(data["id"], []) if row["build"] != data["build"]]
         elif action == "communityInstall":
             self.profiles.append({**self.profile, "id": "community-installed", "name": "Сборка игрока"})
+        elif action == "communityPublish":
+            self.publications.setdefault(data["id"], []).append({"build": "BH-FEDCBA987654", "name": data["name"], "expiresAt": 9999999999})
         self.pending_job = None
         self.job.update(busy=False, ok=True, message="Операция завершена.")
 
     def action(self, data):
         action = data["action"]
-        custom = {"deleteBuild", "restoreBuild", "purgeBuild", "communityInstall", "communityUnpublish",
+        custom = {"create", "deleteBuild", "restoreBuild", "purgeBuild", "communityInstall", "communityUnpublish", "communityPublish", "careDeleteSnapshot",
                   "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
         if action not in custom:
             return super().action(data)
         self.actions.append(copy.deepcopy(data))
-        if action == "deleteBuild":
+        if action == "create":
+            assert data["allowWithoutSteam"] is True, "Creation must use the visible inline Steam notice"
+            self.active = "profile-created"
+            self.profiles.append({**self.profile, "id": self.active, "name": data["name"],
+                                  "version": data["version"], "loader": data["loader"]})
+        elif action == "careDeleteSnapshot":
+            assert data["id"] == self.active
+            row = next(row for row in self.snapshots if row["id"] == data["snapshot"])
+            self.snapshots.remove(row)
+            return {"ok": True, "message": "Резервная копия удалена."}
+        elif action == "deleteBuild":
             row = next(row for row in self.profiles if row["id"] == data["id"])
             self.profiles.remove(row)
             self.deleted.append({**row, "purging": False})
@@ -109,6 +132,9 @@ class RefinementAPI(FixtureAPI):
             return self.start_job(action, data)
         elif action == "communityUnpublish":
             assert any(row["build"] == data["build"] for row in self.publications.get(data["id"], []))
+            return self.start_job(action, data)
+        elif action == "communityPublish":
+            assert data["name"] and data["category"], "Publishing lost required form values"
             return self.start_job(action, data)
         elif action == "communityInstall":
             assert data["allowWithoutSteam"] is False, "Supported Steam unexpectedly bypassed compatibility"
@@ -144,6 +170,13 @@ class RefinementAPI(FixtureAPI):
         request = route.request
         url = urlsplit(request.url)
         query = parse_qs(url.query)
+        if url.path == "/api/action" and request.post_data_json.get("action") == "careDeleteSnapshot" and self.snapshot_delete_fail_once:
+            assert request.headers.get("authorization") == "Bearer " + TOKEN
+            self.snapshot_delete_fail_once = False
+            self.actions.append(copy.deepcopy(request.post_data_json))
+            self.requests.append({"path": url.path, "query": query})
+            route.fulfill(status=409, json={"error": "Копия используется другой операцией."})
+            return
         custom = {"/api/feature", "/api/releases", "/api/loaders",
                   "/api/steam/compatibility", "/api/build-export"}
         download = url.path.startswith("/api/build-download/")
@@ -175,7 +208,7 @@ class RefinementAPI(FixtureAPI):
                           "loaders": [{"id": name, "supported": True, "message": "Готово"}
                                       for name in ("vanilla", "fabric", "forge", "neoforge", "quilt")]}
             elif url.path == "/api/steam/compatibility":
-                result = {"supported": True, "acknowledged": True, "variants": [],
+                result = {"supported": self.steam_supported, "acknowledged": self.steam_supported, "variants": [],
                           "version": query.get("version", [""])[0], "loader": query.get("loader", [""])[0]}
             else:
                 assert request.method == "POST"
@@ -267,8 +300,9 @@ def navigate(page, view, ready):
 
 
 def last_action(api, action, **expected):
-    row = api.actions[-1]
-    assert row["action"] == action, row
+    rows = [row for row in api.actions if row["action"] == action]
+    assert rows, "No recorded action: " + action
+    row = rows[-1]
     for key, value in expected.items():
         assert row.get(key) == value, (key, row)
     return row
@@ -315,6 +349,34 @@ def header_metrics(page, dialog="#dialog"):
     return result
 
 
+def row_metrics(container, selector):
+    result = container.evaluate("""(host, selector) => {
+      const elements = [...host.querySelectorAll(selector)].filter(el => el.getClientRects().length);
+      return elements.map(el => { const r = el.getBoundingClientRect();
+        return {text:el.textContent.trim(), x:r.x, y:r.y, width:r.width, height:r.height, centerY:r.y+r.height/2}; });
+    }""", selector)
+    assert len(result) >= 2, result
+    assert max(item["centerY"] for item in result) - min(item["centerY"] for item in result) <= 1, result
+    assert all(a["x"] + a["width"] <= b["x"] + 1 for a, b in zip(result, result[1:])), result
+    return result
+
+
+def effective_background(locator):
+    return locator.evaluate("""el => {
+      for (let node=el; node; node=node.parentElement) {
+        const value=getComputedStyle(node).backgroundColor;
+        if(value !== 'rgba(0, 0, 0, 0)' && value !== 'transparent') return value;
+      }
+      return 'transparent';
+    }""")
+
+
+def notice_in_history(page, api, message, level):
+    page.wait_for_function("!savingNotice && pendingNotices.length === 0")
+    assert any(row["message"] == message and row["level"] == level for row in api.notifications), api.notifications
+    assert page.locator("#notice").is_hidden(), "Operation outcome appeared as a popup"
+
+
 def check_screens(page, api, output, width, height, case):
     case["stage"] = "updates"
     navigate(page, "settings", "#settingsDownloadsTab")
@@ -326,6 +388,12 @@ def check_screens(page, api, output, width, height, case):
     assert "Установлена" not in page.locator("#updatesScreen").inner_text()
     assert page.locator('.updater-automatic [data-updates-action="rollbackDialog"]').is_visible()
     assert page.locator(".updater-automatic #updateRelease").count() == 1
+    rollback = page.locator('[data-updates-action="rollbackDialog"]')
+    actions = rollback.locator("xpath=..")
+    assert actions.locator('[data-updates-action="updateCheck"]').count() == 1, "Rollback is not next to Check for updates"
+    case["updatesActions"] = row_metrics(actions, ":scope > button")
+    assert "SHA-256" not in page.locator("#updatesScreen").inner_text()
+    assert "Подписи издателя" not in page.locator("#updatesScreen").inner_text()
     page.screenshot(path=str(output / f"{width}-updates.png"))
 
     case["stage"] = "profile-friends"
@@ -335,6 +403,15 @@ def check_screens(page, api, output, width, height, case):
     character, wardrobe = (panels.nth(i).bounding_box() for i in range(2))
     assert wardrobe["y"] >= character["y"] + character["height"], (character, wardrobe)
     assert abs(wardrobe["x"] - character["x"]) <= 1
+    page.locator(".wardrobe-card").first.wait_for(state="visible")
+    heading = page.locator(".wardrobe-heading")
+    case["wardrobeHeading"] = row_metrics(heading, ":scope > h3, :scope > button")
+    assert heading.evaluate("""el => {const card=el.closest('.panel'), c=card.getBoundingClientRect(), s=getComputedStyle(card);
+      return Math.abs(el.getBoundingClientRect().top - c.top - parseFloat(s.paddingTop) - parseFloat(s.borderTopWidth)) <= 1;}"""), "Wardrobe heading has extra top spacing"
+    for buttons in page.locator(".wardrobe-actions").all():
+        metrics = row_metrics(buttons, ":scope > button")
+        assert [row["text"] for row in metrics] == ["Надеть", "Удалить"], metrics
+        assert abs(metrics[0]["height"] - metrics[1]["height"]) <= 1, metrics
     check_layout(page)
     page.locator(".profile-panels").screenshot(path=str(output / f"{width}-profile.png"))
     navigate(page, "friends", ".friends-panels")
@@ -383,6 +460,81 @@ def check_screens(page, api, output, width, height, case):
             assert page.locator("#confirmScreenshotPurge, #confirmScreenshotDelete").count() == 0
             if page.locator("#dialog").evaluate("el => el.open"):
                 page.locator("#dialogClose").click()
+
+    case["stage"] = "addon-filters-and-source-links"
+    page.evaluate("navigate('addons')")
+    page.locator("[data-care-content]").wait_for(state="visible")
+    page.evaluate("openModrinth(active(), 'mods')")
+    page.locator(".catalog-choice").first.wait_for(state="visible")
+    page.locator('.catalog-external-sources a[data-catalog-source="curseforge"]').wait_for(state="visible")
+    query = "оптимизация & свет"
+    page.locator(".catalog-search input").fill(query)
+    page.locator(".catalog-search input").press("Enter")
+    page.wait_for_function("""query => [...document.querySelectorAll('.catalog-external-sources a')].length === 2 &&
+      [...document.querySelectorAll('.catalog-external-sources a')].every(a => {
+        const u=new URL(a.href); return u.searchParams.get(a.dataset.catalogSource==='curseforge'?'search':'keywords') === query;
+      })""", arg=query)
+    case["sourceLinks"] = page.locator(".catalog-external-sources a").evaluate_all("els => els.map(el => ({title:el.textContent.trim(), href:el.href}))")
+    assert {urlsplit(row["href"]).netloc for row in case["sourceLinks"]} == {"www.curseforge.com", "www.planetminecraft.com"}
+    case["addonPagerBackground"] = effective_background(page.locator(".catalog-pager"))
+    page.locator("[data-catalog-filters]").click()
+    footer = page.locator(".catalog-filter-footer")
+    footer.wait_for(state="visible")
+    metrics = row_metrics(footer, ":scope > button")
+    assert [row["text"] for row in metrics] == ["К каталогу", "Сбросить фильтр", "Применить"], metrics
+    assert max(row["width"] for row in metrics) - min(row["width"] for row in metrics) <= 1, metrics
+    check_layout(page, dialog=True)
+    page.screenshot(path=str(output / f"{width}-addon-filters.png"))
+    page.locator('[data-group="category"][data-value="optimization"]').click()
+    page.locator("[data-filter-apply]").click()
+    settle(page)
+    searches = [row for row in api.requests if row["path"] == "/api/catalog/search"]
+    assert json.loads(searches[-1]["query"]["filters"][0]) == {"category": ["optimization"]}
+    page.locator("[data-catalog-filters]").click()
+    page.locator("[data-filter-reset]").click()
+    page.locator("[data-filter-apply]").click()
+    settle(page)
+    assert page.evaluate("catalogPreferences.get(active().id + '/mods').preset.filters") == "{}"
+    previous_searches = sum(row["path"] == "/api/catalog/search" for row in api.requests)
+    page.locator("[data-catalog-filters]").click()
+    page.locator('[data-group="category"][data-value="utility"]').click()
+    page.locator("[data-filter-cancel]").click()
+    settle(page)
+    assert page.locator("#catalogFilterPanel").is_hidden()
+    assert page.evaluate("catalogPreferences.get(active().id + '/mods').preset.filters") == "{}"
+    assert sum(row["path"] == "/api/catalog/search" for row in api.requests) == previous_searches
+    page.locator("#dialogClose").click()
+
+    case["stage"] = "backup-delete-and-notification-history"
+    page.evaluate("kind='worlds';navigate('addons')")
+    page.locator('[data-care="history"]').first.wait_for(state="visible")
+    page.locator('[data-care="history"]').first.click()
+    delete_copy = page.locator('[data-care-delete-snapshot="copy-a"]')
+    delete_copy.wait_for(state="visible")
+    assert delete_copy.locator("svg").count() == 1, "Backup removal needs a trash icon"
+    assert delete_copy.get_attribute("aria-label"), "Backup removal needs an accessible name"
+    check_layout(page, dialog=True)
+    page.screenshot(path=str(output / f"{width}-world-copies.png"))
+    delete_copy.click()
+    settle(page)
+    last_action(api, "careDeleteSnapshot", id=api.active, snapshot="copy-a")
+    assert len(api.snapshots) == 2 and delete_copy.is_enabled(), "Failed deletion removed a copy or left its button locked"
+    notice_in_history(page, api, "Копия используется другой операцией.", "error")
+    delete_copy.click()
+    page.wait_for_function("!document.querySelector('[data-care-delete-snapshot=\"copy-a\"]')")
+    settle(page)
+    assert len(api.snapshots) == 1 and page.locator(".care-point").count() == 1
+    notice_in_history(page, api, "Резервная копия удалена.", "success")
+    page.locator("#dialogClose").click()
+    page.locator(".notification-bell").click()
+    page.locator(".notification-history").wait_for(state="visible")
+    settle(page)
+    assert "Копия используется другой операцией." in page.locator(".notification-history .error").inner_text()
+    assert "Резервная копия удалена." in page.locator(".notification-history").inner_text()
+    assert not page.locator(".notification-dot").is_visible()
+    assert page.locator("#notice").is_hidden()
+    page.screenshot(path=str(output / f"{width}-notification-history.png"))
+    page.locator("#dialogClose").click()
 
     case["stage"] = "build-actions"
     navigate(page, "builds", '[data-export-build="profile-a"]')
@@ -438,12 +590,33 @@ def check_screens(page, api, output, width, height, case):
             assert not api.deleted and page.locator('[data-purge-build="profile-a"]').count() == 0
 
     case["stage"] = "publication-and-headers"
+    api.steam_supported = False
     page.locator('[data-act="create"]').click()
     page.wait_for_function("document.querySelector('[name=createBuildSubmit]') && !document.querySelector('[name=createBuildSubmit]').disabled")
     assert page.locator("#loaderStatus").get_attribute("data-state") == "supported"
     assert page.locator("[name=createBuildSubmit]").evaluate("el => el.form.id") == "newForm"
+    page.wait_for_function("document.querySelector('#buildSteamStatus')?.textContent.includes('недоступно')")
+    case["createActions"] = row_metrics(page.locator("#newForm .new-build-actions"), ":scope > button")
+    assert [row["text"] for row in case["createActions"]] == ["Создать сборку", "Обновить список версий"]
+    assert page.locator("#dialogHeaderActions [name=createBuildSubmit]").count() == 0
+    requests_before_refresh = len(api.requests)
+    page.locator('#newForm [data-act="versions"]').click()
+    page.wait_for_function("!document.querySelector('[name=createBuildSubmit]').disabled")
+    settle(page)
+    assert any(row["path"] == "/api/releases" for row in api.requests[requests_before_refresh:]), "Refresh versions did not reload its catalog"
     case["headers"]["new-build"] = header_metrics(page)
-    page.locator("#dialogClose").click()
+    page.screenshot(path=str(output / f"{width}-new-build.png"))
+    page.locator("#buildName").fill("Сборка без лишних подтверждений")
+    page.locator("#newForm [name=createBuildSubmit]").click()
+    page.wait_for_function("!document.querySelector('#dialog').open")
+    settle(page)
+    last_action(api, "create", name="Сборка без лишних подтверждений", allowWithoutSteam=True)
+    assert sum(row["action"] == "create" for row in api.actions) == 1
+    assert any(row["id"] == "profile-created" for row in api.profiles)
+    assert page.locator("#steamCompatibilityDialog").count() == 0
+    notice_in_history(page, api, "Сборка создана.", "success")
+    api.steam_supported = True
+    navigate(page, "builds", '[data-pack-share="profile-b"]')
     page.locator('[data-pack-share="profile-b"]').click()
     withdraw = page.locator('[data-pack-withdraw="BH-0123456789AB"]')
     withdraw.wait_for(state="visible")
@@ -457,12 +630,33 @@ def check_screens(page, api, output, width, height, case):
     settle(page)
     assert page.locator("#communityPublishSubmit").is_enabled() and not api.publications["profile-b"]
     case["headers"]["publish"] = header_metrics(page)
+    case["publishActions"] = row_metrics(page.locator(".community-publish-footer"), ":scope > button, :scope > .community-publication-status")
+    assert page.locator("#dialogHeaderActions #communityPublishSubmit").count() == 0
+    assert page.locator("#communityPublishSubmit").evaluate("el => el.form.id") == "communityPublishForm"
+    page.locator('#communityPublishForm [name="category"]').select_option("adventure")
+    page.screenshot(path=str(output / f"{width}-publish.png"))
+    page.locator("#communityPublishSubmit").click()
+    page.wait_for_function("state.job && state.job.busy")
+    last_action(api, "communityPublish", id="profile-b", category="adventure", includeConfigs=False)
+    assert page.locator("#communityPublishSubmit").is_disabled()
+    complete_job(page, api)
+    page.locator('[data-pack-withdraw="BH-FEDCBA987654"]').wait_for(state="visible")
+    assert "опубликовано" in page.locator(".community-publication-status").inner_text().lower()
     page.locator("#dialogClose").click()
 
     case["stage"] = "catalog-and-compact-header"
     page.locator('[data-act="packCatalog"]').click()
     page.locator("[data-pack-project]").first.wait_for(state="visible")
     settle(page)
+    pager = page.locator(".pack-pagination")
+    pager_top = pager.bounding_box()["y"]
+    assert effective_background(pager) == case["addonPagerBackground"], "Pack pager background differs from the add-on catalog"
+    results = page.locator(".pack-results")
+    assert results.bounding_box()["y"] + results.bounding_box()["height"] <= pager_top + 1, "Pack results overlap pagination"
+    results.evaluate("el => el.scrollTop = el.scrollHeight")
+    settle(page)
+    assert abs(pager.bounding_box()["y"] - pager_top) <= 1, "Scrolling moved pack pagination"
+    page.screenshot(path=str(output / f"{width}-pack-catalog.png"))
     page.locator("[data-pack-project]").first.click()
     page.locator("[data-pack-version]").wait_for(state="visible")
     check_layout(page, dialog=True)
@@ -555,7 +749,7 @@ def main():
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
-                    print(f"PASS: 2.6.11 UX at {width}x{height}", flush=True)
+                    print(f"PASS: 2.6.12 UX at {width}x{height}", flush=True)
                 except Exception as error:
                     case["error"] = type(error).__name__ + ": " + str(error)
                     case["traceback"] = traceback.format_exc()

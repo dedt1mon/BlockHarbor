@@ -116,13 +116,13 @@
     return `<section class="panel stack settings-card"><h3>Оформление</h3><label>Масштаб текста<select class="field" id="uiScale">${[85,90,100,110,120].map(v=>`<option value="${v}" ${(p.scale||100)===v?"selected":""}>${v}%</option>`).join("")}</select></label><label class="inline-check"><input type="checkbox" id="reducedMotion" ${p.reducedMotion?"checked":""}>Уменьшить анимацию</label><div class="actions">${expButton("savePreferences","Сохранить оформление","check")}</div></section>`;
   }
   function wardrobe() {
-    return `<section class="panel"><div class="splitbar"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><p class="note">Сохрани несколько вариантов и выбирай перед следующим входом в игру.</p><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
+    return `<section class="panel wardrobe-panel"><div class="wardrobe-heading"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><p class="note">Сохрани несколько вариантов и выбирай перед следующим входом в игру.</p><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
   }
   async function loadWardrobe() {
     const el = $("#wardrobe"); if (!el) return;
     try {
       const data = await query("experienceState"); if (!el.isConnected) return;
-      el.innerHTML = data.wardrobe.length ? data.wardrobe.map(s=>`<article class="wardrobe-card">${media(s.preview)?`<img src="${media(s.preview)}" alt="" loading="lazy">`:ic("user")}<strong>${esc(s.name)}</strong><small>${s.model==="slim"?"Slim":"Classic"}</small><div class="actions">${expButton("useSkin","Надеть","check",`data-skin="${s.id}"`)}${expButton("deleteSkin","Удалить","trash",`data-skin="${s.id}" ${wardrobeDeletes.has(s.id) ? "disabled" : ""}`)}</div></article>`).join("") : '<p class="note">В гардеробе пока пусто. Сначала выбери и сохрани скин в профиле.</p>';
+      el.innerHTML = data.wardrobe.length ? data.wardrobe.map(s=>`<article class="wardrobe-card">${media(s.preview)?`<img src="${media(s.preview)}" alt="" loading="lazy">`:ic("user")}<strong>${esc(s.name)}</strong><small>${s.model==="slim"?"Slim":"Classic"}</small><div class="wardrobe-actions">${expButton("useSkin","Надеть","check",`data-skin="${s.id}"`)}${expButton("deleteSkin","Удалить","trash",`data-skin="${s.id}" ${wardrobeDeletes.has(s.id) ? "disabled" : ""}`)}</div></article>`).join("") : '<p class="note">В гардеробе пока пусто. Сначала выбери и сохрани скин в профиле.</p>';
     } catch(e) { if(el.isConnected) el.textContent = e.message; }
   }
   function galleryState(pid) {
@@ -269,7 +269,7 @@
       try {
         await act("experienceClearNotifications");
         if (el.isConnected && $("#dialog").open) await notifications();
-        return notice("История очищена.");
+        return;
       } finally {
         if (el.isConnected) el.disabled = false;
       }

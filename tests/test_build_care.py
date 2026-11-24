@@ -103,6 +103,87 @@ class BuildCareTests(unittest.TestCase):
         self.assertFalse(self.care.state(self.pid)["snapshots"])
         self.assertEqual("private", external.read_text())
 
+    def test_delete_snapshot_removes_only_selected_copy_not_world_or_other_profile(self):
+        world = self.world(data=b"live world must survive")
+        selected = self.care.snapshot(self.pid, scope="world", world="World")
+        selected_path, _ = self.care._snapshot(self.pid, selected)
+        retained = self.care.snapshot(self.pid)
+        retained_path, _ = self.care._snapshot(self.pid, retained)
+        other = self.store.create("Other profile", "1.20.2", "fabric")
+        other_copy = self.care.snapshot(other)
+        other_path, _ = self.care._snapshot(other, other_copy)
+        other_before = other_path.read_bytes()
+        retained_before = retained_path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.care.handle("careDeleteSnapshot", {"id": self.pid, "snapshot": other_copy})
+        result = self.care.handle("careDeleteSnapshot", {"id": self.pid, "snapshot": selected})
+        self.assertTrue(result["ok"])
+        self.assertFalse(selected_path.exists())
+        self.assertEqual((world / "level.dat").read_bytes(), b"live world must survive")
+        self.assertEqual((world / "session.lock").read_bytes(), b"lock")
+        self.assertEqual(retained_path.read_bytes(), retained_before)
+        self.assertEqual(other_path.read_bytes(), other_before)
+        with self.store.connection() as db:
+            remaining = {row[0] for row in db.execute("SELECT id FROM care_snapshots")}
+        self.assertEqual(remaining, {retained, other_copy})
+
+    def test_delete_snapshot_rejects_redirected_archive_profile_and_recovery_root(self):
+        for component in ("archive", "profile", "recovery"):
+            with self.subTest(component=component):
+                store = Store(Path(self.temp.name) / ("link-" + component))
+                pid = store.create("Snapshot owner", "1.20.2", "fabric")
+                care = BuildCare(store)
+                sid = care.snapshot(pid)
+                archive, _ = care._snapshot(pid, sid)
+                outside = Path(self.temp.name) / ("outside-" + component)
+                if component == "archive":
+                    outside.write_bytes(b"external archive")
+                    redirected, protected = archive, outside
+                else:
+                    outside.mkdir()
+                    redirected = archive.parent if component == "profile" else care.root
+                    target = outside if component == "profile" else outside / pid
+                    target.mkdir(exist_ok=True)
+                    protected = target / archive.name
+                    protected.write_bytes(b"external archive")
+                redirected.rename(redirected.with_name(redirected.name + ".original"))
+                redirected.symlink_to(outside, target_is_directory=component != "archive")
+                with self.assertRaises(ValueError):
+                    care.handle("careDeleteSnapshot", {"id": pid, "snapshot": sid})
+                self.assertEqual(protected.read_bytes(), b"external archive")
+                self.assertTrue(redirected.is_symlink())
+                with store.connection() as db:
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM care_snapshots WHERE id=? AND pid=?", (sid, pid)).fetchone()[0], 1)
+
+    def test_delete_snapshot_unlink_failure_keeps_retryable_record(self):
+        world = self.world()
+        sid = self.care.snapshot(self.pid, scope="world", world="World")
+        archive, _ = self.care._snapshot(self.pid, sid)
+        before = archive.read_bytes()
+        original_unlink = Path.unlink
+        def inaccessible(path, *args, **kwargs):
+            if path == archive:
+                raise PermissionError("Archive is in use")
+            return original_unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", inaccessible), self.assertRaises(PermissionError):
+            self.care.handle("careDeleteSnapshot", {"id": self.pid, "snapshot": sid})
+        self.assertEqual(archive.read_bytes(), before)
+        self.assertEqual((world / "level.dat").read_bytes(), b"world one")
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM care_snapshots WHERE id=?", (sid,)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM care_history WHERE action='Удалена резервная копия'").fetchone()[0], 0)
+        self.assertTrue(self.care.handle("careDeleteSnapshot", {"id": self.pid, "snapshot": sid})["ok"])
+
+    def test_delete_snapshot_can_retire_missing_archive_without_touching_other_data(self):
+        world = self.world()
+        sid = self.care.snapshot(self.pid, scope="world", world="World")
+        archive, _ = self.care._snapshot(self.pid, sid)
+        archive.unlink()
+        self.assertTrue(self.care.handle("careDeleteSnapshot", {"id": self.pid, "snapshot": sid})["ok"])
+        self.assertEqual((world / "level.dat").read_bytes(), b"world one")
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM care_snapshots WHERE id=?", (sid,)).fetchone()[0], 0)
+
     def test_checksum_damage_does_not_change_build(self):
         file = jar(self.folder / "mods" / "example.jar")
         point = self.care.snapshot(self.pid)

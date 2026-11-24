@@ -273,7 +273,7 @@ def _copy_sections(source, target, sections):
 class BuildCare:
     READ_ACTIONS = {"careState", "careDetails", "careWorlds", "careHistory"}
     JOBS = {"careSnapshot", "careWorldBackup", "careBackupWorlds", "careRestore", "careClone", "careCheckUpdates", "careApplyUpdates"}
-    ACTIONS = READ_ACTIONS | JOBS | {"careToggle", "careRemove", "carePin", "careRetention", "careAutoBackup"}
+    ACTIONS = READ_ACTIONS | JOBS | {"careToggle", "careRemove", "carePin", "careRetention", "careAutoBackup", "careDeleteSnapshot"}
 
     def __init__(self, store, transfers=None, on_clone=None, *, owner=None, recover=True):
         self.store = store
@@ -521,6 +521,30 @@ class BuildCare:
         if not path.is_file() or _reparse(path):
             raise ValueError("Файл резервной копии отсутствует или перенаправлен.")
         return path, dict(row)
+
+    def delete_snapshot(self, pid, sid):
+        """Delete one owned recovery archive without touching the current world."""
+        if not isinstance(sid, str) or not _ID.fullmatch(sid):
+            raise ValueError("Неверная точка восстановления.")
+        with self.lock:
+            self._writable_root(pid)
+            if _reparse(self.root):
+                raise ValueError("Папка резервных копий перенаправлена. Удаление остановлено.")
+            directory = self._archive_dir(pid)
+            with self.store.connection() as db:
+                row = db.execute("SELECT label,world FROM care_snapshots WHERE id=? AND pid=?", (sid, pid)).fetchone()
+            if row is None:
+                raise ValueError("Эта копия уже удалена или относится к другой сборке.")
+            path = directory / (sid + ".zip")
+            if os.path.lexists(path) and _reparse(path):
+                raise ValueError("Файл резервной копии перенаправлен. Удаление остановлено.")
+            # A missing archive can be removed from history; an I/O failure must
+            # keep its row so the user can retry without losing the reference.
+            path.unlink(missing_ok=True)
+            with self.store.connection() as db:
+                db.execute("DELETE FROM care_snapshots WHERE id=? AND pid=?", (sid, pid))
+            self.history(pid, "Удалена резервная копия", row["label"] + (": " + row["world"] if row["world"] else ""))
+        return {"ok": True, "message": "Резервная копия удалена."}
 
     def _extract(self, path, directory, pid):
         _archive_limit(path)
@@ -1354,6 +1378,8 @@ class BuildCare:
             if p.get("enabled") is not True:
                 raise ValueError("Автоматические копии миров после выхода из игры обязательны; отключить их нельзя.")
             return {"ok": True, "message": "Копии миров после выхода из игры сохраняются автоматически."}
+        if action == "careDeleteSnapshot":
+            return self.delete_snapshot(pid, p.get("snapshot"))
         if action == "careRestore":
             return self.restore(pid, p.get("snapshot"), status)
         if action == "careClone":

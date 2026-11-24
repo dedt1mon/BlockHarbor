@@ -198,6 +198,29 @@ test('invalid public metadata, incomplete ZIP and checksum failure never become 
   assert.equal((await (await api.call('GET','builds')).json()).total,0);
 });
 
+test('search never waits for expired archive cleanup and exact codes ignore browsing filters',async t => {
+  const api=registry(t), first=await api.open(metadata(small));
+  await first.put(1,small);
+  const expired=await (await first.finish()).json();
+  const second=await api.open(metadata(small));
+  await second.put(1,small);
+  const visible=await (await second.finish()).json();
+  api.env.DB.db.prepare('UPDATE builds SET created=0 WHERE id=?').run(expired.id);
+  let deletions=0;
+  api.env.BUCKET.delete=async()=>{deletions++; throw Error('Storage cleanup is unavailable');};
+  const response=await api.call('GET','builds?q='+visible.id.toLowerCase()+'&version=1.21.1&loader=neoforge&category=magic&offset=20');
+  assert.equal(response.status,200);
+  const page=await response.json();
+  assert.deepEqual(page.hits,[visible]);
+  assert.equal(page.offset,0);
+  assert.equal(deletions,0);
+  assert.deepEqual((await (await api.call('GET','builds')).json()).hits,[visible]);
+  assert.equal(deletions,0);
+  assert.equal((await api.call('GET','builds/'+expired.id)).status,404);
+  api.env.BUCKET.objects.delete(`builds/${visible.id}.zip`);
+  assert.equal((await api.call('GET','builds/'+visible.id)).status,503);
+});
+
 test('expired incomplete uploads are pruned and reservations obey storage budget',async t => {
   const api = registry(t);
   const upload = await api.open(metadata(small));

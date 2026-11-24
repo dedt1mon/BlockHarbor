@@ -29,7 +29,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceNotify", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
     JOBS = set()
 
     def __init__(self, store):
@@ -93,8 +93,9 @@ class Experience:
             row = db.execute("SELECT COALESCE(SUM(is_read=0),0) AS unread,COALESCE(MAX(id),0) AS lastId FROM notifications").fetchone()
         return {"ok": True, "unread": row["unread"], "lastId": row["lastId"]}
 
-    def notify(self, message, level="info", *, event_key=None, created=None):
+    def notify(self, message, level="info", *, event_key=None, created=None, deduplicate_recent=False):
         message = redact(str(message), self.store.root)[:1000]
+        level = level if level in ("info", "success", "error") else "info"
         if not message:
             return False
         if event_key is not None and (not isinstance(event_key, str) or not 1 <= len(event_key) <= 240):
@@ -108,9 +109,10 @@ class Experience:
                 inserted = db.execute("INSERT OR IGNORE INTO notification_events(event_key,created) VALUES(?,?)", (event_key, moment))
                 if not inserted.rowcount:
                     return False
-            last = db.execute("SELECT message,created FROM notifications ORDER BY id DESC LIMIT 1").fetchone()
-            if event_key is None and last and last["message"] == message and moment - last["created"] < 4:
-                return False
+            if event_key is None or deduplicate_recent:
+                recent = db.execute("SELECT 1 FROM notifications WHERE message=? AND level=? AND created>? LIMIT 1", (message, level, moment - 4)).fetchone()
+                if recent:
+                    return False
             db.execute("UPDATE settings SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='notificationSequence'")
             sequence = int(db.execute("SELECT value FROM settings WHERE key='notificationSequence'").fetchone()[0])
             db.execute("INSERT INTO notifications(id,created,message,level,is_read) VALUES(?,?,?,?,0)",
@@ -618,6 +620,14 @@ class Experience:
             return self.purge_screenshots(p["id"], p.get("batch"), p.get("token"))
         if action == "experienceNotifications":
             return self.notifications()
+        if action == "experienceNotify":
+            message, level, key = p.get("message"), p.get("level"), p.get("eventKey")
+            if not isinstance(message, str) or not message.strip() or len(message) > 1000:
+                raise ValueError("Некорректное уведомление.")
+            if level not in ("info", "success", "error") or not isinstance(key, str) or not re.fullmatch(r"ui:[A-Za-z0-9:._-]{1,200}", key):
+                raise ValueError("Некорректный тип уведомления.")
+            self.notify(message, level, event_key=key, deduplicate_recent=True)
+            return {"ok": True, "unread": self.notification_unread()}
         if action == "experienceReadNotifications":
             return self.read_notifications(p.get("throughId"))
         if action == "experienceClearNotifications":

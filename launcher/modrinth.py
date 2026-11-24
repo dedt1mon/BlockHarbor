@@ -117,9 +117,12 @@ def _open(url, hosts, body=None, *, timeout=30):
         ) from exc
 
 
-@lru_cache(maxsize=48)
+@lru_cache(maxsize=128)
 def _get_cached(url, period):
-    with lifecycle.response(_open(url, _API_HOSTS)) as response:
+    # Search and version metadata share the cache. Keep several result pages
+    # warm, and never occupy a window's bounded worker for a 30-second connect.
+    # Archive transfers have their own retry/timeout policy.
+    with lifecycle.response(_open(url, _API_HOSTS, timeout=8)) as response:
         return _read_response(response)
 
 
@@ -201,14 +204,15 @@ def search(profile, kind, query, offset, filters=None, sort="relevance", source=
             raise
         ordered = _order_hits(publisher, sort)
         return {"hits": ordered[offset:offset + _PAGE], "offset": offset, "limit": _PAGE,
-                "total": len(ordered), "partial": True,
-                "message": "Основной каталог недоступен. Показаны подходящие выпуски авторов с GitHub."}
+                "total": len(ordered), "partial": True, "primaryUnavailable": True,
+                "message": "Modrinth недоступен. Показаны подходящие выпуски авторов с GitHub."}
     remote = [
         {"id": _id(h["project_id"]), "title": h["title"], "author": h.get("author", ""),
          "description": h.get("description", ""), "downloads": h.get("downloads", 0),
          "icon": _icon_url(h.get("icon_url"), h["project_id"]), "follows": h.get("follows", 0),
          "newest": h.get("date_created", ""), "updated": h.get("date_modified", ""),
-         "source": "community", "sourceTitle": "Основной каталог"}
+         "projectType": h.get("project_type", category),
+         "source": "community", "sourceTitle": "Modrinth"}
         for h in result["hits"]
     ]
     if not publisher:
@@ -216,7 +220,7 @@ def search(profile, kind, query, offset, filters=None, sort="relevance", source=
     for hit in publisher:
         # Opening a mixed result also lists newer releases from the main catalog.
         if not hit["id"].startswith("BHghP"):
-            hit.update(source="all", sourceTitle="Каталог и GitHub автора")
+            hit.update(source="all", sourceTitle="Modrinth и GitHub автора")
     ordered = _order_hits(publisher + remote, sort)
     index = offset - start
     return {"hits": ordered[index:index + _PAGE], "offset": offset, "limit": _PAGE, "total": result["total_hits"] + len(publisher)}
@@ -353,12 +357,12 @@ def _project_kind(project, metadata=None):
     )
 
 
-def _releases(profile, kind, project, source="all"):
+def _releases(profile, kind, project, source="all", *, metadata=None):
     if source not in {"all", "community", "github"}:
         raise CatalogError("Неизвестный источник дополнений.")
     bundled = trusted_catalog.project(project)
     if source == "community" or (not bundled and source == "all"):
-        return _community_releases(profile, kind, project)
+        return _community_releases(profile, kind, project, metadata=metadata)
     if not bundled:
         return []
     _category(kind, profile["loader"])
@@ -370,7 +374,7 @@ def _releases(profile, kind, project, source="all"):
     if source == "github" or project.startswith("BHghP"):
         return author
     try:
-        community = _community_releases(profile, kind, project)
+        community = _community_releases(profile, kind, project, metadata=metadata)
     except CatalogError:
         if author:
             return author
@@ -381,9 +385,9 @@ def _releases(profile, kind, project, source="all"):
     return sorted(community + [r for r in author if r.sha512 not in hashes], key=lambda r: r.published, reverse=True)
 
 
-def _community_releases(profile, kind, project):
+def _community_releases(profile, kind, project, *, metadata=None):
     _category(kind, profile["loader"])
-    metadata = _get("/project/" + _id(project))
+    metadata = metadata if metadata is not None else _get("/project/" + _id(project))
     if _project_kind(project, metadata) != kind:
         raise CatalogError("Выбери проект из текущей категории дополнений.")
     params = {

@@ -106,12 +106,32 @@ window.BuildCareUI = (() => {
       <h3>Используется другими модами</h3><p>${data.dependents.length ? data.dependents.map(d => text(d.title)).join(", ") : "Обязательных зависимостей от этого файла не найдено."}</p>
       <p class="care-footnote">Проверка основана на метаданных автора. Отсутствие предупреждений не гарантирует совместимость каждого сочетания модов.</p></div>`);
   }
-  async function history(pid, world = "") {
+  const snapshotDeletes = new Set();
+  async function deleteSnapshot(pid, sid, element) {
+    const key = pid + "/" + sid;
+    if (snapshotDeletes.has(key)) return;
+    const host = element.closest(".care-recovery"), row = element.closest(".care-point");
+    snapshotDeletes.add(key);
+    for (const control of row.querySelectorAll("button")) control.disabled = true;
+    try {
+      const result = await act("careDeleteSnapshot", {id: pid, snapshot: sid});
+      cache.delete(pid);
+      if (host.isConnected && document.querySelector("#dialog").open) {
+        await history(pid, host.dataset.careWorldFilter || "", host);
+      }
+      notice(result.message);
+    } finally {
+      snapshotDeletes.delete(key);
+      if (row.isConnected) for (const control of row.querySelectorAll("button")) control.disabled = false;
+    }
+  }
+  async function history(pid, world = "", expectedHost = null) {
     const data = await load(pid, true);
+    if (expectedHost && (!expectedHost.isConnected || !document.querySelector("#dialog").open)) return;
     const points = data.snapshots.filter(s => !world || s.world === world);
-    modal(world ? "Копии мира · " + world : "Восстановление сборки", `<div data-care-pid="${text(pid)}" class="care-recovery">
+    modal(world ? "Копии мира · " + world : "Восстановление сборки", `<div data-care-pid="${text(pid)}" class="care-recovery" data-care-world-filter="${text(world)}">
       <p>Точка сборки сохраняет дополнения, конфигурацию и настройки. Резервные копии миров хранятся отдельно. Перед откатом текущее состояние тоже сохраняется.</p>
-      <div class="care-points" tabindex="0" aria-label="Точки восстановления">${points.length ? points.map(s => `<article class="care-point"><div><strong>${text(s.label)}</strong><span>${s.scope === "world" ? "Мир · " + text(s.world) : "Сборка"} · ${date(s.created)} · ${fmt(s.size)}</span></div><button type="button" class="btn" data-care-restore="${text(s.id)}" data-care-scope="${text(s.scope)}" data-care-world="${text(s.world)}">Восстановить</button></article>`).join("") : '<div class="empty">Копий пока нет. Первая появится при изменении сборки.</div>'}</div>
+      <div class="care-points" tabindex="0" aria-label="Точки восстановления">${points.length ? points.map(s => `<article class="care-point"><div><strong>${text(s.label)}</strong><span>${s.scope === "world" ? "Мир · " + text(s.world) : "Сборка"} · ${date(s.created)} · ${fmt(s.size)}</span></div><div class="care-point-actions"><button type="button" class="btn" data-care-restore="${text(s.id)}" data-care-scope="${text(s.scope)}" data-care-world="${text(s.world)}" ${snapshotDeletes.has(pid + "/" + s.id) ? "disabled" : ""}>Восстановить</button><button type="button" class="btn care-point-delete" data-care-delete-snapshot="${text(s.id)}" title="Удалить копию" aria-label="Удалить копию ${text(s.label)} от ${date(s.created)}" ${snapshotDeletes.has(pid + "/" + s.id) ? "disabled" : ""}>${ic("trash")}</button></div></article>`).join("") : '<div class="empty">Копий пока нет. Первая появится при изменении сборки.</div>'}</div>
       <details class="care-history"><summary>История изменений</summary>${data.history.map(h => `<p><strong>${text(h.action)}</strong><time>${date(h.created)}</time><span>${text(h.detail)}</span></p>`).join("") || '<p>История пока пуста.</p>'}</details>
       <details class="care-retention"><summary>Хранение копий · занято ${fmt(data.recoveryBytes)}</summary><p>Сохранять последние копии отдельно для сборки и каждого мира. Общий лимит применяется ко всем сборкам; старые точки удаляются автоматически.</p><div class="care-retention-fields"><label>Копий в истории<input class="field" type="number" min="1" max="100" data-care-retention-count value="${data.retention.count}"/></label><label>Общий лимит, МБ<input class="field" type="number" min="128" max="102400" data-care-retention-budget value="${data.retention.budgetMiB}"/></label>${actionButton("retention", "Сохранить лимиты", "check")}</div><p class="care-footnote">Только что созданная копия сохраняется, даже если сама превышает лимит.</p></details>
     </div>`, {headerActions: actionButton("snapshot", "Создать точку", "plus", `data-care-pid="${text(pid)}"`)});
@@ -216,7 +236,7 @@ window.BuildCareUI = (() => {
     if (count) count.textContent = selection.size + " выбрано";
   });
   document.addEventListener("click", async event => {
-    const element = event.target.closest("[data-care], [data-care-detail], [data-care-remove], [data-care-restore], [data-care-backup-world], [data-care-world-history]");
+    const element = event.target.closest("[data-care], [data-care-detail], [data-care-remove], [data-care-restore], [data-care-delete-snapshot], [data-care-backup-world], [data-care-world-history]");
     if (!element || element.disabled || element.dataset.care === "confirm-change") return;
     event.preventDefault();
     const {pid, category} = context(element);
@@ -226,6 +246,7 @@ window.BuildCareUI = (() => {
       else if (element.hasAttribute("data-care-remove")) await removeContent(pid, category, [element.dataset.careRemove], element);
       else if (element.hasAttribute("data-care-backup-world")) { closeDialog(); await waitJob("careWorldBackup", {id: pid, world: element.dataset.careBackupWorld}); }
       else if (element.hasAttribute("data-care-world-history")) await history(pid, element.dataset.careWorldHistory);
+      else if (element.hasAttribute("data-care-delete-snapshot")) await deleteSnapshot(pid, element.dataset.careDeleteSnapshot, element);
       else if (element.hasAttribute("data-care-restore")) {
         const sid = element.dataset.careRestore, world = element.dataset.careWorld;
         modal("Восстановить " + (world ? "мир?" : "сборку?"), `<p>${world ? "Содержимое мира «" + text(world) + "» будет заменено выбранной копией." : "Будут восстановлены дополнения, конфигурация и настройки запуска. Миры не меняются."} Текущее состояние будет сохранено перед заменой.</p>`, {

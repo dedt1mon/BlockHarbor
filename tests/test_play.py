@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from launcher import game
+from launcher import game, skins
 from launcher.store import Store
 from main import App
 
@@ -16,6 +16,7 @@ class PlayTests(unittest.TestCase):
         networking = patch("launcher.e4steam.ensure")
         networking.start()
         self.addCleanup(networking.stop)
+        self.enterContext(patch("launcher.aliases.ensure_skin_support"))
         self.root = Path(directory.name)
         self.app = App(self.root)
         self.addCleanup(self.app.close)
@@ -112,20 +113,28 @@ class PlayTests(unittest.TestCase):
         self.assertEqual(self.app.store.get("nickname"), "SavedPlayer")
         self.assertFalse(self.app.job_snapshot()["busy"])
 
-    def test_nickname_is_saved_before_skin_preparation_can_fail(self):
+    def test_skin_download_failure_keeps_nickname_and_does_not_block_game(self):
+        from PIL import Image
+
         image = self.root / "test-skin.png"
-        image.write_bytes(b"placeholder, skin load must not be reached")
+        Image.new("RGBA", (64, 64), (20, 40, 60, 255)).save(image)
+        child = Mock()
+        child.poll.return_value = None
         with (
             patch.object(self.app, "skin_path", return_value=image),
-            patch("launcher.aliases.ensure_skin_support", side_effect=ValueError("Не удалось загрузить скин")),
+            patch("launcher.aliases.ensure_skin_support", side_effect=skins.SkinError("Не удалось загрузить скин")),
             patch.object(game, "install") as install,
+            patch.object(game, "launch_local", return_value=child) as launch,
         ):
             self.app.action("play", {"id": self.pid, "nickname": "RememberMe"})
             result = self.wait_for_job()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["message"], "Не удалось загрузить скин")
+        self.assertTrue(result["ok"], result)
         self.assertEqual(self.app.store.get("nickname"), "RememberMe")
-        install.assert_not_called()
+        install.assert_called_once()
+        launch.assert_called_once()
+        with self.app.store.connection() as db:
+            error = db.execute("SELECT message FROM notifications WHERE level='error'").fetchone()
+        self.assertEqual(error["message"], "Не удалось загрузить скин")
 
     def test_crash_after_startup_is_reported_once_per_process(self):
         child = Mock()

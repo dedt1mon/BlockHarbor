@@ -119,7 +119,9 @@
     const download = tasks.find(task => activeTransfers.has(task.state));
     const recent = tasks.find(task => !release?.version || task.title?.endsWith(release.version));
     const busy = Boolean(download);
-    let actions = check;
+    const rollback = data.rollback && !data.pending
+      ? button("rollbackDialog", "Вернуться к предыдущей версии", "back", "", !data.windows) : "";
+    let actions = check + rollback;
     let heading = "";
     let body = `<p class="muted">Последняя проверка: ${esc(formatDate(data.checkedAt))}.</p>`;
     if (data.checkStatus?.message) body += `<p class="muted">${esc(data.checkStatus.message)}</p>`;
@@ -152,11 +154,9 @@
       body += `<div class="update-pending" role="status">${ic("refresh")}<div><strong>${stage === "queued" ? automatic ? "Автоматическое обновление готово" : "Установка запланирована" : stage === "preparing" ? "Сохраняем предыдущую версию" : automatic ? "Устанавливаем обновление" : "Открываем установщик"}</strong><p>${stage === "queued" ? automatic ? "Закрой другие окна BlockHarbor. После завершения игр, загрузок и операций приложение обновится и откроется снова." : "Закрой другие окна BlockHarbor. После выхода из всех игр и завершения операций откроется установщик." : automatic ? "BlockHarbor ненадолго закроется и автоматически откроется после успешной установки." : "BlockHarbor закроется после подготовки помощника установки."}</p></div></div>`;
       if (stage !== "launching") actions += button("updateCancelInstall", automatic ? "Отложить до следующего запуска" : "Отменить установку", "close");
     }
-    const rollback = data.rollback && !data.pending
-      ? `<div class="updater-rollback">${button("rollbackDialog", "Вернуться к предыдущей версии", "back", "", !data.windows)}</div>` : "";
     if (!data.windows) body += '<p class="muted">Автоматическая установка .exe выполняется в Windows. Сейчас открыт запуск для разработки.</p>';
     if (data.error) body += `<p class="update-problem" role="alert">${esc(data.error)}</p>`;
-    return `${heading}${body}<div class="updater-actions"><div class="actions">${actions}</div>${rollback}</div>${data.trust ? `<p class="update-trust">${esc(data.trust)}</p>` : ""}`;
+    return `${heading}${body}<div class="updater-actions"><div class="actions">${actions}</div></div>`;
   }
 
   function historyToggleMarkup() {
@@ -201,7 +201,7 @@
         ? `Автоустановка версии ${data.autoFailure.version} приостановлена после ошибки. Повторить можно кнопкой «Установить обновление».`
         : data.autoSnoozed && data.autoSnoozed === data.release?.version
           ? `Обновление до ${data.autoSnoozed} отложено до следующего запуска.`
-          : data.autoChecking ? "Проверяем обновление в выбранном канале…" : "Автоматическое обновление включено.";
+          : data.autoChecking ? "Проверяем обновление BlockHarbor…" : "Автоматическое обновление включено.";
     const release = releaseMarkup();
     if (release !== lastReleaseMarkup) {
       const host = document.querySelector("#updateRelease");

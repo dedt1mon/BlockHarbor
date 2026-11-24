@@ -95,11 +95,14 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertLess(report.index('expButton("backToDiagnostics"'), report.index('expButton("saveReport"'))
         self.assertNotIn('Сохранить проверенный отчёт', report)
 
-    def test_share_dialog_publish_action_uses_header_and_form_association(self):
+    def test_share_dialog_publish_action_uses_footer_inside_form(self):
         publishing = self.pack_ui.split('function showPublish(', 1)[1].split('function setPublicationBusy(', 1)[0]
         self.assertIn('id="communityPublishForm"', publishing)
-        self.assertIn('headerActions:', publishing)
-        self.assertIn('type="submit" form="communityPublishForm" data-pack-publish-submit', publishing)
+        self.assertIn('class="community-publish-footer"', publishing)
+        self.assertIn('type="submit" data-pack-publish-submit', publishing)
+        self.assertNotIn('headerActions:', publishing)
+        self.assertLess(publishing.index('id="communityPublishSubmit"'), publishing.index('class="community-publication-status"'))
+        self.assertLess(publishing.index('id="communityPublishSubmit"'), publishing.index('</form>'))
         self.assertNotIn('community-publish-actions', publishing)
         self.assertNotIn('Закрыть', publishing)
         self.assertIn('form.elements.namedItem("communityPublishSubmit")', self.pack_ui)

@@ -68,6 +68,63 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(data["unread"], 200)
         self.assertEqual(data["lastId"], 220)
 
+    def test_ui_notification_is_persistent_and_keeps_error_level(self):
+        service = Experience(self.store)
+        result = service.handle("experienceNotify", {"message": "Не удалось сохранить параметры",
+                                                       "level": "error", "eventKey": "ui:save:failed-1"})
+        self.assertEqual(result, {"ok": True, "unread": 1})
+        reopened = Experience(Store(self.store.root))
+        history = reopened.handle("experienceNotifications", {})
+        self.assertEqual(history["unread"], 1)
+        self.assertEqual(len(history["items"]), 1)
+        self.assertEqual(history["items"][0]["message"], "Не удалось сохранить параметры")
+        self.assertEqual(history["items"][0]["level"], "error")
+        self.assertFalse(history["items"][0]["read"])
+
+    def test_ui_event_retry_stays_deduplicated_after_restart_and_history_clear(self):
+        params = {"message": "Скин сохранён", "level": "success", "eventKey": "ui:skin:saved-1"}
+        with patch("launcher.experience.time.time", return_value=1000):
+            first = Experience(self.store)
+            self.assertEqual(first.handle("experienceNotify", params)["unread"], 1)
+        with patch("launcher.experience.time.time", return_value=1010):
+            reopened = Experience(Store(self.store.root))
+            self.assertEqual(reopened.handle("experienceNotify", params)["unread"], 1)
+            self.assertEqual(len(reopened.notifications()["items"]), 1)
+            reopened.handle("experienceClearNotifications", {})
+        with patch("launcher.experience.time.time", return_value=1020):
+            restarted = Experience(Store(self.store.root))
+            self.assertEqual(restarted.handle("experienceNotify", params)["unread"], 0)
+            self.assertEqual(restarted.notifications()["items"], [])
+
+    def test_ui_and_backend_job_completion_produce_one_notification_in_either_order(self):
+        service = Experience(self.store)
+        for index, (order, level) in enumerate((('backend', 'success'), ('ui', 'success'),
+                                                ('backend', 'error'), ('ui', 'error'))):
+            with self.subTest(order=order, level=level):
+                message = f"Результат операции {index}"
+                params = {"message": message, "level": level, "eventKey": f"ui:job:{index}"}
+                with patch("launcher.experience.time.time", return_value=1000 + index * 20):
+                    if order == "backend":
+                        service.notify(message, level)
+                        service.handle("experienceNotify", params)
+                    else:
+                        service.handle("experienceNotify", params)
+                        service.notify(message, level)
+                # A lost UI acknowledgement can retry after the 4-second
+                # content window; its event key must still prevent a duplicate.
+                with patch("launcher.experience.time.time", return_value=1010 + index * 20):
+                    Experience(Store(self.store.root)).handle("experienceNotify", params)
+                rows = [row for row in service.notifications()["items"] if row["message"] == message]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["level"], level)
+
+    def test_ui_error_is_not_lost_after_recent_info_with_same_text(self):
+        service = Experience(self.store)
+        message = "Обновление сборки остановлено"
+        service.notify(message, "info")
+        service.handle("experienceNotify", {"message": message, "level": "error", "eventKey": "ui:update:failure"})
+        self.assertEqual([row["level"] for row in service.notifications()["items"]], ["error", "info"])
+
 
 class ReceiptAPI:
     origin = "https://catalog.example"
@@ -195,7 +252,7 @@ class PublicationReceiptTests(unittest.TestCase):
 class CatalogRetryTests(unittest.TestCase):
     def test_safe_json_retry_is_bounded_and_reservations_are_not_repeated(self):
         api = CatalogAPI("https://catalog.example")
-        for method, path, attempts in (("GET", "capabilities", 3), ("PUT", "uploads/id/parts/1", 3),
+        for method, path, attempts in (("GET", "capabilities", 1), ("PUT", "uploads/id/parts/1", 3),
                                        ("POST", "uploads/id/complete", 3), ("POST", "uploads", 1)):
             with self.subTest(method=method, path=path):
                 with patch.object(api, "request", side_effect=CatalogError(503, "Недоступно")) as request, patch("launcher.community_catalog.lifecycle.wait"):

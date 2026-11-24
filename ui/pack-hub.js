@@ -5,8 +5,10 @@
 (() => {
   const catalog = {q: "", version: "", loader: "", category: "", sort: "relevance", offset: 0, nextOffset: 0, page: null, error: "", busy: false, needsSearch: true};
   const categories = {adventure: "Приключения", challenging: "Испытания", combat: "Сражения", "kitchen-sink": "Всё вместе", lightweight: "Лёгкие сборки", magic: "Магия", multiplayer: "Для друзей", optimization: "Оптимизация", quests: "Квесты", technology: "Технологии"};
-  const community = {page: null, busy: false, error: "", needsSearch: true, controller: null};
+  const community = {page: null, fetchedAt: 0, busy: false, error: "", needsSearch: true, controller: null};
   const publicationCache = new Map();
+  const publicationRequests = new Map();
+  const publicationEpochs = new Map();
   const communityDownloads = new Set();
   let publicationRequest = 0;
   let pendingPublication = null, selectedCommunity = null;
@@ -67,7 +69,7 @@
       button.dataset.packProject === focusProject || button.dataset.packCommunity === focusCommunity);
     (previous || host.querySelector('[name="q"]'))?.focus({preventScroll: true});
     if ((!catalog.page || catalog.needsSearch) && !catalog.busy) search(catalog.nextOffset);
-    if (community.needsSearch && !community.busy) searchCommunity(community.page?.offset || 0);
+    if (!community.busy && (community.needsSearch || Date.now() - community.fetchedAt >= 15000)) searchCommunity(community.page?.offset || 0);
   }
 
   function results() {
@@ -90,9 +92,8 @@
     let status = "";
     if (community.error) status = `<p class="pack-status pack-error" role="status">${esc(community.error)} ${button("data-pack-community-retry", "Повторить")}</p>`;
     else if (community.busy) status = '<p class="pack-status" role="status">Ищем сборки игроков…</p>';
+    else if (page?.warning || ["github", "github-legacy"].includes(page?.source)) status = `<p class="pack-status pack-error" role="status">${esc(page.warning || "Основной каталог недоступен. В резервном каталоге нет новых часовых публикаций.")}</p>`;
     else if (page && !page.hits.length) status = '<p class="pack-status" role="status">Сборок игроков по этому запросу пока нет.</p>';
-    else if (page?.source === "github") status = '<p class="pack-status" role="status">Показан резервный каталог GitHub. Новые публикации появляются после синхронизации.</p>';
-    else if (page?.source === "github-legacy") status = '<p class="pack-status" role="status">Показан резервный каталог старого формата. Срок автоматического удаления пока не подтверждён.</p>';
     else if (page?.source === "primary" && page.hits.some(item => !item.expiresAt))
       status = '<p class="pack-status" role="status">Основной сервер ещё не подтверждает часовое автоудаление публикаций.</p>';
     const cards = (page?.hits || []).map(item => `<article class="pack-card"><h4>${esc(item.name)}</h4>
@@ -116,7 +117,7 @@
     if (pagination) pagination.innerHTML = communityPager();
   }
 
-  async function searchCommunity(offset = 0) {
+  async function searchCommunity(offset = 0, quiet = false) {
     community.controller?.abort();
     const controller = new AbortController();
     community.controller = controller;
@@ -124,12 +125,17 @@
     community.needsSearch = true;
     community.error = "";
     const host = document.querySelector(".community-results");
-    updateCommunityResults(host);
+    if (!quiet) updateCommunityResults(host);
     try {
       const page = await feature("communitySearch", {q: catalog.q, category: catalog.category, version: catalog.version, loader: catalog.loader, offset}, {signal: controller.signal});
       if (controller.signal.aborted) return;
       community.page = page;
+      community.fetchedAt = Date.now();
       community.needsSearch = false;
+      if (offset > 0 && page.total <= offset) {
+        community.controller = null;
+        return searchCommunity(0, quiet);
+      }
     } catch (error) {
       if (!controller.signal.aborted) community.error = error.message;
     } finally {
@@ -153,16 +159,17 @@
   }
 
   function updateShareButtons(id) {
-    const published = (publicationCache.get(id)?.publications || []).some(row =>
-      !row.expiresAt || row.expiresAt * 1000 > Date.now());
+    const rows = (publicationCache.get(id)?.publications || []).filter(row => !row.expiresAt || row.expiresAt * 1000 > Date.now());
+    const published = rows.some(row => !row.statusUnverified), uncertain = rows.length > 0 && !published;
     for (const control of document.querySelectorAll('[data-pack-share]')) {
       if (control.dataset.packShare !== id) continue;
       const name = state.profiles.find(p => p.id === id)?.name || "";
       control.classList.toggle("is-published", published);
-      control.title = published ? "Управление публикацией" : "Поделиться сборкой";
-      control.setAttribute("aria-label", (published ? "Опубликовано: " : "Поделиться сборкой: ") + name);
+      control.title = uncertain ? "Проверить публикацию" : published ? "Управление публикацией" : "Поделиться сборкой";
+      const title = uncertain ? "Проверить публикацию" : published ? "Опубликовано" : "Поделиться";
+      control.setAttribute("aria-label", title + ": " + name);
       const label = control.querySelector("span");
-      if (label) label.textContent = published ? "Опубликовано" : "Поделиться";
+      if (label) label.textContent = title;
     }
   }
 
@@ -177,8 +184,22 @@
     const cached = publicationCache.get(id);
     if (!force && cached && Date.now() - cached.fetched < 15000)
       return cached.publications.filter(row => !row.expiresAt || row.expiresAt * 1000 > Date.now());
-    const data = await feature("communityPublication", {id});
-    return savePublications(id, data);
+    if (publicationRequests.has(id)) return publicationRequests.get(id);
+    const epoch = publicationEpochs.get(id) || 0;
+    const request = feature("communityPublication", {id}).then(data => {
+      if ((publicationEpochs.get(id) || 0) !== epoch) return data.publications || [];
+      return savePublications(id, data);
+    }).finally(() => {
+      if (publicationRequests.get(id) === request) publicationRequests.delete(id);
+    });
+    publicationRequests.set(id, request);
+    return request;
+  }
+
+  function refreshOpenCommunity() {
+    if (!document.hidden && document.querySelector('.pack-dialog[data-pack-view="catalog"]') &&
+        !community.busy && !community.error && Date.now() - community.fetchedAt >= 15000)
+      searchCommunity(community.page?.offset || 0, true);
   }
 
   function refreshShareButtons() {
@@ -203,7 +224,7 @@
       ${list.length > 1 ? `<p class="community-receipt-name">${esc(row.name)}</p>` : ""}
       <label class="community-code-label">Код сборки</label>
       <p class="community-expiry">${row.expiresAt
-        ? "Публикация доступна до " + esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})) + ", затем автоматически удалится из каталога."
+        ? (row.statusUnverified ? "Последний подтверждённый срок: " : "Публикация доступна до ") + esc(new Date(row.expiresAt * 1000).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"})) + ", затем автоматически удалится из каталога."
         : "Сервер не подтвердил срок автоматического удаления. Когда публикация станет не нужна, удали её вручную."} Локальная сборка сохранится.</p>
       <div class="community-id"><input class="field" readonly aria-label="Код сборки ${esc(row.name)}" value="${esc(row.build)}">
         ${button("data-pack-copy-id", "Скопировать ID", "copy")}</div>
@@ -223,10 +244,11 @@
       host.innerHTML = publicationRows(publications);
       form.classList.remove("is-checking");
       form.classList.toggle("is-published", publications.length > 0);
+      form.classList.toggle("is-unverified", publications.some(row => row.statusUnverified));
       syncPublicationSubmit(form);
       form.querySelector(".community-publication-status").textContent = publications.length
         ? publications.some(row => row.statusUnverified)
-          ? "Статус: опубликовано, но часовая очистка не подтверждена сервером."
+          ? "Статус: доступность публикации не подтверждена. Код и удаление доступны."
           : "Статус: опубликовано. Автоматическое удаление через 1 час после публикации."
         : "Статус: не опубликовано.";
       if (pendingPublication?.id === form.dataset.packPublish) {
@@ -245,11 +267,11 @@
   }
 
   function syncPublicationSubmit(form) {
-    // Form-associated controls remain in form.elements even when in the header.
+    // Keep the action beside status while the publication is checked.
     const submit = form.elements.namedItem("communityPublishSubmit");
     if (!submit) return;
-    submit.hidden = form.classList.contains("is-checking") || form.classList.contains("is-published");
-    submit.disabled = submit.hidden || form.dataset.policyVerified !== "true" || form.getAttribute("aria-busy") === "true";
+    submit.hidden = form.classList.contains("is-published");
+    submit.disabled = submit.hidden || form.classList.contains("is-checking") || form.dataset.policyVerified !== "true" || form.getAttribute("aria-busy") === "true";
   }
 
   async function readPublicationCapabilities(form) {
@@ -292,13 +314,10 @@
       <p class="note community-publish-description">Максимальный размер ZIP — 256 МиБ. Новая публикация доступна 60 минут, одновременно разрешены 3 активные публикации. Для одной сборки разрешены 3 попытки подряд, затем — не более одной новой попытки каждые 5 минут. Публикация станет доступна после подтверждения этих правил сервером. Миры, журналы и данные учётных записей не публикуются.</p>
       <p role="status" class="community-policy-status">Проверяем, действуют ли новые ограничения на сервере…</p>
       <button type="button" class="linkbtn" data-pack-policy-retry hidden>Повторить проверку сервера</button>
-      <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
-    </form>`, {
-      contentSized: true,
-      headerActions: `<button id="communityPublishSubmit" class="btn main" type="submit" form="communityPublishForm" data-pack-publish-submit disabled hidden>${ic("share")}Опубликовать</button>`,
-    });
+      <div class="community-publish-footer"><button id="communityPublishSubmit" class="btn main" type="submit" data-pack-publish-submit disabled>${ic("share")}Опубликовать</button><p role="status" class="community-publication-status">Проверяем статус публикации…</p></div>
+    </form>`, {contentSized: true});
     const form = document.querySelector("[data-pack-publish]");
     if (pendingPublication?.id === id) setPublicationBusy(form, true, pendingPublication.progress);
     readPublicationCapabilities(form);
@@ -334,11 +353,14 @@
   }
 
   function observeJob(job) {
+    refreshOpenCommunity();
     const request = pendingPublication;
     if (!request || !request.job || job.id !== request.job || job.busy) return;
     pendingPublication = null;
     if (job.ok) {
       publicationCache.delete(request.id);
+      publicationEpochs.set(request.id, (publicationEpochs.get(request.id) || 0) + 1);
+      publicationRequests.delete(request.id);
       // Refresh the listing button even if the management dialog has been closed.
       fetchPublications(request.id, true).catch(() => {});
       community.needsSearch = true;
@@ -641,7 +663,7 @@
     render: renderPacks,
     openCatalog,
     isPublished(id) {return (publicationCache.get(id)?.publications || []).some(row =>
-      !row.expiresAt || row.expiresAt * 1000 > Date.now());},
+      !row.statusUnverified && (!row.expiresAt || row.expiresAt * 1000 > Date.now()));},
     refreshShareButtons,
     observeJob,
     mount() {

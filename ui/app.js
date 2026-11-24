@@ -139,99 +139,65 @@ function observeBuildRequests(job) {
     setBuildBusy(id, false);
   }
 }
-let noticeTimer = 0;
-let noticeOwner = "";
-const backgroundNotices = new Map();
+// Operation results are kept in the bell history. Progress stays in its own view.
 const deliveredBackgroundNotices = new Set();
+const pendingNotices = [];
+const recentNotices = new Map();
+const noticeSession = "ui:" + Date.now().toString(36) + ":" + Math.random().toString(36).slice(2);
+let noticeSequence = 0, savingNotice = false, noticeRetryAt = 0;
 function moveNotice() {
   const box = $("#notice");
-  const parent = $("#steamCompatibilityDialog[open]") || ($("#dialog").open ? $("#dialog") : document.body);
-  if (box.parentElement !== parent) parent.append(box);
+  if (box) { box.hidden = true; box.replaceChildren(); }
 }
-function clearNotice() {
-  clearTimeout(noticeTimer);
-  noticeTimer = 0;
-  noticeOwner = "";
-  const box = $("#notice");
-  box.hidden = true;
-  box.className = "";
-  box.replaceChildren();
-}
+function clearNotice() { moveNotice(); }
 function notice(msg, bad = false, busy = false, owner = "") {
-  const box = $("#notice");
-  const style = bad ? "bad" : busy ? "busy" : "success";
-  if (busy && noticeOwner === owner && !box.hidden && box.className === style && box.textContent === msg)
-    return;
-  clearTimeout(noticeTimer);
-  if (!msg) {
-    clearNotice();
-    flushBackgroundNotices();
-    return;
-  }
-  noticeOwner = owner;
-  box.hidden = false;
   moveNotice();
-  box.className = style;
-  const text = document.createElement("span");
-  text.textContent = msg;
-  box.innerHTML = ic(bad ? "close" : busy ? "refresh" : "check");
-  box.append(text);
-  if (!busy) noticeTimer = setTimeout(() => {
-    clearNotice();
-    flushBackgroundNotices();
-  }, 5000);
+  if (!msg || busy) return;
+  const message = String(msg).slice(0, 1000), signature = (bad ? "error:" : "success:") + message;
+  const now = Date.now();
+  if (now - (recentNotices.get(signature) || 0) < 4000) return;
+  recentNotices.set(signature, now);
+  if (recentNotices.size > 100) recentNotices.delete(recentNotices.keys().next().value);
+  pendingNotices.push({message, level: bad ? "error" : "success", eventKey: noticeSession + ":" + (++noticeSequence)});
+  if (pendingNotices.length > 200) pendingNotices.shift();
+  flushBackgroundNotices();
 }
 function rememberBackgroundNotice(item) {
   deliveredBackgroundNotices.add(item.key);
-  if (deliveredBackgroundNotices.size > 100) {
-    deliveredBackgroundNotices.delete(deliveredBackgroundNotices.values().next().value);
-  }
+  if (deliveredBackgroundNotices.size > 100) deliveredBackgroundNotices.delete(deliveredBackgroundNotices.values().next().value);
   if (item.persist) {
     try {
       const previous = JSON.parse(sessionStorage.getItem("blockharbor-seen-notices") || "[]");
-      sessionStorage.setItem("blockharbor-seen-notices", JSON.stringify([...previous.filter((key) => key !== item.key).slice(-29), item.key]));
-    } catch { /* Notification delivery must also work without session storage. */ }
+      sessionStorage.setItem("blockharbor-seen-notices", JSON.stringify([...previous.filter(key => key !== item.key).slice(-29), item.key]));
+    } catch { /* History delivery does not require session storage. */ }
   }
 }
 function backgroundNotice(source, event) {
-  const box = $("#notice");
-  const key = event ? source + ":" + event.id : "";
-  let delivered = deliveredBackgroundNotices.has(key);
-  if (event?.persist && !delivered) {
-    try { delivered = JSON.parse(sessionStorage.getItem("blockharbor-seen-notices") || "[]").includes(key); }
-    catch { /* An unavailable history does not prevent showing the result. */ }
+  if (!event?.message || event.busy) return;
+  const key = source + ":" + event.id;
+  if (deliveredBackgroundNotices.has(key)) return;
+  if (event.persist) {
+    try { if (JSON.parse(sessionStorage.getItem("blockharbor-seen-notices") || "[]").includes(key)) return; }
+    catch { /* Fall back to this window's delivery set. */ }
   }
-  if (!event?.message || (!event.busy && delivered)) {
-    backgroundNotices.delete(source);
-    if (noticeOwner === source && box.classList.contains("busy")) clearNotice();
-  } else {
-    const item = {...event, source, key};
-    // A manually requested check already reports its result as a normal job.
-    // Do not repeat the same result after that foreground notice disappears.
-    if (!item.busy && !box.hidden && box.textContent === item.message) {
-      rememberBackgroundNotice(item);
-      backgroundNotices.delete(source);
-    } else backgroundNotices.set(source, item);
-  }
-  flushBackgroundNotices();
+  rememberBackgroundNotice({...event, key});
+  notice(event.message, Boolean(event.bad));
 }
-function flushBackgroundNotices() {
-  const box = $("#notice");
-  if (state?.job?.busy || lastJob || state?.gameRunning) {
-    if (noticeOwner) clearNotice();
-    return;
-  }
-  // Foreground saves/errors and completed results retain their full five
-  // seconds. Only an ongoing background stage can be replaced by its next one.
-  if (!box.hidden && (!noticeOwner || !box.classList.contains("busy"))) return;
-  const waiting = [...backgroundNotices.values()];
-  const item = waiting.find((candidate) => !candidate.busy) || waiting[0];
-  if (!item) return;
-  if (!item.busy) {
-    backgroundNotices.delete(item.source);
-    rememberBackgroundNotice(item);
-  }
-  notice(item.message, Boolean(item.bad), Boolean(item.busy), item.source);
+async function flushBackgroundNotices() {
+  if (savingNotice || !pendingNotices.length || Date.now() < noticeRetryAt) return;
+  savingNotice = true;
+  try {
+    while (pendingNotices.length) {
+      const item = pendingNotices[0];
+      const result = await act("experienceNotify", item);
+      if (pendingNotices[0] === item) pendingNotices.shift();
+      window.ExperienceUI?.observeNotifications(result.unread);
+    }
+    noticeRetryAt = 0;
+  } catch {
+    // Retry from the existing app heartbeat after a brief local connection loss.
+    noticeRetryAt = Date.now() + 5000;
+  } finally { savingNotice = false; }
 }
 function observeProgress(job) {
   observeBuildRequests(job);
@@ -772,7 +738,7 @@ function friendsView() {
     (profile ? "" : btn("importBuild", "Загрузить сборку", "download")) +
     btn("openSteam", "Открыть Steam", "users") +
     (profile ? btn("checkSteam", "Проверить подключение", "search") : "") +
-    '</div><p class="note">Добавьтесь в друзья в Steam и запускайте игру через BlockHarbor. Steam и лаунчер — от одного пользователя, с одинаковыми правами. ' +
+    '</div><p class="note">Друзья в Steam. Игра — через BlockHarbor; пользователь и права запуска — одинаковые. ' +
     '<a href="' +
     pages.steamInstall +
     '" target="_blank" rel="noopener noreferrer">Скачать Steam</a></p></section>' +
@@ -867,7 +833,7 @@ function profile() {
       ? '<label><span><input type="checkbox" id="useFabricSkin"> Установить Fabric для скина в выбранной сборке</span></label>'
       : "") +
     (state.skinNetwork
-      ? '<small class="note">В общем мире с поддержкой BlockHarbor другие участники увидят сохранённый скин при входе.</small>'
+      ? '<small class="note">Для общих скинов обнови BlockHarbor у всех игроков и перезапусти игру. Нужные компоненты установятся автоматически для совместимых сборок.</small>'
       : "") +
     (state.skin
       ? '<div><button type="button" class="linkbtn" data-act="officialSkin">Установить скин в Java-профиле</button></div>'
@@ -1097,6 +1063,22 @@ function updateBuildLoaderUI(form) {
   form.querySelector("#buildVanillaChoice").hidden = !unsupported;
   form.elements.namedItem("createBuildSubmit").disabled = data.loading || data.submitting || unsupported || pendingBuild?.form === form;
 }
+async function loadBuildSteamNote(form) {
+  const data = newBuildForms.get(form);
+  if (!data || !currentBuildForm(form)) return;
+  const key = form.querySelector("#version").value + "/" + form.querySelector("#loader").value;
+  if (data.steamKey === key) return;
+  data.steamKey = key;
+  const status = form.querySelector("#buildSteamStatus");
+  status.textContent = "Если подключение через Steam недоступно, сборка создастся без него.";
+  try {
+    const query = new URLSearchParams({version: form.querySelector("#version").value, loader: form.querySelector("#loader").value});
+    const report = await api("/api/steam/compatibility?" + query);
+    if (!currentBuildForm(form) || data.steamKey !== key) return;
+    status.textContent = report.supported ? "Подключение через Steam будет подготовлено автоматически."
+      : "Встроенное подключение через Steam для этой версии недоступно. Сборка создастся без него; обычные серверы и одиночная игра доступны.";
+  } catch { /* The local create route checks compatibility; this note never delays it. */ }
+}
 function loadBuildLoaders(form, force = false) {
   const data = newBuildForms.get(form);
   if (!data || !currentBuildForm(form)) return Promise.resolve(null);
@@ -1191,15 +1173,14 @@ function createBox(preferredLoader = "fabric") {
             "</option>",
         )
         .join("") +
-      '</select></label></div><label class="build-version-toggle"><input type="checkbox" id="allBuildVersions" disabled> Показывать снапшоты и старые версии</label><div class="build-loader-compatibility"><p id="loaderStatus" class="note" aria-live="polite"></p><button type="button" class="linkbtn" id="buildVanillaChoice" data-act="useVanilla" hidden>Выбрать Vanilla</button></div><button type="button" class="linkbtn" data-act="versions">' +
-      ic("refresh") +
-      ' Обновить список версий</button><p id="catalogStatus" class="note" hidden></p></form>',
-    {contentSized: true, headerActions: '<button class="btn main" type="submit" form="newForm" name="createBuildSubmit">' + ic("plus") + "Создать сборку</button>"},
+      '</select></label></div><label class="build-version-toggle"><input type="checkbox" id="allBuildVersions" disabled> Показывать снапшоты и старые версии</label><div class="build-loader-compatibility"><p id="loaderStatus" class="note" aria-live="polite"></p><button type="button" class="linkbtn" id="buildVanillaChoice" data-act="useVanilla" hidden>Выбрать Vanilla</button></div><p id="buildSteamStatus" class="note" role="status">Если подключение через Steam недоступно, сборка создастся без него.</p><p id="catalogStatus" class="note" hidden></p><div class="new-build-actions"><button class="btn main" type="submit" name="createBuildSubmit">' + ic("plus") + 'Создать сборку</button><button type="button" class="btn" data-act="versions">' + ic("refresh") + 'Обновить список версий</button></div></form>',
+    {contentSized: true},
   );
   const form = $("#newForm");
   newBuildForms.set(form, {releases: [...state.versions], allVersions: [], version: "", request: 0,
     report: null, promise: null, error: "", loading: false, submitting: false});
   loadBuildLoaders(form);
+  loadBuildSteamNote(form);
   loadReleases();
 }
 async function runJob(action, data = {}) {
@@ -1223,8 +1204,7 @@ function showGameExit(job) {
   if (
     !failure.id ||
     failure.id === shownExit ||
-    job.busy ||
-    (!noticeOwner && $("#notice").classList.contains("busy"))
+    job.busy
   )
     return;
   if (
@@ -1386,6 +1366,7 @@ async function dispatch(action) {
       if (!currentBuildForm(form)) return;
       form.querySelector("#loader").value = "vanilla";
       updateBuildLoaderUI(form);
+      loadBuildSteamNote(form);
       form.querySelector("#loader").focus();
       return;
     }
@@ -1548,6 +1529,7 @@ document.addEventListener("change", (e) => {
     if (e.target.id === "allBuildVersions") renderBuildVersions(form);
     if (e.target.id === "loader") updateBuildLoaderUI(form);
     else loadBuildLoaders(form);
+    loadBuildSteamNote(form);
     return;
   }
   if (e.target.id === "skinModel") {
@@ -1738,9 +1720,11 @@ document.addEventListener("submit", async (e) => {
     const compatibility = await loadBuildLoaders(form);
     if (!isCurrent()) return;
     if (compatibility?.loaders.find(row => row.id === draft.loader)?.supported === false) return;
-    const confirmation = await confirmSteamCompatibility(draft, {isCurrent});
-    if (!confirmation) return;
-    const result = await act("create", {...draft, allowWithoutSteam: confirmation.allowWithoutSteam});
+    // The inline Steam note is visible before submitting this form; creating
+    // a build never opens a second confirmation dialog.
+    form.querySelector("#catalogStatus").hidden = false;
+    form.querySelector("#catalogStatus").textContent = "Создаём сборку…";
+    const result = await act("create", {...draft, allowWithoutSteam: true});
     if (result.job) {
       pendingBuild = { id: result.job, form, destination };
       acceptedJobGeneration++;
@@ -1750,9 +1734,13 @@ document.addEventListener("submit", async (e) => {
     } else {
       await refresh();
       finishBuild(form, destination);
-      notice(confirmation.allowWithoutSteam ? "Сборка создана. Встроенное подключение через Steam недоступно." : "Сборка создана.");
+      notice("Сборка создана.");
     }
   } catch (err) {
+    if (currentBuildForm(form)) {
+      form.querySelector("#catalogStatus").hidden = false;
+      form.querySelector("#catalogStatus").textContent = err.message;
+    }
     notice(err.message, true);
   } finally {
     data.submitting = false;

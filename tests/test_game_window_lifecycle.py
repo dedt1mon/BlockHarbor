@@ -161,6 +161,7 @@ class RegisteredFrameLifecycleTests(unittest.TestCase):
 
 class GameProcessLifecycleTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("launcher.aliases.ensure_skin_support"))
         root = self.enterContext(tempfile.TemporaryDirectory())
         self.app = App(Path(root))
         self.addCleanup(self.app.close)

@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import tempfile
 import time
@@ -22,6 +23,9 @@ class AppearanceTests(unittest.TestCase):
         image = io.BytesIO()
         Image.new("RGBA", (64, 64), (130, 20, 255, 255)).save(image, format="PNG")
         self.png = image.getvalue()
+        self.enterContext(patch("launcher.skin_network.SkinAPI.request",
+                                side_effect=lambda method, name, token, pixels, model:
+                                {"username": name, "sha256": hashlib.sha256(pixels).hexdigest(), "model": model}))
 
     def completed(self, job):
         for _ in range(300):

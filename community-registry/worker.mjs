@@ -1,4 +1,6 @@
 // Public BlockHarbor build directory. D1 holds searchable metadata, R2 holds the snapshots.
+import { skinRegistry } from './skin-registry.mjs';
+
 const PART = 8 * 1024 ** 2;
 const MAX_SIZE = 256 * 1024 ** 2; // 256 MiB maximum per public archive.
 const STORAGE_LIMIT = 8 * 1024 ** 3; // Hard ceiling below R2's free allowance.
@@ -414,18 +416,17 @@ async function ownerEvents(request,env,id) {
 }
 async function search(env, params) {
   const q=(params.get('q')||'').trim().normalize('NFC').toLowerCase();
-  const offset=Number(params.get('offset')||0);
-  requireThat(Array.from(q).length<=180 && Number.isSafeInteger(offset) && offset>=0,400,'Некорректный запрос каталога.');
-  // Keep expired snapshots hidden even if a cleanup job is delayed.
-  try { await prune(env); }
-  catch(error) {
-    // Cleanup failure must not block a healthy catalog; expiration is enforced
-    // independently by the SQL filter and exact-ID read guards.
-    console.warn('Catalog expiry cleanup deferred',error?.name || 'error');
-  }
+  const requestedOffset=Number(params.get('offset')||0);
+  requireThat(Array.from(q).length<=180 && Number.isSafeInteger(requestedOffset) && requestedOffset>=0,400,'Некорректный запрос каталога.');
+  const exact=/^BH-[0-9A-F]{12}$/.test(q.toUpperCase());
+  const offset=exact ? 0 : requestedOffset;
+  // Search is metadata-only. R2 cleanup belongs to the scheduled/maintenance
+  // worker: a slow expired ZIP deletion must never hold a fresh listing hostage.
+  // SQL still hides an expired snapshot at the exact access deadline.
   const filters=["state='ready'","created>?"], args=[now()-PUBLIC_TTL];
-  if(q) { filters.push('(id=? OR instr(search_name,?)>0)'); args.push(q.toUpperCase(),q); }
-  for(const [parameter,column] of [['category','category'],['version','minecraft'],['loader','loader']]) {
+  if(exact) { filters.push('id=?'); args.push(q.toUpperCase()); }
+  else if(q) { filters.push('instr(search_name,?)>0'); args.push(q); }
+  for(const [parameter,column] of (exact ? [] : [['category','category'],['version','minecraft'],['loader','loader']])) {
     const value=params.get(parameter);
     if(value) { filters.push(column+'=?'); args.push(value); }
   }
@@ -436,6 +437,8 @@ async function search(env, params) {
 }
 async function handle(request,env) {
   const url=new URL(request.url), path=url.pathname, method=request.method;
+  const skinResponse=await skinRegistry(request,env,{publisherKey});
+  if(skinResponse) return skinResponse;
   if(path==='/' && method==='GET') return json({
     name:'Каталог сборок BlockHarbor',
     releases:'https://github.com/dedt1mon/BlockHarbor/releases',
@@ -473,7 +476,13 @@ async function handle(request,env) {
     requireThat(row,404,'Сборка не найдена в каталоге.');
     if(!build[2] && method==='DELETE') { await authorized(request,row); await discard(env,row); return json({removed:true}); }
     requireThat(row.state==='ready' && row.created>now()-PUBLIC_TTL,404,'Срок публикации истёк или сборка недоступна.');
-    if(method==='GET' && !build[2]) return json(publicBuild(row));
+    if(method==='GET' && !build[2]) {
+      // This small public read is also the publisher's final visibility check.
+      // Confirm the archive exists without downloading or hashing it again.
+      const object=await env.BUCKET.head(key(row));
+      requireThat(object && object.size===row.size,503,'Архив публикации временно недоступен. Повтори проверку.');
+      return json(publicBuild(row));
+    }
     if(method==='GET' && build[2]) {
       // A strong content validator lets a client safely resume the same
       // immutable snapshot. Expiry is checked above for every range request.

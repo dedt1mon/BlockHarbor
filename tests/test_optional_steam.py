@@ -68,6 +68,7 @@ class OptionalSteamPlanTests(unittest.TestCase):
 
 class OptionalSteamAppTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("launcher.aliases.ensure_skin_support"))
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)

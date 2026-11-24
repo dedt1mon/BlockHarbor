@@ -96,7 +96,7 @@ def _download(release: ModRelease) -> bytes:
         headers={"User-Agent": f"BlockHarbor/{VERSION} (Minecraft Java desktop launcher)"},
     )
     try:
-        with lifecycle.response(urlopen(request, timeout=30)) as response:
+        with lifecycle.response(urlopen(request, timeout=12)) as response:
             raw = response.read(release.size + 1)
     except OSError as exc:
         raise SkinError(

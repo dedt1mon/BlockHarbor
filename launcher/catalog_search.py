@@ -11,16 +11,24 @@ import threading
 from functools import lru_cache
 from http.client import HTTPException
 
-from . import lifecycle, modrinth
+from . import catalog_sources, lifecycle, modrinth
 
 VERIFY_BUDGET = 20.0
 MAX_SEARCH_TASKS = 16
 
 
 @lru_cache(maxsize=512)
-def _confirmed(game, loader, kind, project, source, period):
+def _confirmed(game, loader, kind, project, source, period, hint=()):
     profile = {"version": game, "loader": loader}
-    releases = modrinth._releases(profile, kind, project, source=source)
+    if hint:
+        # Search already provides trusted project metadata. Only the version
+        # list needs another request; checking the exact game/loader tuple and
+        # artifact hashes is still mandatory, including for installed cards.
+        metadata = dict(zip(("project_type", "title", "description", "icon_url"), hint))
+        metadata["id"] = project
+        releases = modrinth._releases(profile, kind, project, source=source, metadata=metadata)
+    else:
+        releases = modrinth._releases(profile, kind, project, source=source)
     preferred = next((release for release in releases if release.channel == "release"), next(iter(releases), None))
     if preferred is None:
         return None
@@ -110,8 +118,9 @@ class SearchService:
                 for project, hit in unique.items():
                     lifecycle.check()
                     try:
+                        hint = (hit["projectType"], hit.get("title", ""), hit.get("description", ""), hit.get("icon", "")) if "projectType" in hit else ()
                         future = self._submit(scope, _confirmed, profile["version"], profile["loader"], kind, project,
-                                              hit.get("source", source), int(time.monotonic() // 300))
+                                              hit.get("source", source), int(time.monotonic() // 300), hint)
                     except modrinth.CatalogError:
                         unavailable = True
                         break
@@ -153,7 +162,9 @@ class SearchService:
             hits.append({**hit, "compatibility": "release-metadata", "recommendedVersion": match["version"],
                          "installed": installed is not None, "installedVersion": installed.version if installed else ""})
         result = {**page, "hits": hits,
-                  "verified": True, "totalIsEstimate": True}
+                  "verified": True, "totalIsEstimate": True,
+                  **catalog_sources.describe(profile, kind, query, source,
+                                             primary_unavailable=page.get("primaryUnavailable", False))}
         if unavailable:
             result.update(partial=True, message="Часть выпусков не удалось проверить. Показаны только дополнения с подтверждённой версией Minecraft и загрузчиком; повтори поиск позже.")
         return result

@@ -123,8 +123,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
     catalog.dataset.catalogView = "filters";
     toggle.setAttribute("aria-expanded", "true");
     panel.innerHTML = `
-      <div class="catalog-filter-heading"><h3>Фильтры</h3>
-        <button class="linkbtn" type="button" data-filter-cancel>${ic("back")} К каталогу</button></div>
+      <div class="catalog-filter-heading"><h3>Фильтры</h3></div>
       <div class="catalog-filter-scroll">
         <p class="catalog-filter-hint">Знак «+» включает параметр, знак «−» исключает. Нажми на параметр ещё раз, чтобы сменить его состояние.</p>
         <div class="catalog-filter-groups"></div>
@@ -135,8 +134,9 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
           <span class="catalog-dep-status" role="status"></span>
         </fieldset>
       </div>
-      <div class="catalog-filter-footer"><button class="linkbtn" type="button" data-filter-reset>Сбросить фильтры</button>
-        <button class="btn main" type="button" data-filter-apply>Применить</button></div>`;
+      <div class="catalog-filter-footer"><button class="btn" type="button" data-filter-cancel>${ic("back")}К каталогу</button>
+        <button class="btn" type="button" data-filter-reset>${ic("refresh")}Сбросить фильтр</button>
+        <button class="btn main" type="button" data-filter-apply>${ic("check")}Применить</button></div>`;
     find("[data-filter-cancel]").focus({ preventScroll: true });
     if (!schema) {
       try {

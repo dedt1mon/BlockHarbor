@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+from collections import deque
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -27,6 +28,7 @@ MAX_ARCHIVE = 2 * 1024**3  # Existing archives remain readable during migration.
 MAX_PUBLIC_UPLOAD = 256 * 1024**2  # New public snapshots are capped at 256 MiB.
 PAGE = 20
 MAX_JSON = 128 * 1024
+READ_TIMEOUT = 8
 MIRROR_INDEX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-index/index.json"
 MIRROR_PREFIX = "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-"
 MIRROR_JSON_LIMIT = 8 * 1024**2
@@ -92,7 +94,8 @@ class CatalogAPI:
 
     def request(self, method, path, *, token=None, payload=None, block=None):
         lifecycle.check()
-        headers = {"User-Agent": f"BlockHarbor/{VERSION}", "Accept-Encoding": "identity"}
+        headers = {"User-Agent": f"BlockHarbor/{VERSION}", "Accept-Encoding": "identity",
+                   "Cache-Control": "no-cache"}
         if token:
             headers["Authorization"] = "Bearer " + token
         if payload is not None:
@@ -103,7 +106,7 @@ class CatalogAPI:
         request = Request(self.origin + "/v1/" + path, data=block, headers=headers, method=method)
         # The registry streams and hashes the entire archive before acknowledging completion.
         timeout = (300 if path.endswith("/complete") else
-                   12 if method == "GET" and not path.endswith("/archive") else
+                   READ_TIMEOUT if method == "GET" and not path.endswith("/archive") else
                    45 if method == "GET" else 60)
         try:
             return lifecycle.response(self.opener.open(request, timeout=timeout))
@@ -140,7 +143,11 @@ class CatalogAPI:
         # A fresh reservation is not idempotent. Part replacement, completion,
         # reads and owner acknowledgement are safe to repeat after a lost reply.
         repeatable = method in ("GET", "PUT", "DELETE") or (method == "POST" and path.endswith("/complete"))
-        for attempt in range(3 if repeatable else 1):
+        # Interactive reads have one short attempt. Waiting through three
+        # transport timeouts hid useful errors and delayed the mirror fallback.
+        # Upload parts and completion still recover an interrupted response.
+        attempts = 3 if repeatable and method != "GET" else 1
+        for attempt in range(attempts):
             try:
                 with self.request(method, path, **kwargs) as response:
                     raw = response.read(MAX_JSON + 1)
@@ -148,7 +155,7 @@ class CatalogAPI:
             except (CatalogError, OSError, HTTPException) as exc:
                 lifecycle.check()
                 transient = not isinstance(exc, CatalogError) or exc.code in (0, 408, 500, 502, 503, 504, 521, 522, 523, 524)
-                if not repeatable or not transient or attempt == 2:
+                if not repeatable or not transient or attempt == attempts - 1:
                     if isinstance(exc, CatalogError):
                         raise
                     raise CatalogError(0, "Ответ каталога получен не полностью. Проверь подключение и повтори операцию.") from exc
@@ -206,7 +213,7 @@ class GitHubMirror:
         cached = self._cache
         if cached and time.monotonic() - cached[0] < 60:
             return cached[1]
-        with self._open(MIRROR_INDEX, 15) as response:
+        with self._open(MIRROR_INDEX, READ_TIMEOUT) as response:
             payload = response.read(MIRROR_JSON_LIMIT + 1)
         if len(payload) > MIRROR_JSON_LIMIT:
             raise CatalogError(0, "Резервный каталог вернул слишком большой список.")
@@ -398,15 +405,38 @@ class CommunityCatalog:
             raise ValueError("Неизвестный загрузчик сборки.")
         filters = {"q": query.strip(), "offset": offset, "category": _category(params.get("category", ""), True),
                    "version": version, "loader": loader}
+        exact = ID.fullmatch(filters["q"].upper()) is not None
+        if exact:
+            # A copied invite code names one immutable publication, regardless
+            # of the filters or page left over from browsing another modpack.
+            filters.update(offset=0, category="", version="", loader="")
+            offset = 0
         try:
+            if exact:
+                try:
+                    item = _listing(self.api.json("GET", "builds/" + _build_id(filters["q"])))
+                except CatalogError as error:
+                    if error.code not in (404, 410):
+                        raise
+                    return {"hits": [], "total": 0, "limit": PAGE, "offset": 0, "source": "primary"}
+                if item["id"] != _build_id(filters["q"]):
+                    raise ValueError("Каталог вернул другую сборку.")
+                visible = [] if _expired(item) else [item]
+                return {"hits": visible, "total": len(visible), "limit": PAGE, "offset": 0, "source": "primary"}
             page = self.api.json("GET", "builds?" + urlencode(filters))
         except CatalogError as error:
             if error.code not in FALLBACK_HTTP:
                 raise
             try:
-                return self.mirror.search(filters)
+                backup = self.mirror.search(filters)
             except (CatalogError, ValueError, OSError) as backup:
                 raise CatalogError(0, "Каталог игроков недоступен через основной сервер и зеркало GitHub.") from backup
+            # Hour-long snapshots cannot be public GitHub assets: that would
+            # bypass their enforced expiry. An empty legacy mirror therefore
+            # does not prove that no current publications exist.
+            if not backup.get("hits"):
+                raise CatalogError(0, "Основной каталог игроков недоступен. Новые публикации нельзя проверить через резервный каталог. Повтори поиск позже.") from error
+            return {**backup, "warning": "Основной каталог недоступен. Показаны только старые сборки из резервного каталога; новые часовые публикации здесь не появляются."}
         hits, total = page.get("hits"), page.get("total")
         if not isinstance(hits, list) or len(hits) > PAGE or type(total) is not int or total < len(hits):
             raise ValueError("Каталог вернул неверный список сборок.")
@@ -439,11 +469,11 @@ class CommunityCatalog:
                 "message": "Подтверждено сервером: ссылка действует 60 минут, архив до 256 МиБ. Для одной сборки доступны три быстрые попытки, далее — одна в 5 минут. После истечения срока сервер автоматически очищает хранилище.",
                 "publicRetentionSeconds": 3600, "publishLimits": limits}
 
-    def _reconcile_legacy(self, pid, item):
-        """Resolve a pre-retention publication without losing its owner token."""
+    def _reconcile_publication(self, pid, item):
+        """Confirm public visibility without downloading the archive or exposing its owner token."""
         public_id = _build_id(item["id"])
         current = _listing(self.api.json("GET", "builds/" + public_id))
-        if current["id"] != public_id:
+        if any(current[key] != item[key] for key in ("id", "name", "minecraft", "loader", "category", "size", "sha256")):
             raise CatalogError(0, "Сервер вернул другую публикацию.")
         if "expiresAt" not in current:
             # Existing public catalogs do not implement TTL yet. Preserve the
@@ -472,6 +502,35 @@ class CommunityCatalog:
         with self.store.connection() as db:
             db.execute("REPLACE INTO community_uploads VALUES (?,?,?,?,?,NULL)", (self.api.origin, pid, key, upload, token))
         return upload, token
+
+    def _upload_parts(self, stream, upload, token, metadata, status):
+        """Pipeline at most three chunks, without buffering the full snapshot."""
+        stream.seek(0)
+        total, name = metadata["size"], metadata["name"]
+        if total <= CHUNK:
+            self.api.json("PUT", f"uploads/{upload}/parts/1", token=token, block=stream.read(CHUNK))
+            status(f"Публикуем «{name}» · 100%")
+            return
+        pending = deque()
+        completed = 0
+        with lifecycle.Executor(max_workers=3, thread_name_prefix="bh-publish") as pool:
+            def receive():
+                nonlocal completed
+                future, size = pending.popleft()
+                future.result()
+                completed += size
+                status(f"Публикуем «{name}» · {completed * 100 // total}%")
+
+            part = 0
+            while block := stream.read(CHUNK):
+                lifecycle.check()
+                part += 1
+                pending.append((pool.submit(self.api.json, "PUT", f"uploads/{upload}/parts/{part}",
+                                            token=token, block=block), len(block)))
+                if len(pending) == 3:
+                    receive()
+            while pending:
+                receive()
 
     def publish(self, pid, name, category, status, *, include_configs=False):
         if type(include_configs) is not bool:
@@ -504,13 +563,13 @@ class CommunityCatalog:
             with self.store.connection() as db:
                 old = db.execute("SELECT * FROM community_uploads WHERE origin=? AND pid=? AND fingerprint=?", args).fetchone()
             listing = json.loads(old["listing"]) if old and old["listing"] else None
-            # Preserve pre-retention owner tokens: reconcile old publications
-            # with the authoritative server instead of silently losing access.
-            if listing and "expiresAt" not in listing:
+            # A local receipt is not proof that a friend can still discover
+            # this snapshot. Confirm every live cached publication by public ID.
+            if listing and not _expired(listing):
                 try:
-                    listing = self._reconcile_legacy(pid, listing)
+                    listing = self._reconcile_publication(pid, listing)
                 except CatalogError as exc:
-                    if exc.code != 404:
+                    if exc.code not in (404, 410):
                         raise
                     listing = None
                     old = None
@@ -539,13 +598,8 @@ class CommunityCatalog:
             if not old:
                 upload, token = self._new_upload(pid, key, metadata)
             if listing is None:
-                stream.seek(0)
-                part = 0
-                while block := stream.read(CHUNK):
-                    lifecycle.check()
-                    part += 1
-                    status(f"Публикуем «{name}» · {stream.tell() * 100 // metadata['size']}%")
-                    self.api.json("PUT", f"uploads/{upload}/parts/{part}", token=token, block=block)
+                self._upload_parts(stream, upload, token, metadata, status)
+                status("Проверяем целостность архива и открываем публикацию…")
                 listing = self.api.json("POST", f"uploads/{upload}/complete", token=token)
             listing = _listing(listing)
             if _expired(listing):
@@ -556,7 +610,10 @@ class CommunityCatalog:
                 db.execute("UPDATE community_uploads SET listing=? WHERE origin=? AND pid=? AND fingerprint=?",
                            (json.dumps(listing, ensure_ascii=False), *args))
                 self._remember_receipt(db, listing, token)
-            return listing
+            # Store the owner credential first: a lost read response must not
+            # strand a successful upload or create another copy on retry.
+            status("Проверяем доступность сборки в общем каталоге…")
+            return self._reconcile_publication(pid, listing)
 
     def publications(self, pid):
         self.store.profile(pid)
@@ -567,15 +624,16 @@ class CommunityCatalog:
         retired = []
         for row in rows:
             item = json.loads(row["listing"])
-            if "expiresAt" not in item:
+            if not _expired(item):
                 try:
-                    item = self._reconcile_legacy(pid, item)
+                    item = self._reconcile_publication(pid, item)
                 except CatalogError as exc:
-                    if exc.code == 404:
+                    if exc.code in (404, 410):
                         retired.append(item["id"])
                         continue
                     # A blocked network must never erase the owner's ability
-                    # to revoke a potentially still-live old publication.
+                    # to revoke a potentially still-live publication, but the
+                    # UI must not present this receipt as verified availability.
                     item["statusUnverified"] = True
             if _expired(item):
                 retired.append(item["id"])

@@ -2222,3 +2222,7 @@ select.field:focus,
   #dialog:has(.batch-panel) > #notice i { width: 16px; height: 16px; }
   #dialog:has(.batch-panel) > #notice i svg { width: 12px; height: 12px; }
 }
+
+.new-build-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 12px; margin-top: 12px; }
+.new-build-actions > .btn { min-width: 0; min-height: 44px; white-space: normal; }
+#newForm #buildSteamStatus { margin: 0; }

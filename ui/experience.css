@@ -87,3 +87,12 @@
   .gallery-trash-actions { width: 100%; margin-inline-start: 0; }
   .gallery-trash-actions .btn { flex: 1 1 0; }
 }
+
+/* Keep the wardrobe heading close to its panel and both actions on one row. */
+.wardrobe-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 12px; }
+.wardrobe-heading h3 { margin: 0; line-height: 1.3; }
+.wardrobe-heading > .btn { flex: 0 1 auto; margin: 0; white-space: normal; }
+.wardrobe-panel > .note { margin: 0 0 16px; }
+.wardrobe-grid { grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); }
+.wardrobe-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 8px; width: 100%; margin-top: 4px; }
+.wardrobe-actions > .btn { min-width: 0; min-height: var(--control-compact); white-space: normal; }

@@ -19,7 +19,6 @@
 .updater-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 .updater-actions > .actions { min-width: 0; flex-wrap: wrap; margin: 0; }
 .updater-actions .btn { min-width: 0; white-space: normal; }
-.updater-rollback { min-width: 0; max-width: 100%; margin-inline-start: auto; }
 .update-download-progress { display: grid; gap: 8px; margin-top: 16px; font-size: 12px; }
 .update-download-progress > div { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .update-download-progress span { color: var(--muted); }
@@ -35,7 +34,6 @@
 .update-notes summary { cursor: pointer; color: var(--text); padding: 2px 0; }
 .update-notes div { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; line-height: 1.6; color: #b9c4bf; padding: 15px 0; }
 .update-notes a { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
-.update-trust { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 0; max-width: 840px; }
 .update-pending { display: flex; align-items: flex-start; gap: 14px; padding: 14px; margin-top: 16px; border-radius: 12px; background: #c5f4780b; border: 1px solid #c5f4782b; }
 .update-pending > i { color: var(--lime); flex-shrink: 0; margin-top: 2px; }
 .update-pending p { margin: 6px 0 0; color: var(--muted); line-height: 1.5; }

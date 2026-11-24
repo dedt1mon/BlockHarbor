@@ -32,3 +32,8 @@
   .care-point { flex-wrap: wrap; }
   .care-retention-fields > label { flex-basis: 100%; }
 }
+
+.care-point-actions { display: flex; align-items: stretch; justify-content: flex-end; gap: 8px; flex: none; }
+.care-point-actions > .btn { min-height: var(--control-compact); }
+.care-point-actions > .care-point-delete { width: var(--control-compact); min-width: var(--control-compact); padding: 0; color: var(--muted); }
+.care-point-delete:hover { color: var(--danger-text); border-color: var(--danger-text); }

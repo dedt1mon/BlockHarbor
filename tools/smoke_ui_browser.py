@@ -18,7 +18,10 @@ import sys
 import traceback
 from urllib.parse import parse_qs, urlsplit
 
-from smoke_ui_layout import FIXTURE, UI
+from smoke_ui_layout import FIXTURE, ROOT, UI
+
+sys.path.insert(0, str(ROOT))
+from launcher.catalog_sources import describe as describe_sources
 
 RESOLUTIONS = ((1280, 720), (1366, 768), (1920, 1080), (2560, 1440), (3440, 1440), (3840, 2160))
 SCALES = (1, 1.25, 1.5, 2)
@@ -40,6 +43,7 @@ class FixtureAPI:
         self.preview_error = ""
         self.preferences = {"scale": 100, "reducedMotion": True}
         self.notifications = [{"id": 1, "created": 1770000000, "message": "Срок действия ссылки на сборку истёк. Сборка автоматически удалена с сервера", "level": "info", "read": False}]
+        self.notification_keys = set()
         self.job = {"id": "", "busy": False, "ok": True, "message": "", "gameRunning": False, "localGameRunning": False, "runningProfiles": [], "gameExit": None, "launcherCount": 1}
         self.profile = {"id": "profile-a", "name": LONG_NAME, "version": "1.20.1", "loader": "fabric", "favorite": False, "description": "Описание " * 18}
         self.rows = [{"name": "example-long-file-name-" + str(i) + ".jar", "title": "Дополнение " + str(i), "description": "Описание установленного дополнения", "version": "1.0.0", "size": 1024, "enabled": True} for i in range(12)]
@@ -87,6 +91,15 @@ class FixtureAPI:
     def action(self, data):
         self.actions.append(copy.deepcopy(data))
         action = data["action"]
+        if action == "experienceNotify":
+            assert data["message"] and data["level"] in {"info", "success", "error"}
+            assert data["eventKey"], "A UI outcome must have an idempotency key"
+            if data["eventKey"] not in self.notification_keys:
+                self.notification_keys.add(data["eventKey"])
+                identifier = max((item["id"] for item in self.notifications), default=0) + 1
+                self.notifications.append({"id": identifier, "created": 1770000000 + identifier,
+                                           "message": data["message"], "level": data["level"], "read": False})
+            return {"ok": True, "unread": self.unread}
         if action == "experienceReadNotifications":
             through = data["throughId"]
             self.reads.append(through)
@@ -149,7 +162,12 @@ class FixtureAPI:
                 elif path == "/api/action":
                     result = self.action(request.post_data_json)
                 elif path == "/api/catalog/filters":
-                    result = {"sort": {"relevance": "По релевантности", "downloads": "По загрузкам"}, "groups": [], "dependencies": False}
+                    result = {"sort": {"relevance": "По релевантности", "downloads": "По загрузкам"},
+                              "groups": [{"id": "category", "name": "Категория", "mode": "include",
+                                          "options": [{"id": "optimization", "name": "Оптимизация"},
+                                                      {"id": "utility", "name": "Утилиты"}]}], "dependencies": False}
+                elif path == "/api/catalog/sources":
+                    result = describe_sources(self.profile, first("kind", "mods"), first("q"))
                 elif path == "/api/catalog/search":
                     source = first("source", "all")
                     if source == "all":
@@ -515,7 +533,7 @@ def production_views(page, api, output, label):
     page.locator("[data-pack-share]").first.click()
     settle(page)
     check_geometry("publication", True)
-    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_enabled()
+    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_enabled()
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-publication.png")))
     page.locator("#dialogClose").click()
@@ -533,7 +551,7 @@ def production_views(page, api, output, label):
     check_geometry("catalog", True)
     assert page.locator(".catalog-context").evaluate("el => el.getBoundingClientRect().top >= document.querySelector('#dialogBody').getBoundingClientRect().top - 1"), "Catalog build context is clipped by the dialog body"
     assert page.locator(".catalog-choice").count() == 12, "Duplicate catalog cards"
-    assert "Проверенных: 12" in page.locator(".catalog-pager").inner_text()
+    assert "Найдено: ≈40" in page.locator(".catalog-pager").inner_text()
     assert page.locator(".catalog-results").evaluate("el => el.clientHeight >= 24"), "Catalog controls collapsed the results viewport"
     page.screenshot(path=str(output / (label + "-catalog.png")))
     page.locator("#dialogClose").click()
@@ -596,11 +614,11 @@ def interaction_flows(page, api, output, label):
     api.publication_enabled = False
     page.locator("[data-pack-share]").first.click()
     settle(page)
-    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_disabled(), "Unverified retention allowed publishing"
+    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_disabled(), "Unverified retention allowed publishing"
     api.publication_enabled = True
     page.locator("[data-pack-policy-retry]").click()
     settle(page)
-    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_enabled()
+    assert page.locator('.community-publish-footer [data-pack-publish-submit]').is_enabled()
     page.locator("#dialogClose").click()
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
@@ -616,7 +634,7 @@ def interaction_flows(page, api, output, label):
     page.evaluate("tick(true)")
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
-    assert page.locator("[data-catalog-source], [data-catalog-sort]").count() == 0
+    assert page.locator("select[data-catalog-source], select[data-catalog-sort]").count() == 0
     page.locator("[data-catalog-filters]").click()
     settle(page)
     assert page.locator("#catalogFilterPanel").is_visible()
@@ -655,7 +673,7 @@ def interaction_flows(page, api, output, label):
     settle(page)
     retry = [item for item in api.actions if item["action"] == "installModrinth"][-1]
     assert len(retry["items"]) == 1 and retry["items"][0]["project"] == "mod-1", "Retry included successful projects"
-    assert page.locator("#dialog > #notice.busy").is_visible(), "Expected a real ongoing job notice beside the cancel action"
+    assert page.locator("#notice").is_hidden(), "A background job must not restore popup notices"
     geometry(page, True)
     readable_batch_row(page)
     page.screenshot(path=str(output / (label + "-batch-busy.png")))

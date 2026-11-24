@@ -3,11 +3,13 @@ import io
 import json
 import time
 import tempfile
+import threading
 import unittest
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 from launcher import build_archive, community_catalog as catalog
@@ -117,6 +119,74 @@ class CommunityCatalogTests(unittest.TestCase):
         other = self.author.create("Другая сборка", "1.20.1", "fabric")
         restarted.publish(other, "Другое публичное имя", "adventure", self.status)
         self.assertNotEqual(self.server.meta["buildKey"], build_key)
+
+    def test_publication_status_checks_server_and_preserves_owner_access_offline(self):
+        listing = self.publish()
+        with patch.object(self.server, "json", side_effect=catalog.CatalogError(0, "offline")):
+            current = self.publisher.publications(self.pid)["publications"]
+        self.assertEqual(current[0]["id"], listing["id"])
+        self.assertTrue(current[0]["statusUnverified"])
+        with self.author.connection() as db:
+            self.assertEqual(db.execute("SELECT token FROM community_uploads WHERE pid=?", (self.pid,)).fetchone()[0], "b" * 64)
+        self.server.listing = None
+        self.assertEqual(self.publisher.publications(self.pid)["publications"], [])
+        self.assertTrue(self.folder.is_dir())
+
+    def test_publish_requires_public_visibility_but_recovers_without_another_upload(self):
+        original = self.server.json
+        def unavailable_listing(method, path, **kwargs):
+            if method == "GET" and path.startswith("builds/"):
+                raise catalog.CatalogError(0, "visibility unavailable")
+            return original(method, path, **kwargs)
+        with patch.object(self.server, "json", side_effect=unavailable_listing):
+            with self.assertRaisesRegex(catalog.CatalogError, "visibility"):
+                self.publish()
+        self.assertEqual(self.server.uploads, 1)
+        recovered = self.publish()
+        self.assertEqual(recovered["id"], self.server.public_id)
+        self.assertEqual(self.server.uploads, 1)
+
+    def test_exact_code_bypasses_old_filters_and_removed_code_never_uses_mirror(self):
+        listing = self.publish()
+        with patch.object(self.server, "json", wraps=self.server.json) as remote:
+            page = self.reader.search({"q": listing["id"].lower(), "version": "1.21.1",
+                                       "loader": "neoforge", "category": "magic", "offset": 20})
+        self.assertEqual(page["hits"], [listing])
+        self.assertEqual(page["offset"], 0)
+        remote.assert_called_once_with("GET", "builds/" + listing["id"])
+        self.server.listing = None
+        with patch.object(self.reader.mirror, "search", side_effect=AssertionError("No stale resurrection")):
+            self.assertEqual(self.reader.search({"q": listing["id"]})["hits"], [])
+
+    def test_empty_legacy_mirror_does_not_claim_the_current_catalog_is_empty(self):
+        with patch.object(self.server, "json", side_effect=catalog.CatalogError(503, "offline")), \
+                patch.object(self.reader.mirror, "search", return_value={"hits": [], "total": 0, "source": "github"}):
+            with self.assertRaisesRegex(catalog.CatalogError, "недоступен"):
+                self.reader.search({})
+
+    def test_interactive_read_fails_fast_without_repeating_transport_timeouts(self):
+        api = catalog.CatalogAPI("https://catalog.example")
+        with patch.object(api.opener, "open", side_effect=URLError("offline")) as request, \
+                patch.object(catalog.lifecycle, "wait") as wait:
+            with self.assertRaises(catalog.CatalogError):
+                api.json("GET", "builds?q=example")
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.kwargs["timeout"], catalog.READ_TIMEOUT)
+        wait.assert_not_called()
+
+    def test_parallel_chunks_keep_archive_order_and_do_not_complete_before_acknowledgement(self):
+        (self.folder / "mods" / "parallel.jar").write_bytes(b"mod content" * 80)
+        first_three = threading.Barrier(3, timeout=3)
+        original = self.server.json
+        def interleaved(method, path, **kwargs):
+            if method == "PUT" and int(path.rsplit("/", 1)[1]) <= 3:
+                first_three.wait()
+            return original(method, path, **kwargs)
+        with patch.object(catalog, "CHUNK", 128), patch.object(self.server, "json", side_effect=interleaved):
+            listing = self.publish()
+        self.assertEqual(hashlib.sha256(self.server.data).hexdigest(), listing["sha256"])
+        with zipfile.ZipFile(io.BytesIO(self.server.data)) as archive:
+            self.assertEqual(archive.read("mods/parallel.jar"), b"mod content" * 80)
 
     def test_managed_archive_download_resumes_after_interruption_before_import(self):
         self.publish()

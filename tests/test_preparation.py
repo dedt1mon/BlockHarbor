@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError, URLError
 
 from launcher import lifecycle, preparation
 
@@ -116,6 +117,121 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(Source.calls[endpoint], expected)
             self.assertEqual(self.file.read_bytes(), b"original")
             self.assertEqual(list(self.root.iterdir()), [self.file])
+
+    def test_neoforge_fallback_uses_exact_coordinate_and_original_checksum(self):
+        original = "https://maven.neoforged.net/releases/net/neoforged/neoform/1/neoform-1.zip"
+        target = self.root / "neoform.zip"
+        target.write_bytes(b"old valid bytes must not be replaced by bad mirror")
+        primary = Mock(side_effect=TimeoutError("CDN timed out"))
+        seen = []
+
+        def fallback(url, output, limit, notify=lambda *_: None):
+            seen.append(url)
+            if url == original:
+                raise ConnectionError("alternate transport failed")
+            if "creeperhost" in url:
+                output.write(b"wrong bytes")
+            else:
+                self.assertEqual(target.read_bytes(), b"old valid bytes must not be replaced by bad mirror")
+                output.write(Source.payload)
+
+        with (patch.object(preparation, "_receive", primary),
+              patch.object(preparation, "_receive_requests", side_effect=fallback),
+              patch.object(lifecycle, "wait")):
+            self.assertTrue(preparation.Download(self.progress)(original, target, sha1=self.sha))
+        self.assertEqual(seen, [
+            original,
+            "https://maven.creeperhost.net/net/neoforged/neoform/1/neoform-1.zip",
+            "https://mirrors.nju.edu.cn/bmclapi/net/neoforged/neoform/1/neoform-1.zip",
+        ])
+        self.assertEqual(target.read_bytes(), Source.payload)
+        self.assertEqual(list(self.root.iterdir()), [target])
+
+    def test_neoforge_mirrors_are_not_used_without_an_authoritative_checksum(self):
+        original = "https://maven.neoforged.net/releases/net/neoforged/bus/1/bus-1.jar"
+        target = self.root / "bus.jar"
+        with (patch.object(preparation, "_receive", side_effect=TimeoutError) as first,
+              patch.object(preparation, "_receive_requests", side_effect=ConnectionError) as alternate,
+              patch.object(lifecycle, "wait"),
+              self.assertRaisesRegex(preparation.DownloadError, "bus-1.jar")):
+            preparation.Download(self.progress)(original, target)
+        self.assertEqual(first.call_count, 2)
+        self.assertEqual(alternate.call_count, 1)
+        self.assertEqual(alternate.call_args.args[0], original)
+        self.assertFalse(target.exists())
+
+    def test_neoforge_installer_uses_official_checksum_for_fallback(self):
+        original = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.267/neoforge-21.1.267-installer.jar"
+        target = self.root / "installer.jar"
+
+        def fallback(url, output, limit, notify=lambda *_: None):
+            if url == original:
+                raise ConnectionError()
+            output.write(Source.payload)
+
+        with (patch.object(preparation, "metadata_response", return_value=Mock(text=self.sha)) as metadata,
+              patch.object(preparation, "_receive", side_effect=TimeoutError),
+              patch.object(preparation, "_receive_requests", side_effect=fallback),
+              patch.object(lifecycle, "wait")):
+            preparation.Download(self.progress)(original, target)
+        metadata.assert_called_once_with(original + ".sha1", quick_catalog=True)
+        self.assertEqual(target.read_bytes(), Source.payload)
+
+    def test_neoforge_bad_mirror_hashes_fail_closed(self):
+        original = "https://maven.neoforged.net/releases/net/neoforged/bus/1/bus-1.jar"
+        self.file.write_bytes(b"original")
+
+        def wrong(url, output, limit, notify=lambda *_: None):
+            output.write(b"wrong")
+
+        with (patch.object(preparation, "_receive", side_effect=TimeoutError),
+              patch.object(preparation, "_receive_requests", side_effect=wrong) as fallback,
+              patch.object(lifecycle, "wait"),
+              self.assertRaises(preparation.DownloadError)):
+            preparation.Download(self.progress)(original, self.file, sha1=self.sha)
+        self.assertEqual(fallback.call_count, 4)
+        self.assertEqual(self.file.read_bytes(), b"original")
+        self.assertEqual(list(self.root.iterdir()), [self.file])
+
+    def test_neoforge_catalog_uses_alternate_transport_and_canonical_url(self):
+        original = "https://maven.neoforged.net//net/neoforged/neoforge/maven-metadata.xml"
+        canonical = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
+
+        def fallback(url, output, limit):
+            self.assertEqual(url, canonical)
+            output.write(b'{"ok":true}')
+            return {}, url
+
+        with (patch.object(preparation, "_receive", side_effect=TimeoutError) as first,
+              patch.object(preparation, "_receive_requests", side_effect=fallback),
+              patch.object(lifecycle, "wait")):
+            self.assertEqual(preparation.metadata_response(original).json(), {"ok": True})
+        self.assertEqual(first.call_args.args[0], canonical)
+        self.assertEqual(preparation._neo_routes("https://other.example/releases/a/b/c/d", self.sha),
+                         [("https://other.example/releases/a/b/c/d", False)] * preparation.ATTEMPTS)
+
+    def test_neoforge_mirror_routing_rejects_noncanonical_or_unsafe_coordinates(self):
+        for address in (
+            "http://maven.neoforged.net/releases/net/neoforged/bus/1/a.jar",
+            "https://maven.neoforged.net.evil.example/releases/net/neoforged/bus/1/a.jar",
+            "https://maven.neoforged.net/releases/net/neoforged/../1/a.jar",
+            "https://maven.neoforged.net/releases/net/neoforged/bus/1/a.jar?token=secret",
+            "https://maven.neoforged.net/snapshots/net/neoforged/bus/1/a.jar",
+        ):
+            with self.subTest(address=address):
+                self.assertEqual(preparation._neo_routes(address, self.sha),
+                                 [(address, False)] * preparation.ATTEMPTS)
+
+    def test_alternate_transport_validates_length_and_http_status(self):
+        data = io.BytesIO()
+        headers, url = preparation._receive_requests(self.base + "/ok", data, len(Source.payload))
+        self.assertEqual(url, self.base + "/ok")
+        self.assertEqual(data.getvalue(), Source.payload)
+        with self.assertRaises((ConnectionError, preparation._Incomplete)):
+            preparation._receive_requests(self.base + "/broken", io.BytesIO(), len(Source.payload))
+        with self.assertRaises(HTTPError) as error:
+            preparation._receive_requests(self.base + "/refused", io.BytesIO(), len(Source.payload))
+        self.assertEqual(error.exception.code, 403)
 
     def test_compressed_java_checksum_applies_to_decompressed_file(self):
         self.assertTrue(

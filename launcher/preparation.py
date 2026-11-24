@@ -9,6 +9,7 @@ import lzma
 import os
 import re
 import shutil
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -32,8 +33,47 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.6.7", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": "BlockHarbor/2.6.8", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
+_NEO_ORIGIN = "https://maven.neoforged.net/releases/"
+# These repositories are candidates, not authorities for file hashes. Only an
+# exact digest from the original metadata can authorize a fallback artifact.
+_NEO_MIRRORS = (
+    "https://maven.creeperhost.net/",
+    "https://mirrors.nju.edu.cn/bmclapi/",
+    "https://repo.maven.apache.org/maven2/",
+)
+
+
+def _neo_path(url):
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or parsed.netloc.lower() != "maven.neoforged.net"
+            or parsed.query or parsed.fragment):
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts or any(
+        part in (".", "..") or not re.fullmatch(r"[A-Za-z0-9_.+-]+", part)
+        for part in parts
+    ):
+        return None
+    if parts[0] == "releases":
+        parts = parts[1:]
+    elif parts[:2] != ["net", "neoforged"]:
+        return None
+    return "/".join(parts) if len(parts) >= 4 else None
+
+
+def _neo_routes(url, sha1=None):
+    relative = _neo_path(url)
+    if relative is None:
+        return [(url, False)] * ATTEMPTS
+    primary = _NEO_ORIGIN + relative
+    routes = [(primary, False), (primary, True), (primary, False)]
+    if isinstance(sha1, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha1):
+        # Switch origin after two transport failures instead of making the
+        # player repeatedly wait on the same CDN. Never trust mirror sidecars.
+        routes = routes[:2] + [(mirror + relative, True) for mirror in _NEO_MIRRORS]
+    return routes
 
 
 class DownloadError(RuntimeError):
@@ -62,6 +102,24 @@ def _error(url, error):
         error.reason, ssl.SSLCertVerificationError
     ):
         return f"Не удалось проверить сертификат {host}. Проверь системное время и настройки подключения."
+    if _neo_path(url) is not None:
+        name = urlsplit(url).path.rsplit("/", 1)[-1]
+        reason = error.reason if isinstance(error, URLError) else error
+        if isinstance(reason, socket.gaierror):
+            detail = "не удалось определить адрес сервера"
+        elif isinstance(reason, TimeoutError):
+            detail = "истекло время ожидания ответа"
+        elif isinstance(reason, _Incomplete):
+            detail = str(reason)
+        elif isinstance(reason, HTTPException):
+            detail = "сервер прервал передачу"
+        else:
+            detail = "ошибка соединения или передачи данных"
+        return (
+            f"Не удалось скачать {name} с {host}: {detail}. "
+            "Проверь подключение и снова нажми «Играть». "
+            "Ранее проверенные файлы сохраняются."
+        )
     return f"Загрузка с {host} не завершена. Проверь подключение и снова нажми «Играть». Скачанные файлы сохраняются."
 
 
@@ -71,7 +129,7 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         raise ValueError("Адрес загрузки использует неподдерживаемый протокол.")
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
-    timeout = 5 if quick_catalog else SOCKET_TIMEOUT
+    timeout = 5 if quick_catalog else (45 if _neo_path(url) else SOCKET_TIMEOUT)
     deadline = time.monotonic() + (8 if quick_catalog else 20 * 60)
     with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=timeout)) as response:
         try:
@@ -81,7 +139,8 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         if length < 0 or length > limit:
             raise _Incomplete("Размер загрузки превышает допустимый.")
         count = 0
-        read_chunk = getattr(response, "read1", response.read) if quick_catalog else response.read
+        read_chunk = (getattr(response, "read1", response.read)
+                      if quick_catalog or _neo_path(url) else response.read)
         while block := read_chunk(256 * 1024):
             lifecycle.check()
             count += len(block)
@@ -94,17 +153,72 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         return dict(response.headers), response.geturl()
 
 
+def _receive_requests(url, output, limit, notify=lambda *_: None):
+    """Independent HTTPS transport for Maven; keep cancellation and TLS verification."""
+    import requests
+
+    lifecycle.check()
+    deadline = time.monotonic() + 20 * 60
+    # Requests uses the environment/system proxy configuration. Respect an
+    # explicitly configured CA file; do not disable certificate verification.
+    try:
+        with requests.Session() as session:
+            if os.environ.get("SSL_CERT_FILE") and not (
+                os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+            ):
+                session.verify = os.environ["SSL_CERT_FILE"]
+            with lifecycle.response(session.get(
+                url, headers=_HEADERS, timeout=(12, 45), stream=True,
+                allow_redirects=False,
+            )) as response:
+                if response.status_code != 200:
+                    raise HTTPError(url, response.status_code, "Maven HTTP error",
+                                    response.headers, None)
+                try:
+                    length = int(response.headers.get("Content-Length", "0"))
+                except ValueError:
+                    raise _Incomplete("Сервер вернул неверный размер файла.") from None
+                if length < 0 or length > limit:
+                    raise _Incomplete("Размер загрузки превышает допустимый.")
+                count = 0
+                for block in response.iter_content(chunk_size=64 * 1024):
+                    lifecycle.check()
+                    count += len(block)
+                    if count > limit or time.monotonic() > deadline:
+                        raise _Incomplete("Загрузка превысила ограничение.")
+                    output.write(block)
+                    notify(count, length)
+                if length and count != length:
+                    raise _Incomplete("Передача файла прервана.")
+                return dict(response.headers), response.url
+    except requests.exceptions.SSLError:
+        lifecycle.check()
+        raise URLError(ssl.SSLCertVerificationError("TLS verification failed")) from None
+    except requests.exceptions.Timeout:
+        lifecycle.check()
+        raise TimeoutError("Maven transfer timed out") from None
+    except requests.exceptions.RequestException:
+        lifecycle.check()
+        raise ConnectionError("Maven transfer failed") from None
+
+
 def metadata_response(url, *, quick_catalog=False, **_kwargs):
     """The response shape used by launcher-lib's catalog/XML routines."""
     import io
 
     import requests
 
+    relative = _neo_path(url)
+    if relative is not None:
+        url = _NEO_ORIGIN + relative
     attempts = 1 if quick_catalog else ATTEMPTS
     for attempt in range(attempts):
         try:
             data = io.BytesIO()
-            headers, effective_url = _receive(url, data, MAX_METADATA, quick_catalog=quick_catalog)
+            if relative is not None and attempt == 1 and not quick_catalog:
+                headers, effective_url = _receive_requests(url, data, MAX_METADATA)
+            else:
+                headers, effective_url = _receive(url, data, MAX_METADATA, quick_catalog=quick_catalog)
             reply = requests.Response()
             reply.status_code = 200
             reply.url = effective_url
@@ -281,15 +395,31 @@ class Download:
     def fetch(self, url, path, sha1, compressed):
         lifecycle.check()
         path.parent.mkdir(parents=True, exist_ok=True)
-        for attempt in range(ATTEMPTS):
+        relative = _neo_path(url)
+        if relative is not None:
+            url = _NEO_ORIGIN + relative
+            # launcher-lib may omit the checksum for the initial installer.
+            # Try its official sidecar so mirror fallback is safe even there.
+            if not sha1 and relative.startswith(("net/neoforged/neoforge/",
+                                                   "net/neoforged/forge/")) and relative.endswith("-installer.jar"):
+                try:
+                    candidate = metadata_response(url + ".sha1", quick_catalog=True).text.strip()
+                    if re.fullmatch(r"[0-9a-fA-F]{40}", candidate):
+                        sha1 = candidate.lower()
+                except DownloadError:
+                    pass
+        routes = _neo_routes(url, sha1)
+        primary_error = None
+        for attempt, (source_url, alternate) in enumerate(routes):
             packed = plain = None
             try:
                 with tempfile.NamedTemporaryFile(
                     dir=path.parent, prefix=".blockharbor-download-", delete=False
                 ) as out:
                     packed = Path(out.name)
-                    _receive(
-                        url,
+                    receive = _receive_requests if alternate else _receive
+                    receive(
+                        source_url,
                         out,
                         MAX_DOWNLOAD,
                         lambda n, total: self.progress.downloaded(path.name, n, total),
@@ -332,11 +462,36 @@ class Download:
                 EOFError,
                 json.JSONDecodeError,
             ) as error:
-                if not _retry(error) or attempt + 1 == ATTEMPTS:
-                    raise DownloadError(_error(url, error)) from None
-                self.progress(
-                    f"Повтор загрузки {path.name} · {attempt + 2} / {ATTEMPTS}"
+                if source_url == url:
+                    primary_error = error
+                # A checksum-pinned alternate origin may legitimately have
+                # the artifact even when the original CDN returns 403/404.
+                verified_fallback = (
+                    relative is not None
+                    and any(next_url != source_url for next_url, _ in routes[attempt + 1:])
+                    and not isinstance(
+                        error.reason if isinstance(error, URLError) else error,
+                        ssl.SSLCertVerificationError,
+                    )
                 )
+                if (not _retry(error) and not verified_fallback) or attempt + 1 == len(routes):
+                    cause = primary_error if primary_error is not None else error
+                    message = _error(url, cause)
+                    if relative is not None and len(routes) > ATTEMPTS:
+                        message += " Резервная загрузка также не завершена."
+                    raise DownloadError(
+                        message, url=url,
+                        status_code=cause.code if isinstance(cause, HTTPError) else None,
+                    ) from None
+                next_url, _ = routes[attempt + 1]
+                if next_url != source_url:
+                    self.progress(
+                        f"Резервный источник {urlsplit(next_url).hostname} · {path.name}"
+                    )
+                else:
+                    self.progress(
+                        f"Повтор загрузки {path.name} · {attempt + 2} / {len(routes)}"
+                    )
                 lifecycle.wait(0.5 * (attempt + 1))
             finally:
                 if plain is not None:

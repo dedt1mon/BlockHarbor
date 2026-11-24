@@ -14,6 +14,7 @@ class FriendsTests(unittest.TestCase):
         data = tempfile.TemporaryDirectory()
         self.addCleanup(data.cleanup)
         self.app = App(Path(data.name))
+        self.addCleanup(self.app.close)
         self.store = self.app.store
         self.pid = self.store.create("Остров друзей", "1.20.1", "fabric")
 
@@ -29,6 +30,7 @@ class FriendsTests(unittest.TestCase):
     def test_launches_friend_list_in_installed_steam(self):
         with (
             patch.object(friends.sys, "platform", "win32"),
+            patch.object(friends, "_windows_steam", return_value=(True, None)),
             patch.object(os, "startfile", create=True) as shell,
         ):
             self.app.action("openSteam", {})
@@ -47,7 +49,11 @@ class FriendsTests(unittest.TestCase):
         old = self.store.create("Мой мир", "1.18.2", "vanilla")
         with self.store.connection() as db:
             db.execute("DELETE FROM settings WHERE key='steamStarterAdded'")
-        updated = App(self.store.root).state()
+        reopened = App(self.store.root)
+        try:
+            updated = reopened.state()
+        finally:
+            reopened.close()
         self.assertEqual(updated["active"], old)
         self.assertEqual([p["id"] for p in updated["profiles"]], [self.pid, forge, old])
 

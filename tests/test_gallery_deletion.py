@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
@@ -14,6 +15,15 @@ from launcher.store import Store
 
 
 class GalleryDeletionTests(unittest.TestCase):
+    def test_windows_path_and_descriptor_stamp_compare_birthtime_consistently(self):
+        common = {"st_dev": 1, "st_ino": 2, "st_size": 4, "st_mtime_ns": 30, "st_birthtime_ns": 10}
+        by_path = SimpleNamespace(**common, st_ctime_ns=10)
+        by_handle = SimpleNamespace(**common, st_ctime_ns=20)
+        with patch("launcher.experience.os.name", "nt"):
+            self.assertEqual(Experience._stamp(by_path), Experience._stamp(by_handle))
+            by_handle.st_ino = 3
+            self.assertNotEqual(Experience._stamp(by_path), Experience._stamp(by_handle))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

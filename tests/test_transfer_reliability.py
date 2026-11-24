@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import traceback
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -59,7 +60,7 @@ class TransferReliabilityTests(unittest.TestCase):
         self.destination.write_bytes(self.payload)
         with patch.object(transfers, "open_https", side_effect=AssertionError("unnecessary network")):
             result = self.manager.download(self.url, self.destination, **self.options)
-        self.assertEqual(result, self.destination)
+        self.assertTrue(result.samefile(self.destination))
         self.assertEqual(self.manager.snapshot()["tasks"][0]["bytes"], len(self.payload))
         self.assertEqual(self.manager.snapshot()["tasks"][0]["state"], "completed")
 
@@ -177,13 +178,27 @@ class TransferReliabilityTests(unittest.TestCase):
             except Exception as error:
                 errors.append(error)
         worker = threading.Thread(target=download, daemon=True)
+        aborts = []
+        original_abort = lifecycle.abort_response
+        def trace_abort(response):
+            try:
+                sock = response.fp.raw._sock
+                aborts.append((type(sock).__name__, sock.fileno(), getattr(sock, "_closed", None)))
+            except (AttributeError, OSError):
+                aborts.append("no direct socket")
+            return original_abort(response)
         try:
-            with patch.object(transfers, "open_https", side_effect=open_local):
+            with (patch.object(transfers, "open_https", side_effect=open_local),
+                  patch.object(lifecycle, "abort_response", side_effect=trace_abort)):
                 worker.start()
                 self.assertTrue(started.wait(3), "body did not start")
                 parent.cancel()
                 worker.join(timeout=2)
-                self.assertFalse(worker.is_alive(), "cancel left the body read blocked")
+                trace = ""
+                if worker.is_alive():
+                    frame = sys._current_frames().get(worker.ident)
+                    trace = "".join(traceback.format_stack(frame)) if frame is not None else "no worker frame"
+                self.assertFalse(worker.is_alive(), f"cancel left body read blocked; aborts={aborts}\n{trace}")
                 self.assertEqual(len(errors), 1)
                 self.assertIsInstance(errors[0], transfers.TransferCancelled)
                 self.assertFalse(self.manager.scope.event.is_set())

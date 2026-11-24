@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 
 from . import build_errors, skins
 from .diagnostics import redact
+from .modfiles import file_stamp
 from .store import clean_filename, input_profile
 
 COLORS = ("green", "blue", "purple", "orange", "rose")
@@ -226,10 +227,14 @@ class Experience:
 
     @staticmethod
     def _stamp(info):
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        # Windows path stat exposes creation time as ctime while fstat may
+        # expose ChangeTime (CPython #157671). Compare the same timestamp kind;
+        # content digests and file identity still protect every destructive step.
+        created_or_changed = getattr(info, "st_birthtime_ns", info.st_ctime_ns) if os.name == "nt" else info.st_ctime_ns
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, created_or_changed)
 
     def _shot_key(self, pid, path, info):
-        value = [pid, path.name, *self._stamp(info)]
+        value = [pid, path.name, *self._stamp(info), *file_stamp(path)]
         return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
 
     @staticmethod

@@ -126,7 +126,7 @@ class SteamTests(unittest.TestCase):
         self.assertTrue(steam.installed(self.world, "1.20.1", "forge"))
         renamed = self.mods / "renamed.jar"
         files[0].rename(renamed)
-        self.assertEqual(self.install()[0], renamed)
+        self.assertTrue(self.install()[0].samefile(renamed))
         self.assertEqual(len(list(self.mods.iterdir())), 2)
         net.assert_not_called()
 
@@ -214,7 +214,7 @@ class SteamTests(unittest.TestCase):
         old = self.mods / "players-old-api.jar"
         old.write_bytes(jar_bytes("fabric-api", "0.91+1.20.1", provides=["fabric"]))
         self.setup_mocks()
-        self.assertEqual(self.install(loader="fabric")[-1], old)
+        self.assertTrue(self.install(loader="fabric")[-1].samefile(old))
         self.assertFalse((self.mods / "pinned.jar").exists())
         other = self.mods / "duplicate.jar"
         other.write_bytes(jar_bytes("fabric-api", "0.88+1.20.1", provides=["fabric"]))

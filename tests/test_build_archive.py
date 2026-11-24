@@ -29,6 +29,13 @@ def sample_zip(extra=(), **meta):
             ),
         )
         for name, data in extra:
+            if isinstance(name, str) and "\\" in name:
+                # ZipInfo(name) normalizes Windows backslashes before writing.
+                # Populate the raw member name after construction so this is
+                # genuinely an unsafe ZIP on every test platform.
+                raw = zipfile.ZipInfo()
+                raw.filename = raw.orig_filename = name
+                name = raw
             zipped.writestr(name, data)
     result.seek(0)
     return result
@@ -159,6 +166,14 @@ class BuildArchiveTests(unittest.TestCase):
         self.assertEqual(self.store.all(), before)
         self.assertEqual(self.store.get("active"), old)
         self.assertEqual(len(list(self.store.instances.iterdir())), len(before))
+
+    def test_backslash_member_is_present_on_wire_and_rejected(self):
+        payload = sample_zip([("mods\\file.jar", b"!")])
+        self.assertEqual(payload.getvalue().count(b"mods\\file.jar"), 2)
+        with zipfile.ZipFile(payload) as zipped:
+            self.assertEqual(zipped.infolist()[1].orig_filename, "mods\\file.jar")
+        with self.assertRaises(ValueError):
+            archive.import_build(self.store, payload)
 
     def test_download_capability_requires_correct_cookie_and_can_only_be_used_once(
         self,

@@ -84,7 +84,17 @@ def atomic_json(path, value):
             json.dump(value, output, ensure_ascii=False, separators=(",", ":"))
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temp, path)
+        # Windows readers and antivirus scanners may briefly hold a handle
+        # without FILE_SHARE_DELETE. A tiny bounded retry preserves atomic
+        # replacement instead of leaving a stale "preparing" game claim.
+        for attempt in range(6):
+            try:
+                os.replace(temp, path)
+                break
+            except OSError as error:
+                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                    raise
+                time.sleep(min(.01 * (attempt + 1), .05))
     finally:
         temp.unlink(missing_ok=True)
 

@@ -638,10 +638,17 @@ class _Processors:
             raise DownloadError("Установщик указал некорректную версию для mappings.")
         root = self.cache
         output = Path(options["--output"])
-        allowed = root / "libraries" / "net" / "minecraft" / "client" / version
-        if (not output.is_absolute() or not output.resolve().is_relative_to(allowed.resolve())
-                or not output.resolve().is_relative_to(root)
-                or output.resolve() == allowed.resolve()):
+        allowed = root / "libraries" / "net" / "minecraft" / "client"
+        try:
+            relative = output.resolve().relative_to(allowed.resolve())
+        except ValueError:
+            relative = Path()
+        # Forge's MCP coordinate includes the mappings timestamp, even though
+        # --version still names the plain Minecraft release.
+        if (not output.is_absolute() or not output.resolve().is_relative_to(root)
+                or len(relative.parts) != 2
+                or not re.fullmatch(re.escape(version) + r"(?:-\d{8}\.\d{6})?", relative.parts[0])
+                or relative.name != "client-" + relative.parts[0] + "-mappings.txt"):
             raise DownloadError("Установщик указал путь mappings вне каталога игры.")
         for ancestor in (output, *output.parents):
             if ancestor.is_symlink() or getattr(ancestor, "is_junction", lambda: False)():

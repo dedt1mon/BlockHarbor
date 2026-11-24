@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -287,6 +288,9 @@ class GameLibraryTests(unittest.TestCase):
                 self.subTest(system=system, architecture=bits),
                 patch("platform.system", return_value=system),
                 patch("platform.architecture", return_value=(bits + "bit", "")),
+                # Native selection is simulated, but these are real host paths.
+                # A Linux ':' classpath cannot encode a Windows C: drive.
+                patch("minecraft_launcher_lib.command.get_classpath_separator", return_value=os.pathsep),
             ):
                 for entry in library["downloads"]["classifiers"].values():
                     (self.cache / "libraries" / entry["path"]).unlink(missing_ok=True)

@@ -120,7 +120,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
     request?.abort();
     request = null;
   }
-  dialog.addEventListener("close", cancel, { once: true });
+  whenDialogClosed(dialog, detail, cancel);
   async function check(project, version) {
     cancel();
     const button = detail.querySelector("[data-install-project]");
@@ -198,7 +198,7 @@ async function confirmManualMod(file, target) {
   );
   return new Promise((resolve) => {
     let accepted = false, planned = false, token = "";
-    dialog.addEventListener("close", () => resolve(accepted), { once: true });
+    whenDialogClosed(dialog, dialog.querySelector(".manual-mod-name"), () => resolve(accepted));
     dialog.querySelector("[data-skip-mod]").onclick = closeDialog;
     const button = dialog.querySelector("[data-accept-mod]");
     if (!button) return;

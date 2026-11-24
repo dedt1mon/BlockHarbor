@@ -18,15 +18,25 @@ def _windows_file_api():
     import ctypes
     import msvcrt
 
-    class FileBasicInfo(ctypes.Structure):
-        _fields_ = [(name, ctypes.c_int64) for name in
-                    ("CreationTime", "LastAccessTime", "LastWriteTime", "ChangeTime")] + [
-                        ("FileAttributes", ctypes.c_uint32)]
-
-    query = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
-    query.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    query = ctypes.WinDLL("kernel32", use_last_error=True).DeviceIoControl
+    query.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+                     ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                     ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
     query.restype = ctypes.c_int
-    return ctypes, msvcrt, FileBasicInfo, query
+    return ctypes, msvcrt, query
+
+
+def _usn_stamp(raw):
+    if len(raw) < 8:
+        return None
+    length, major, _minor = struct.unpack_from("<IHH", raw)
+    if major not in (2, 3) or length > len(raw) or length < (60 if major == 2 else 76):
+        return None
+    reference_bytes = 8 if major == 2 else 16
+    number = struct.unpack_from("<q", raw, 8 + 2 * reference_bytes)[0]
+    if number <= 0:
+        return None
+    return f"usn:{major}:{raw[8:8 + reference_bytes].hex()}:{number}"
 
 
 def _content_stamp(file):
@@ -40,15 +50,21 @@ def _content_stamp(file):
 
 
 def _windows_change_token(file):
-    # CPython 3.12/3.13 st_ctime on Windows is still creation time. Query the
-    # actual metadata ChangeTime rather than accepting a stale hash cache after
-    # a same-size edit whose mtime was restored by an archive/copy tool.
+    # Windows creation time is not a change counter, and even FILE_BASIC_INFO
+    # ChangeTime collided for rapid same-size writes in native Windows CI.
+    # Read a per-file journal sequence and file reference where supported;
+    # never create/modify a volume journal or require elevated permissions.
     try:
-        ctypes, msvcrt, basic, query = _windows_file_api()
+        ctypes, msvcrt, query = _windows_file_api()
         with file.open("rb") as stream:
-            information = basic()
-            if query(msvcrt.get_osfhandle(stream.fileno()), 0, ctypes.byref(information), ctypes.sizeof(information)) and information.ChangeTime > 0:
-                return information.ChangeTime
+            request = ctypes.create_string_buffer(struct.pack("<HH", 2, 3))
+            response = ctypes.create_string_buffer(4096)
+            returned = ctypes.c_uint32()
+            if query(msvcrt.get_osfhandle(stream.fileno()), 0x000900EB,
+                     request, 4, response, len(response), ctypes.byref(returned), None):
+                token = _usn_stamp(response.raw[:returned.value])
+                if token is not None:
+                    return token
     except (OSError, ImportError, AttributeError):
         pass
     # A content fingerprint is real evidence, not a guessed replacement time.

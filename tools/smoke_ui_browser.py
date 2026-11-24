@@ -200,6 +200,15 @@ def controls_fixture(page, css):
 
 def production_views(page, api, output, label):
     detailed_capture = label in {"1366x768-100pct", "1280x720-200pct"}
+    geometry_failures = []
+
+    def check_geometry(name, dialog=False):
+        try:
+            geometry(page, dialog)
+        except AssertionError as error:
+            geometry_failures.append(name + ": " + str(error))
+            page.screenshot(path=str(output / (label + "-" + name + "-geometry-FAIL.png")))
+
     page.route("**/*", api.route)
     page.add_init_script("""window.__pendingRequests = 0; const originalFetch = window.fetch;
       window.fetch = async (...args) => { window.__pendingRequests++; try { return await originalFetch(...args); } finally { window.__pendingRequests--; } };""")
@@ -209,17 +218,17 @@ def production_views(page, api, output, label):
     for destination in ("home", "builds", "friends", "profile", "settings", "gallery", "addons"):
         page.evaluate("destination => navigate(destination)", destination)
         settle(page)
-        geometry(page)
+        check_geometry(destination)
         if detailed_capture:
             page.screenshot(path=str(output / (label + "-" + destination + ".png")))
     page.evaluate("showSettingsSection('downloads')")
     settle(page)
-    geometry(page)
+    check_geometry("downloads")
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-downloads.png")))
     page.evaluate("kind='worlds';navigate('addons')")
     settle(page)
-    geometry(page)
+    check_geometry("worlds")
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-worlds.png")))
     page.evaluate("navigate('builds')")
@@ -227,14 +236,14 @@ def production_views(page, api, output, label):
     page.screenshot(path=str(output / (label + "-builds.png")))
     page.locator("[data-pack-share]").first.click()
     settle(page)
-    geometry(page, True)
+    check_geometry("publication", True)
     assert page.locator('.community-publish [type="submit"]').is_enabled()
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-publication.png")))
     page.locator("#dialogClose").click()
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
-    geometry(page, True)
+    check_geometry("packs", True)
     assert page.locator(".pack-card").count() == 12
     assert page.locator(".pack-results").evaluate("el => el.clientHeight >= 24"), "Pack filters collapsed the results viewport"
     if detailed_capture:
@@ -243,7 +252,7 @@ def production_views(page, api, output, label):
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
     settle(page)
-    geometry(page, True)
+    check_geometry("catalog", True)
     assert page.locator(".catalog-choice").count() == 12, "Duplicate catalog cards"
     assert "Проверенных: 12" in page.locator(".catalog-pager").inner_text()
     assert page.locator(".catalog-results").evaluate("el => el.clientHeight >= 24"), "Catalog controls collapsed the results viewport"
@@ -251,7 +260,7 @@ def production_views(page, api, output, label):
     page.locator("#dialogClose").click()
     page.evaluate("modal('Большой список', '<div class=stack>' + Array.from({length:100},(_,i)=>'<p>Очень длинное название файла '+i+' '+ 'дополнение'.repeat(20)+'</p>').join('') + '</div>')")
     settle(page)
-    geometry(page, True)
+    check_geometry("large-dialog", True)
     assert page.evaluate("document.querySelector('#dialogBody').scrollHeight > document.querySelector('#dialogBody').clientHeight"), "Large dialog must use internal scrolling"
     page.locator("#dialogClose").click()
     # This is a server fixture snapshot, not a claim of 32 real mod downloads.
@@ -261,15 +270,25 @@ def production_views(page, api, output, label):
     settle(page)
     page.locator("[data-batch-open]").click()
     settle(page)
-    geometry(page, True)
+    check_geometry("batch", True)
     assert page.locator(".batch-item").count() == 32
     assert page.evaluate("document.querySelector('.batch-items').scrollHeight > document.querySelector('.batch-items').clientHeight"), "Large batch must scroll"
     page.screenshot(path=str(output / (label + "-batch.png")))
     page.locator("[data-batch-hide]").click()
-    return 14
+    return 14 - len(geometry_failures), geometry_failures
 
 
 def interaction_flows(page, api):
+    # The clipped chosen value must not clip the native top-layer option picker.
+    page.evaluate("navigate('home')")
+    settle(page)
+    assert page.locator("#homeBuild").get_attribute("title") == LONG_NAME
+    if page.evaluate("CSS.supports('appearance', 'base-select')"):
+        page.locator("#homeBuild").click()
+        page.locator("#homeBuild option").nth(1).wait_for(state="visible")
+        assert page.locator("#homeBuild option").first.evaluate("el => el.scrollWidth <= el.clientWidth + 1"), "Long option text overflows the opened picker"
+        page.keyboard.press("Escape")
+
     # Acknowledging a rendered snapshot must preserve a newer racing event.
     before = page.locator(".notification-bell").bounding_box()
     assert page.locator(".notification-dot").is_visible()
@@ -387,7 +406,7 @@ def interaction_flows(page, api):
     page.locator("[data-install-project]").click()
     settle(page)
     assert api.actions[-1]["source"] == "github", "Single installation lost source"
-    return 19
+    return 20
 
 
 def main():
@@ -429,9 +448,11 @@ def main():
                         # A fixture failure remains fatal, but must not suppress
                         # independent production-screen coverage and diagnostics.
                         try:
-                            report["checks"] += production_views(page, api, args.output, label)
+                            passed_checks, geometry_failures = production_views(page, api, args.output, label)
+                            report["checks"] += passed_checks
                             if (width, height, scale) in {(1366, 768, 1), (1280, 720, 2)}:
                                 report["checks"] += interaction_flows(page, api)
+                            assert not geometry_failures, "; ".join(geometry_failures)
                             assert not api.errors, "; ".join(api.errors)
                             assert not errors, "; ".join(errors)
                             observed = page.evaluate("({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})")

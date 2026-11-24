@@ -74,36 +74,98 @@ def _remove(path):
         path.unlink(missing_ok=True)
 
 
-def _new_file_identity(path):
-    """Record ownership and content before a new file can reach the build."""
-    before = path.stat()
-    if _reparse(path) or not stat.S_ISREG(before.st_mode):
-        raise ValueError("Новое дополнение должно быть обычным файлом.")
-    stamp = file_stamp(path)
-    digest = file_hash(path, stamp, "sha256")
-    after = path.stat()
-    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or file_stamp(path) != stamp:
-        raise ValueError("Файл изменился во время подготовки установки.")
-    return {"device": before.st_dev, "inode": before.st_ino,
-            "size": before.st_size, "sha256": digest}
+def _new_object_identity(path, *, cancellable=True):
+    """Fingerprint files and whole trees without relying on directory mtime.
+
+    Rename retains each node's device/inode. Content digests additionally catch
+    same-size in-place edits, including a nested file in a published directory.
+    Rollback deliberately calls this without checking its cancelled scope.
+    """
+    def check():
+        if cancellable:
+            lifecycle.check()
+
+    def stamp(value):
+        # Windows path stat and fd stat expose different ctime semantics on
+        # recent CPython. Birth time agrees for both views; SHA-256 below still
+        # detects same-size content edits with a restored modification time.
+        created = getattr(value, "st_birthtime_ns", value.st_ctime_ns) if os.name == "nt" else value.st_ctime_ns
+        return (value.st_dev, value.st_ino, value.st_size,
+                value.st_mtime_ns, created)
+
+    def file_identity(file):
+        check()
+        before = file.lstat()
+        if _reparse(file) or not stat.S_ISREG(before.st_mode):
+            raise ValueError("Файл транзакции перенаправлен или изменён.")
+        digest = hashlib.sha256()
+        with file.open("rb") as stream:
+            if stamp(os.fstat(stream.fileno())) != stamp(before):
+                raise ValueError("Файл изменился во время проверки.")
+            while block := stream.read(1024 * 1024):
+                check()
+                digest.update(block)
+        if stamp(file.lstat()) != stamp(before):
+            raise ValueError("Файл изменился во время проверки.")
+        return {"kind": "file", "device": before.st_dev, "inode": before.st_ino,
+                "size": before.st_size, "sha256": digest.hexdigest()}
+
+    before = path.lstat()
+    if _reparse(path):
+        raise ValueError("Объект транзакции перенаправлен.")
+    if stat.S_ISREG(before.st_mode):
+        return file_identity(path)
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError("Недопустимый объект транзакции.")
+    digest, count, total = hashlib.sha256(), 0, 0
+
+    def visit(directory, relative):
+        nonlocal count, total
+        check()
+        start = directory.lstat()
+        if _reparse(directory) or not stat.S_ISDIR(start.st_mode):
+            raise ValueError("Каталог транзакции перенаправлен.")
+        if len(relative.parts) > 32:
+            raise ValueError("Каталог транзакции слишком глубокий.")
+        count += 1
+        if count > MAX_FILES * 2 + 1:
+            raise ValueError("Слишком много объектов в транзакции.")
+        digest.update(json.dumps(["directory", relative.as_posix(), start.st_dev, start.st_ino],
+                                 ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
+        for child in sorted(directory.iterdir(), key=lambda item: item.name):
+            check()
+            name = relative / child.name
+            info = child.lstat()
+            if _reparse(child):
+                raise ValueError("Объект транзакции перенаправлен.")
+            if stat.S_ISDIR(info.st_mode):
+                visit(child, name)
+            else:
+                identity = file_identity(child)
+                count += 1
+                total += identity["size"]
+                if count > MAX_FILES * 2 + 1 or total > MAX_BYTES:
+                    raise ValueError("Содержимое транзакции превышает лимит.")
+                digest.update(json.dumps([name.as_posix(), identity], sort_keys=True,
+                                         ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
+        if stamp(directory.lstat()) != stamp(start):
+            raise ValueError("Каталог изменился во время проверки.")
+
+    visit(path, Path("."))
+    return {"kind": "directory", "device": before.st_dev, "inode": before.st_ino,
+            "entries": count, "size": total, "sha256": digest.hexdigest()}
 
 
-def _owns_new_file(path, identity):
-    """Never erase a replacement or an in-place manual edit during rollback."""
+def _owns_new_object(path, identity):
     if not isinstance(identity, dict) or not identity.get("inode") or not os.path.lexists(path):
         return False
-    st = path.stat()
-    if (_reparse(path) or not stat.S_ISREG(st.st_mode)
-            or (st.st_dev, st.st_ino, st.st_size) !=
-               (identity.get("device"), identity.get("inode"), identity.get("size"))):
+    try:
+        current = _new_object_identity(path, cancellable=False)
+    except (OSError, ValueError):
         return False
-    # Rollback must finish even when its operation's cancellation is already set.
-    with path.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    after = path.stat()
-    return (digest == identity.get("sha256") and
-            (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns) ==
-            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns))
+    # Early audit journals recorded file identities before adding their kind.
+    expected = {"kind": "file", **identity}
+    return current == expected
 
 
 def _safe_relative(name):
@@ -547,24 +609,40 @@ class BuildCare:
 
     def _rollback_transaction(self, work, journal):
         root = self._profile_root(journal["pid"])
-        preserved = []
+        preserved, conflicts = [], []
         for target in reversed(journal["targets"]):
             name, had = target["name"], target["had"]
             dest = self._validate_target(root, name)
             backup, staged = work / "old" / name, work / "new" / name
             if os.path.lexists(backup):
-                _remove(dest)
+                if os.path.lexists(dest):
+                    if "newIdentity" not in target:
+                        self._preserve_legacy_destination(work, journal["pid"], name, dest)
+                    elif _owns_new_object(dest, target["newIdentity"]):
+                        _remove(dest)
+                    else:
+                        conflicts.append(name)
+                        continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(backup, dest)
             elif not had and target.get("noReplace") and os.path.lexists(dest):
                 # Both POSIX hard-link publication and Windows rename retain
                 # file identity. Content guards also preserve in-place edits.
-                if _owns_new_file(dest, target.get("newIdentity")):
+                if _owns_new_object(dest, target.get("newIdentity")):
                     _remove(dest)
                 else:
                     preserved.append(name)
             elif not had and not os.path.lexists(staged):
-                _remove(dest)
+                if os.path.lexists(dest):
+                    if "newIdentity" not in target:
+                        self._preserve_legacy_destination(work, journal["pid"], name, dest)
+                    elif _owns_new_object(dest, target["newIdentity"]):
+                        _remove(dest)
+                    else:
+                        preserved.append(name)
+        if conflicts:
+            raise ValueError("Файлы изменены после прерывания: " + ", ".join(conflicts[:3])
+                             + ". Изменённые файлы, исходные копии и журнал сохранены для восстановления.")
         old = journal["oldProfile"]
         with self.store.connection() as db:
             db.execute("UPDATE profiles SET version=?,loader=? WHERE id=?", (old["version"], old["loader"], journal["pid"]))
@@ -579,9 +657,34 @@ class BuildCare:
                         db.execute("REPLACE INTO settings VALUES(?,?)", (key + ":" + journal["pid"], value))
         return preserved
 
+    def _preserve_legacy_destination(self, work, pid, name, dest):
+        """Old journals cannot prove ownership; preserve before restoring old.
+
+        This folder is deliberately outside every automatic cleanup pattern.
+        Its manifest survives a crash before the history entry can be written.
+        """
+        saved = self.root / ("preserved-" + work.name.removeprefix("transaction-") + "-" + secrets.token_hex(4))
+        saved.mkdir()
+        target = saved / "files" / name
+        target.parent.mkdir(parents=True)
+        _atomic_json(saved / "manifest.json", {"format": "BlockHarborPreservedRecovery/1",
+                     "profile": pid, "transaction": work.name, "path": name})
+        os.replace(dest, target)
+        self.history(pid, "Сохранены файлы после прерывания",
+                     "Старый журнал не подтверждает принадлежность файлов. Сохранено: " + name
+                     + "; папка recovery/" + saved.name + "/files. Исходная копия восстановлена отдельно.")
+
     def _cleanup_committed(self, work):
         try:
-            shutil.rmtree(work)
+            # Keep the durable marker until every payload child is gone. A
+            # partial Windows sharing violation must remain discoverable on
+            # the next startup, even after other children were already removed.
+            journal = work / "journal.json"
+            for child in work.iterdir():
+                if child != journal:
+                    _remove(child)
+            journal.unlink(missing_ok=True)
+            work.rmdir()
         except OSError as exc:
             # The durable commit has already succeeded. Retry the independent
             # cleanup next time; do not fail the install or block the build.
@@ -612,6 +715,14 @@ class BuildCare:
                 journal_file = work / "journal.json"
                 # The journal is published before any destination is changed.
                 if not journal_file.exists():
+                    # Cleanup may have removed the final marker immediately
+                    # before rmdir failed. Only an empty, exact service name is
+                    # safe here; never recursively delete an unmarked payload.
+                    if _ID.fullmatch(work.name.removeprefix("transaction-")):
+                        try:
+                            work.rmdir()
+                        except OSError:
+                            pass
                     continue
                 journal = {}
                 try:
@@ -673,13 +784,20 @@ class BuildCare:
         return len(pending)
 
     def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
-        # All expensive reads/copies are complete. Serialize the short rename/DB
-        # commit (including rollback) against close; never publish after cancel.
+        # Fingerprints can include a whole tree. Finish those reads before the
+        # short rename/DB commit guard, and reject paths before traversing them.
+        if len(sections) > MAX_TRANSACTION_TARGETS:
+            raise ValueError("Слишком много файлов в одной транзакции.")
+        for name in sections:
+            _safe_relative(name)
+        identities = {name: _new_object_identity(prepared / name) if os.path.lexists(prepared / name) else None
+                      for name in sections}
         with lifecycle.guard():
-            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings, no_replace=no_replace)
+            work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings,
+                                            no_replace=no_replace, identities=identities)
         self._cleanup_committed(work)
 
-    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
+    def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=(), identities=None):
         root = self._writable_root(pid)
         require_idle_files(root)
         no_replace = frozenset(no_replace)
@@ -687,7 +805,12 @@ class BuildCare:
             raise ValueError("Неверный список новых файлов в транзакции.")
         if len(sections) > MAX_TRANSACTION_TARGETS:
             raise ValueError("Слишком много файлов в одной транзакции.")
+        if identities is None:
+            identities = {name: _new_object_identity(prepared / name) if os.path.lexists(prepared / name) else None
+                          for name in sections}
         for name in no_replace:
+            if not isinstance(identities.get(name), dict) or identities[name].get("kind") != "file":
+                raise ValueError("Подготовленный файл установки отсутствует или изменён: " + name)
             if os.path.lexists(self._validate_target(root, name)):
                 raise ValueError("Файл появился во время установки: " + name)
         work = self.root / ("transaction-" + secrets.token_hex(16))
@@ -696,7 +819,7 @@ class BuildCare:
                    "targets": [{"name": name,
                                 "had": False if name in no_replace else os.path.lexists(self._validate_target(root, name)),
                                 "noReplace": name in no_replace,
-                                **({"newIdentity": _new_file_identity(prepared / name)} if name in no_replace else {})}
+                                "newIdentity": identities[name]}
                                for name in sections]}
         if pins is not None:
             with self.store.connection() as db:

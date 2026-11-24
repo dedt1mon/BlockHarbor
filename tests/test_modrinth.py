@@ -563,6 +563,7 @@ class ModrinthTests(unittest.TestCase):
         from main import App
 
         app = App(self.store.root)
+        self.addCleanup(app.close)
         # The application now routes verified binary transfers through its queue.
         # Keep this orchestration test offline; transfer integrity has its own tests.
         self.enterContext(patch.object(app.transfers, "download", side_effect=lambda url, target, **_options: target.write_bytes(self.data[url])))

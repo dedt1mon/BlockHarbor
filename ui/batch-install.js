@@ -22,6 +22,7 @@
   let titles = new Map();
   let submitting = false;
   let cancelling = "";
+  let awaitingJob = "";
   const name = item => titles.get(item.project) || item.title || item.project;
   const selection = item => ({project: item.project, kind: item.kind || "mods", version: item.version || null, source: item.source || "all"});
 
@@ -41,6 +42,7 @@
 
   function start(id, request) {
     const requested = request.items || [request];
+    awaitingJob = id;
     snapshot = {
       id, kind: "catalog-install", profileId: request.id, busy: true,
       items: requested.map(item => ({...selection(item), title: name(item), status: "queued", error: ""})),
@@ -51,6 +53,8 @@
 
   function observe(job) {
     if (job?.kind !== "catalog-install" || !Array.isArray(job.items)) return;
+    if (awaitingJob && job.id !== awaitingJob) return;
+    awaitingJob = "";
     snapshot = {...job, items: job.items.slice(0, 32), reviews: Array.isArray(job.reviews) ? job.reviews : []};
     update();
   }

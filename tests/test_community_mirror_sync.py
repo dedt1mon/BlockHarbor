@@ -2,6 +2,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -21,6 +22,38 @@ ROW = {
 
 
 class MirrorIndexExpiryTests(unittest.TestCase):
+    def test_expiring_archives_are_never_copied_and_existing_copy_is_withdrawn(self):
+        live = {**ROW, "expiresAt": int(time.time()) + 3600}
+        tag = mirror.PREFIX + mirror.shard(live["id"])
+        releases = {tag: {"assets": [{"name": live["id"] + ".zip", "size": live["size"],
+                                      "digest": "sha256:" + live["sha256"]}]},
+                    mirror.INDEX_TAG: {"assets": []}}
+        calls = []
+
+        def fake_gh(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ("release", "upload", mirror.INDEX_TAG):
+                raw = Path(args[3]).read_bytes()
+                manifest = json.loads(raw)
+                self.assertEqual(manifest["items"], [])
+                self.assertEqual(manifest["total"], 0)
+                releases[mirror.INDEX_TAG]["assets"] = [{"name": "index.json", "digest": "sha256:" + hashlib.sha256(raw).hexdigest()}]
+            return ""
+
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": mirror.REPO, "GH_TOKEN": "test-only"}), \
+             patch.object(mirror, "listings", return_value=[live]), \
+             patch.object(mirror, "release", side_effect=releases.get), \
+             patch.object(mirror, "ensure_release", side_effect=lambda name, title: releases[name]), \
+             patch.object(mirror, "download_verified") as download, \
+             patch.object(mirror, "gh", side_effect=fake_gh):
+            mirror.sync()
+        download.assert_not_called()
+        self.assertIn(("release", "delete-asset", tag, live["id"] + ".zip", "--yes", "--repo", mirror.REPO), calls)
+        self.assertFalse(any(call[:3] == ("release", "upload", tag) for call in calls))
+
+    def test_legacy_fallback_remains_eligible(self):
+        self.assertEqual(mirror.mirrorable([ROW, {**ROW, "expiresAt": int(time.time()) + 3600}]), [ROW])
+
     def test_manifest_carries_expiration_through_validation(self):
         expires = int(time.time()) + 1800
         result = mirror.validate({**ROW, "expiresAt": expires})

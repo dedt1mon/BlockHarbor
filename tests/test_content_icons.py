@@ -255,7 +255,9 @@ class ContentIconsTests(unittest.TestCase):
         data[offset + 30 + name + extra] = 0xFF  # invalid DEFLATE block type
         file.write_bytes(data)
         verify_pack(file, "resourcepacks", "fabric")
-        state = App(self.root).state()
+        app = App(self.root)
+        self.addCleanup(app.close)
+        state = app.state()
         self.assertEqual(
             state["contents"]["resourcepacks"],
             [{"name": "broken.zip", "size": len(data), "icon": ""}],
@@ -266,6 +268,7 @@ class ContentIconsTests(unittest.TestCase):
         archive(file, {"pack.png": picture()})
         url = self.store.icons.icon(file)
         app = App(self.root)
+        self.addCleanup(app.close)
         server = Server(("127.0.0.1", 0), Handler)
         server.app = app
         thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -36,7 +36,8 @@ class SkinSyncTests(unittest.TestCase):
                 self.assertEqual(skin_sync.prepare(folder, version, loader), jar)
                 self.assertEqual(jar.stat().st_size, asset["size"])
                 mods = list((folder / "mods").glob("*.jar"))
-                self.assertEqual(mods, [jar])
+                self.assertEqual(len(mods), 1)
+                self.assertTrue(mods[0].samefile(jar))
         self.assertIsNone(skin_sync.prepare(self.instance, "1.20.1", "vanilla"))
         self.assertFalse((self.instance / "mods").exists())
 

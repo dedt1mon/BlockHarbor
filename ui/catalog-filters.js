@@ -57,7 +57,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
     suggestions?.abort();
     suggestions = null;
   }
-  dialog.addEventListener("close", stopSuggestions, { once: true });
+  whenDialogClosed(dialog, catalog, stopSuggestions);
 
   function updateChip(button) {
     const { group, value } = button.dataset;

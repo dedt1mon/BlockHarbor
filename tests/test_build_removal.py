@@ -18,6 +18,7 @@ class BuildRemovalTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         self.store = self.app.store
         self.first = self.store.create("Остров друзей", "1.20.1", "fabric")
         self.second = self.store.create("Вторая сборка", "1.20.1", "forge")
@@ -56,6 +57,7 @@ class BuildRemovalTests(unittest.TestCase):
         self.assertEqual(self.app.state()["active"], self.first)
         self.move(self.first)
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         s = self.app.state()
         self.assertEqual(s["active"], "")
         self.assertEqual(s["profiles"], [])
@@ -97,6 +99,7 @@ class BuildRemovalTests(unittest.TestCase):
         archived.parent.mkdir()
         (self.store.instances / self.first).rename(archived)
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         self.assertEqual(
             (self.app.store.folder(self.first) / self.relative).read_bytes(),
             b"complete-world",
@@ -104,6 +107,7 @@ class BuildRemovalTests(unittest.TestCase):
         self.move(self.first)
         archived.rename(self.store.instances / self.first)
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         self.assertTrue((archived / self.relative).is_file())
         self.assertEqual(self.app.state()["deletedProfiles"][0]["id"], self.first)
 
@@ -205,13 +209,16 @@ with open(sys.argv[1], "r+b") as file:
         self.assertIn("повтори", failed["message"])
         self.assertTrue(remaining.is_file())
         self.app = App(self.root)
+        self.addCleanup(self.app.close)
         self.assertTrue(self.app.state()["deletedProfiles"][0]["purging"])
         with self.assertRaisesRegex(ValueError, "Безвозвратное"):
             self.move(self.first, True)
         self.assertTrue(self.purge_job(self.first)["ok"])
         self.assertFalse(archived.exists())
         self.assertTrue(self.store.folder(self.second).is_dir())
-        self.assertEqual(App(self.root).state()["deletedProfiles"], [])
+        reopened = App(self.root)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.state()["deletedProfiles"], [])
 
     def test_purge_rejects_redirected_root_and_does_not_follow_nested_links(self):
         self.move(self.first)

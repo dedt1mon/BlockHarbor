@@ -106,7 +106,7 @@ function openModrinth(profile, category) {
     targetPage = null;
     output.removeAttribute("aria-busy");
   }
-  dialog.addEventListener("close", () => { cancel(); cartRequest?.abort(); }, { once: true });
+  whenDialogClosed(dialog, catalog, () => { cancel(); cartRequest?.abort(); });
 
   async function request(endpoint, params, message, repeat) {
     const current = new AbortController();

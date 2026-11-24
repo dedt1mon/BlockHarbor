@@ -94,6 +94,7 @@ let state,
   settingsSection = "general",
   kind = "mods",
   lastJob = "",
+  acceptedJobGeneration = 0,
   lastPlayJob = "",
   shownExit = "",
   activePoll = false,
@@ -356,7 +357,7 @@ function homeBuildPicker() {
       "</option>",
   );
   return (
-    '<label class="build-picker"><span>Сборка</span><select id="homeBuild">' +
+    '<label class="build-picker"><span>Сборка</span><select id="homeBuild" title="' + esc(active()?.name || "") + '">' +
     options.join("") +
     "</select></label>"
   );
@@ -957,6 +958,16 @@ function closeDialog() {
   $("#dialog").close();
   moveNotice();
 }
+function whenDialogClosed(dialog, scope, callback) {
+  const onClose = () => {
+    // Native close events are queued. An earlier modal can close immediately
+    // before this scope opens in the shared dialog; keep its requests alive.
+    if (dialog.open && scope.isConnected) return;
+    dialog.removeEventListener("close", onClose);
+    callback();
+  };
+  dialog.addEventListener("close", onClose);
+}
 function releaseOptions(versions, current) {
   return versions
     .map((version) => {
@@ -1138,6 +1149,7 @@ function createBox(preferredLoader = "fabric") {
 }
 async function runJob(action, data = {}) {
   const j = await act(action, data);
+  acceptedJobGeneration++;
   lastJob = j.job;
   if (action === "play") lastPlayJob = j.job;
   if (action === "purgeBuild") closeDialog();
@@ -1192,7 +1204,11 @@ async function tick(wake = false) {
   clearTimeout(pollTimer);
   activePoll = true;
   try {
+    const generation = acceptedJobGeneration;
     const j = await api("/api/job");
+    // A job accepted while this request was in flight owns the next snapshot.
+    // An older response must not replace its state, result or per-item progress.
+    if (generation !== acceptedJobGeneration) return;
     pollError = "";
     if (typeof j.gameRunning === "boolean") state.gameRunning = j.gameRunning;
     if (Array.isArray(j.runningProfiles)) state.runningProfiles = j.runningProfiles;
@@ -1446,6 +1462,7 @@ async function saveAppearance(destination = "profile") {
       headers: { "Content-Type": "application/octet-stream" },
       body: profileSubmission.file,
     });
+    acceptedJobGeneration++;
     profileJob = lastJob = j.job;
     notice("Сохраняем параметры…", false, true);
     await tick();
@@ -1721,6 +1738,7 @@ document.addEventListener("submit", async (e) => {
     const result = await act("create", {...draft, allowWithoutSteam: confirmation.allowWithoutSteam});
     if (result.job) {
       pendingBuild = { id: result.job, form, destination };
+      acceptedJobGeneration++;
       lastJob = result.job;
       notice("Создаём сборку…", false, true);
       await tick();

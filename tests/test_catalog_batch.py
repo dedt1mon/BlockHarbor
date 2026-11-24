@@ -1,6 +1,7 @@
 """Real staged JAR transactions with independent failure/review/cancel handling."""
 
 import copy
+from contextlib import closing
 import json
 import os
 import subprocess
@@ -223,11 +224,30 @@ care.publish_addons(pid,pending)
 
 
 class CatalogJobTests(unittest.TestCase):
+    def test_cancel_while_waiting_for_operation_lock_finishes_every_queued_row(self):
+        from main import App
+        with tempfile.TemporaryDirectory() as temporary, closing(App(Path(temporary))) as app:
+            calls = []
+            initial = catalog_batch.initial_snapshot("queued-profile", [
+                {"kind": "mods", "project": "one"}, {"kind": "mods", "project": "two"}])
+            with app.coordinator.operation():
+                jid = app.start_job(lambda status: calls.append(True), job_data=initial, cancellable=True)["job"]
+                app.action("cancelCatalogInstall", {"job": jid})
+                deadline = time.monotonic() + 3
+                while app.job_snapshot()["busy"] and time.monotonic() < deadline:
+                    time.sleep(.01)
+                state = app.job_snapshot()
+                self.assertFalse(state["busy"])
+                self.assertEqual(state["summary"]["cancelled"], 2)
+                self.assertEqual(state["summary"]["remaining"], 0)
+                self.assertEqual([row["status"] for row in state["items"]], ["cancelled", "cancelled"])
+                self.assertFalse(state["cancellable"])
+                self.assertEqual(calls, [])
+                self.assertFalse(app.scope.event.is_set())
+
     def test_user_cancel_releases_just_the_job_and_read_notifications_stay_responsive(self):
         from main import App
-        with tempfile.TemporaryDirectory() as temporary:
-            app = App(Path(temporary))
-            self.addCleanup(app.close)
+        with tempfile.TemporaryDirectory() as temporary, closing(App(Path(temporary))) as app:
             started = threading.Event()
 
             def task(status):

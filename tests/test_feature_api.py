@@ -33,6 +33,7 @@ class FeatureApiTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
+        self.app.close()
 
     def call(self, path, data=None, *, auth=True, origin=None, raw=False):
         headers = {"Authorization":"Bearer " + self.app.token} if auth else {}

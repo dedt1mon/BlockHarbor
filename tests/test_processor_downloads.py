@@ -65,6 +65,17 @@ class ProcessorDownloadsTests(unittest.TestCase):
         self.assertEqual(self.output.read_bytes(), b"previous output")
         self.assertEqual(list(self.output.parent.iterdir()), [self.output])
 
+    def test_official_timestamped_mcp_coordinate_is_verified_for_exact_game(self):
+        coordinate = "1.20.1-20230612.114412"
+        self.output = self.root / "libraries/net/minecraft/client" / coordinate / ("client-" + coordinate + "-mappings.txt")
+        with patch.object(self.download, "_receive_asset", side_effect=self.receive):
+            self.assertEqual(self.adapter.run(self.command()).returncode, 0)
+        self.assertEqual(self.output.read_bytes(), self.payload)
+        command = self.command()
+        command[-1] = command[-1].replace("1.20.1-20230612.114412", "1.18.2-20220404.173914")
+        with self.assertRaises(preparation.DownloadError):
+            self.adapter.run(command)
+
     def test_unknown_flags_and_processors_still_execute_original_java(self):
         commands = [self.command() + ["--sanitize"], self.command() + ["--format", "TSRG"],
                     ["java", "-jar", "installer.jar"],

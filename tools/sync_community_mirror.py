@@ -1,8 +1,10 @@
 """Read-only GitHub mirror for publicly shared BlockHarbor builds.
 
 The original registry remains authoritative. This script replicates only public
-ready listings and archive bytes; author secrets and upload sessions never leave
-their owners. Runs via a scoped GITHUB_TOKEN in GitHub Actions.
+legacy ready listings and archive bytes; author secrets and upload sessions never
+leave their owners. Expiring publications are deliberately not copied to GitHub:
+a public release asset cannot enforce the registry's one-hour access deadline.
+Runs via a scoped GITHUB_TOKEN in GitHub Actions.
 """
 from __future__ import annotations
 
@@ -131,10 +133,19 @@ def assets(rel):
     return {asset["name"]: asset for asset in rel.get("assets", [])}
 
 
+def mirrorable(items):
+    """Keep the legacy fallback without creating unrevocable expiring URLs.
+
+    Filtering is separate from pagination and validation. Previously copied
+    expiring assets consequently leave the desired set and are removed on sync.
+    """
+    return [item for item in items if "expiresAt" not in item]
+
+
 def cached_listings(folder):
     """Expire known GitHub mirror assets even when the origin is unavailable.
 
-    The last successful index contains server-signed *content digests* and
+    The last successful index contains server-provided content digests and
     absolute expiry timestamps. Never guess an expiry for legacy records.
     """
     indexed = release(INDEX_TAG)
@@ -195,6 +206,10 @@ def sync():
             print(f"Source unavailable ({type(exc).__name__}); expiring cached mirror.", flush=True)
             items = cached_listings(scratch)
             (scratch / "index.json").unlink(missing_ok=True)
+        before_retention_filter = len(items)
+        items = mirrorable(items)
+        if len(items) != before_retention_filter:
+            print(f"Retention: {before_retention_filter - len(items)} expiring builds stay on the authoritative server only.", flush=True)
         groups = {}
         for item in items:
             groups.setdefault(shard(item["id"]), []).append(item)

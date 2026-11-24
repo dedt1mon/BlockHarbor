@@ -167,7 +167,7 @@ class BuildCareTests(unittest.TestCase):
 
         def failing(source, dest):
             nonlocal failed
-            if not failed and str(source).endswith("/new/config"):
+            if not failed and Path(source).name == "config" and Path(source).parent.name == "new":
                 failed = True
                 raise OSError("simulated full disk")
             return replace(source, dest)

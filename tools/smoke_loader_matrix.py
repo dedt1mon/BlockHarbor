@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -70,7 +71,7 @@ def timed_install(version, loader, cache, folder, status, seconds):
         timer.cancel()
 
 
-def observe_launch(cache, folder, seconds, status):
+def observe_launch(cache, folder, seconds, status, capture=None):
     started = time.monotonic()
     process = None
     try:
@@ -80,7 +81,15 @@ def observe_launch(cache, folder, seconds, status):
             time.sleep(0.25)
         if process.poll() is not None:
             return {"state": "exited", "exitCode": process.returncode, "seconds": round(time.monotonic() - started, 2)}
-        return {"state": "running-observed", "seconds": round(time.monotonic() - started, 2), "gameplayVerified": False}
+        result = {"state": "running-observed", "seconds": round(time.monotonic() - started, 2), "gameplayVerified": False}
+        if capture is not None:
+            try:
+                from PIL import ImageGrab
+                ImageGrab.grab(xdisplay=os.environ["DISPLAY"]).save(capture)
+                result["displayCapture"] = capture.name
+            except Exception as error:
+                result["displayCaptureError"] = type(error).__name__
+        return result
     except Exception as error:
         return {"state": "failed", "error": f"{type(error).__name__}: {error}", "seconds": round(time.monotonic() - started, 2)}
     finally:
@@ -98,8 +107,12 @@ def run_case(store, loader, version, args):
     cache = store.root / "game-cache"
     label = loader + "-" + version
     output = store.root / "audit-results" / label
+    if output.exists():
+        history = store.root / "audit-history" / (label + "-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
+        history.parent.mkdir(parents=True, exist_ok=True)
+        output.rename(history)
     output.mkdir(parents=True, exist_ok=True)
-    result = {"loader": loader, "minecraft": version, "created": False, "install": "not-run", "repeatInstall": "not-run", "launches": [], "deletion": "not-run"}
+    result = {"loader": loader, "minecraft": version, "started": datetime.now(timezone.utc).isoformat(), "created": False, "install": "not-run", "repeatInstall": "not-run", "launches": [], "deletion": "not-run"}
     pid = store.create("Проверка " + loader + " " + version, version, loader)
     result["created"] = True
     folder = store.folder(pid)
@@ -127,8 +140,9 @@ def run_case(store, loader, version, args):
         result["repeatInstall"] = "passed"
         result["repeatSeconds"] = round(time.monotonic() - started, 3)
         if args.launch:
-            for _ in range(2):
-                result["launches"].append(observe_launch(cache, folder, args.observe_seconds, status))
+            for index in range(2):
+                capture = output / f"launch-{index + 1}.png" if args.capture_display else None
+                result["launches"].append(observe_launch(cache, folder, args.observe_seconds, status, capture))
         else:
             result["launches"] = [{"state": "not-requested", "gameplayVerified": False}]
         logs = folder / "logs"
@@ -142,6 +156,25 @@ def run_case(store, loader, version, args):
         result["deletion"] = "passed" if not folder.exists() else "failed"
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"
+        cause, seen = error, set()
+        while cause is not None and id(cause) not in seen:
+            seen.add(id(cause))
+            if isinstance(cause, subprocess.CalledProcessError):
+                chunks = []
+                for stream in (cause.stdout, cause.stderr):
+                    if isinstance(stream, bytes):
+                        stream = stream[-65536:].decode("utf-8", errors="replace")
+                    if isinstance(stream, str):
+                        chunks.append(stream[-65536:])
+                # JVM option echoes may disclose values from the caller's
+                # environment. Keep only installer output and strip URL users.
+                detail = "\n".join(line for line in "\n".join(chunks).splitlines()
+                                   if "Picked up " not in line)
+                detail = re.sub(r"(https?://)[^\s/@]+@", r"\1[redacted]@", detail)
+                (output / "installer-error.log").write_text(detail, encoding="utf-8")
+                result["installerDiagnostic"] = "installer-error.log"
+                break
+            cause = cause.__cause__ or cause.__context__
         if result["install"] == "not-run":
             result["install"] = "failed"
         elif result["repeatInstall"] == "not-run":
@@ -156,14 +189,22 @@ def main():
     parser.add_argument("--root", type=Path, required=True, help="New or previously marked isolated audit directory")
     parser.add_argument("--case", type=case_value, action="append", help="loader:version; repeat to select a matrix")
     parser.add_argument("--launch", action="store_true", help="Actually start each game twice with a temporary local nickname")
+    parser.add_argument("--capture-display", action="store_true", help="Capture the whole isolated Linux test display after startup; never use on a personal desktop")
     parser.add_argument("--observe-seconds", type=float, default=30)
     parser.add_argument("--timeout", type=float, default=1200, help="Bound each installation operation, in seconds")
     parser.add_argument("--interrupt-first", type=float, default=0, help="Cancel the first preparation after this many seconds, then recover")
     args = parser.parse_args()
     if not 1 <= args.observe_seconds <= 300 or not 5 <= args.timeout <= 3600 or not 0 <= args.interrupt_first <= 60:
         parser.error("Observation 1–300s, timeout 5–3600s, interruption 0–60s")
+    if args.capture_display and (sys.platform != "linux" or not os.environ.get("DISPLAY") or not args.launch):
+        parser.error("--capture-display needs --launch and an isolated Linux X display")
     store = Store(prepare_root(args.root))
-    report = {"started": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(), "python": platform.python_version(), "displayAvailable": sys.platform == "win32" or bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")), "gameplayVerified": False, "cases": []}
+    report = {"started": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(), "python": platform.python_version(), "displayAvailable": sys.platform == "win32" or bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")), "externalJavaOptions": bool(os.environ.get("JDK_JAVA_OPTIONS") or os.environ.get("JAVA_TOOL_OPTIONS")), "gameplayVerified": False, "cases": []}
+    previous = store.root / "audit-results.json"
+    if previous.exists():
+        history = store.root / "audit-history"
+        history.mkdir(exist_ok=True)
+        previous.rename(history / ("matrix-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json"))
     for loader, version in args.case or map(case_value, DEFAULT_CASES):
         result = run_case(store, loader, version, args)
         report["cases"].append(result)

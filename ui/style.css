@@ -1293,6 +1293,8 @@ select.field,
   cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* base-select's chosen option otherwise paints beyond the bounded control. */
+  overflow: hidden;
 }
 select.field:hover:not(:disabled),
 .build-picker select:hover:not(:disabled) {

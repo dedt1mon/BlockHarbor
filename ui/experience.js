@@ -6,6 +6,7 @@
   const galleries = new Map();
   let galleryRequest = 0;
   let notificationRequest = 0;
+  let notificationObservation = 0;
   const query = (action, p = {}) => api("/api/feature?" + new URLSearchParams({action, ...p}));
   const date = (v) => v ? new Date(v * 1000).toLocaleString("ru-RU", {dateStyle:"short",timeStyle:"short"}) : "—";
   const media = (digest) => /^[a-f0-9]{64}$/.test(digest || "") ? "/api/media/" + digest + ".png" : "";
@@ -22,6 +23,7 @@
   }
   function observeNotifications(value) {
     if (!Number.isFinite(value)) return;
+    notificationObservation++;
     const unread = Math.max(0, Math.trunc(value));
     const bell = document.querySelector(".notification-bell");
     if (bell) {
@@ -39,6 +41,7 @@
   }
   async function notifications() {
     const request = ++notificationRequest;
+    const requestedAt = notificationObservation;
     modal("История уведомлений", '<section class="notification-panel"><p role="status">Загружаем уведомления…</p></section>');
     const host = document.querySelector(".notification-panel");
     const current = () => request === notificationRequest && host.isConnected && $("#dialog").open;
@@ -55,18 +58,38 @@
     const items = data.items || [];
     host.innerHTML = `<div class="notification-history" aria-label="Уведомления">${items.length ? items.map(n => `<article class="notification-item ${esc(n.level)}${n.read ? "" : " unread"}"><div class="notification-heading"><time datetime="${new Date(n.created * 1000).toISOString()}">${date(n.created)}</time>${n.read ? "" : '<span class="notification-new">Новое</span>'}</div><p>${esc(n.message)}</p></article>`).join("") : '<p class="note">История пока пуста.</p>'}</div><div class="dialog-actions"><button class="btn" type="button" data-notifications-refresh hidden>${ic("refresh")}Показать новые</button>${expButton("clearNotifications", "Очистить историю", "trash", items.length ? "" : "disabled")}</div><p class="notification-read-error" role="status" hidden></p>`;
     host.querySelector("[data-notifications-refresh]").onclick = () => notifications().catch(e => notice(e.message, true));
-    observeNotifications(data.unread);
+    if (notificationObservation === requestedAt) observeNotifications(data.unread);
+    else observeNotifications(state.notificationUnread);
     if (data.lastId) {
+      const readStartedAt = notificationObservation;
+      let read;
       try {
         // Only the snapshot actually rendered above is acknowledged. A newer server
         // event arriving in parallel stays unread and keeps the bell indicator.
-        const read = await act("experienceReadNotifications", {throughId: data.lastId});
-        observeNotifications(read.unread);
+        read = await act("experienceReadNotifications", {throughId: data.lastId});
       } catch (error) {
         if (current()) {
           const message = host.querySelector(".notification-read-error");
           message.hidden = false;
           message.textContent = "Не удалось сохранить прочтение: " + error.message;
+        }
+        return;
+      }
+      if (notificationObservation === readStartedAt) {
+        observeNotifications(read.unread);
+      } else {
+        // A poll or another history request supplied a newer observation while
+        // the ACK was in flight. Its older count must not hide a new event.
+        const refreshStartedAt = notificationObservation;
+        try {
+          const latest = await query("experienceState");
+          if (notificationObservation === refreshStartedAt) observeNotifications(latest.notificationUnread);
+        } catch (error) {
+          if (current()) {
+            const message = host.querySelector(".notification-read-error");
+            message.hidden = false;
+            message.textContent = "Не удалось обновить счётчик уведомлений: " + error.message;
+          }
         }
       }
     }

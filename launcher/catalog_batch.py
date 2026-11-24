@@ -267,7 +267,8 @@ def install(store, pid, items, status, mutation_lock=None, acknowledgement="", *
     result = snapshot()
     result["reviews"] = [review for review in reviews if any(
         rows.get(item["project"], {}).get("status") == "needs_review"
-        for item in review.get("request", {}).get("items", [])
+        for item in review.get("request", {}).get("items", [review.get("request", {})])
+        if "project" in item
     )]
     totals = result["summary"]
     result["ok"] = not bool(totals["notInstalled"])

@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           for file in ui/*.js; do node --check "$file"; done
-      - name: Window lifecycle and community API contracts
+      - name: Window lifecycle, catalog retention and shared skins
         run: |
           node tests/window-lifecycle.cjs
           node --test community-registry/worker.test.mjs community-registry/skin-registry.test.mjs

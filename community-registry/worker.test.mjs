@@ -300,9 +300,15 @@ test('public snapshot expires exactly one hour after completion and replay canno
   assert.equal(sha(new Uint8Array(await fetched.arrayBuffer())),sha(small));
   api.env.DB.db.prepare("UPDATE builds SET created=created-3600 WHERE id=?").run(first.id);
   assert.equal((await author.finish()).status,410);
+  assert.equal((await api.call('GET','builds/'+first.id)).status,404);
   assert.equal((await api.call('GET','builds/'+first.id+'/archive')).status,404);
   const expiredPage=await (await api.call('GET','builds')).json();
   assert.equal(expiredPage.total,0);
+  assert.deepEqual(expiredPage.hits,[]);
+  // Reads enforce the deadline without waiting for physical R2 deletion.
+  assert.equal(api.env.BUCKET.objects.size,1);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,1);
+  await worker.scheduled({},api.env,{});
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
 });
@@ -467,11 +473,21 @@ test('cooldown does not revoke verified builds or abort recoverable uploads',asy
 });
 
 test('unfinished uploads expire after 30 minutes and release their reservation',async t => {
-  const api=registry(t);
-  assert.equal((await api.begin(metadata(small))).status,201);
+  const api=registry(t), upload=await api.open(metadata(small));
+  const row=api.env.DB.db.prepare('SELECT id FROM builds').get();
   assert.equal(api.env.BUCKET.uploads.size,1);
   api.env.DB.db.exec("UPDATE builds SET created=created-1801 WHERE state='uploading'");
-  await api.call('GET','builds');
+  assert.equal((await upload.put(1,small)).status,410);
+  assert.equal((await upload.finish()).status,410);
+  assert.equal((await api.call('GET','builds/'+row.id)).status,404);
+  assert.equal((await api.call('GET','builds/'+row.id+'/archive')).status,404);
+  const page=await (await api.call('GET','builds')).json();
+  assert.equal(page.total,0);
+  assert.deepEqual(page.hits,[]);
+  // Expired reservations remain hidden until the independent janitor runs.
+  assert.equal(api.env.BUCKET.uploads.size,1);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,1);
+  await worker.scheduled({},api.env,{});
   assert.equal(api.env.BUCKET.uploads.size,0);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
 });

@@ -1,0 +1,63 @@
+name: Clean up expired community archives
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/community-cleanup.yml']
+  schedule:
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blockharbor-community-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.repository == 'dedt1mon/BlockHarbor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask the registry to prune expired archives
+        # No checkout, owner keys, R2 keys or admin token are needed. The server
+        # accepts no IDs/dates and decides eligibility from its own clock.
+        run: |
+          python3 - <<'PY'
+          import json
+          import time
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          endpoint = 'https://blockharbor-community-catalog.ded8timon.chatgpt.site/v1/maintenance/prune'
+          opener = build_opener(NoRedirect())
+          checked = 0
+          for attempt in range(8):
+              request = Request(endpoint, method='POST', data=b'', headers={
+                  'User-Agent': 'BlockHarbor-Community-Cleanup/1',
+                  'Accept': 'application/json',
+              })
+              with opener.open(request, timeout=25) as response:
+                  raw = response.read(4097)
+              if len(raw) > 4096:
+                  raise RuntimeError('Cleanup response exceeds limit')
+              result = json.loads(raw)
+              count = result.get('checked')
+              delay = result.get('retryAfterSeconds')
+              throttled = result.get('throttled')
+              if (type(count) is not int or not 0 <= count <= 16
+                      or result.get('limit') != 16 or type(throttled) is not bool
+                      or type(delay) is not int or not 0 <= delay <= 5):
+                  raise RuntimeError('Unexpected cleanup contract')
+              checked += count
+              if count < 16 and not throttled:
+                  break
+              if attempt < 7:
+                  time.sleep(max(1, delay))
+          print(f'Cleanup completed: {attempt + 1} calls, {checked} expired records checked; deletion retries remain server-owned.')
+          PY

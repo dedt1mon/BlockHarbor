@@ -34,7 +34,7 @@ FIXTURE = r"""
     <div class="pack-search"><input class="field" id="packSearch" type="search"><button class="btn">Найти</button></div>
     <div class="pack-filters"><label>Версия<select class="field"><option>1.20.1</option></select></label><label>Категория<select class="field"><option>Приключения</option></select></label><label>Загрузчик<select class="field"><option>NeoForge</option></select></label><label>Сортировка<select class="field"><option>Релевантность</option></select></label></div>
     <div class="pack-grid"><article class="pack-card"><h4>Модпак</h4><p>Описание</p><div class="pack-card-footer"><span class="meta">BH-AB1234567890</span><button class="btn">Скачать</button></div></article></div>
-    <form class="community-publish"><label>Имя<input class="field" value="Публикация"></label><div class="field-group"><label>Версия<input class="field" readonly value="1.20.1"></label><label>Загрузчик<input class="field" readonly value="Forge"></label></div><div class="dialog-actions community-publish-actions"><button class="btn" type="button">Закрыть</button><button class="btn main" type="button">Опубликовать</button></div></form>
+    <div class="dialog-header-actions"><button id="communityPublishSubmit" class="btn main" type="submit" form="communityPublishForm">Опубликовать</button></div><form id="communityPublishForm" class="community-publish"><label>Имя<input class="field" value="Публикация"></label><div class="field-group"><label>Версия<input class="field" readonly value="1.20.1"></label><label>Загрузчик<input class="field" readonly value="Forge"></label></div></form>
   </section>
   <section class="panel updater-channel"><div><h2>Загрузки и обновления</h2><p>Канал обновления</p></div><label>Канал<select class="field"><option>Стабильный</option></select></label></section>
   <section class="panel"><label class="updater-auto-control"><span><strong>Автоматические обновления</strong><span>Проверка при запуске</span></span><input type="checkbox" checked></label><article class="transfer-row"><span class="transfer-icon">+</span><div class="transfer-info"><div class="transfer-title"><strong>очень-длинное-название-файла.jar</strong><span class="pill">Выполняется</span></div><progress value="50" max="100"></progress></div><div class="transfer-actions"><button class="btn">Отмена</button></div></article></section>
@@ -72,11 +72,11 @@ check(css(".build-row.active","backgroundColor")===css(".gallery-card.selected",
 check(css("#empty","borderTopWidth")==="0px","nested empty-state border");
 const pane=q("main");
 check(pane.scrollWidth<=pane.clientWidth+1, "horizontal overflow "+pane.scrollWidth+"/"+pane.clientWidth);
-for(const selector of [".field-group",".care-list",".pack-grid",".community-publish-actions",".updater-channel"]) {
+for(const selector of [".field-group",".care-list",".pack-grid",".dialog-header-actions",".updater-channel"]) {
   const r=rect(selector), p=pane.getBoundingClientRect();
   check(r.left>=p.left-1 && r.right<=p.right+1, selector+" outside main");
 }
-check(equal(rect(".community-publish-actions .btn").height,q(".community-publish-actions .btn:last-child").getBoundingClientRect().height),"unequal publish buttons");
+check(q("#communityPublishSubmit").form === q("#communityPublishForm"), "publish header button lost its form");
 document.body.dataset.layoutResult=errors.length ? "FAIL" : "PASS";
 document.body.dataset.layoutErrors=errors.join("; ");
 }, {once:true});

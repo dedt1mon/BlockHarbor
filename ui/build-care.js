@@ -35,8 +35,8 @@ window.BuildCareUI = (() => {
       <span class="installed-icon" aria-hidden="true" data-image="${text(row.icon || "")}">${ic(kinds[category]?.[1] || "cube")}</span>
       <button type="button" class="care-title" data-care-detail="${text(row.name)}"><strong>${text(row.title || row.name)}</strong><span>${text(row.description || row.filename || row.name)}</span></button>
       <span class="care-version">${text(row.version || "Локальный файл")}${row.pinned ? '<small title="Пропускается при обновлении">Версия закреплена</small>' : ""}</span>
-      ${row.managed ? '<span class="pill">Встроено</span>' : `<label class="care-switch" title="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}"><input type="checkbox" role="switch" aria-label="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}" data-care-toggle="${text(row.name)}" ${enabled ? "checked" : ""}/><span aria-hidden="true"></span><b class="sr-only">${enabled ? "Включён" : "Отключён"}</b></label>`}
       <span class="care-size">${fmt(row.size)}</span>
+      <div class="care-row-actions">${row.managed ? '<span class="pill">Встроено</span>' : `<label class="care-switch" title="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}"><input type="checkbox" role="switch" aria-label="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}" data-care-toggle="${text(row.name)}" ${enabled ? "checked" : ""}/><span aria-hidden="true"></span><b class="sr-only">${enabled ? "Включён" : "Отключён"}</b></label><button type="button" class="btn care-item-delete" data-care-remove="${text(row.name)}" aria-label="Удалить ${text(row.title || row.name)}" title="Удалить">${ic("trash")}</button>`}</div>
     </div>`;
   }
   function content(profile, category, fallbackRows = []) {
@@ -45,8 +45,8 @@ window.BuildCareUI = (() => {
     const key = idFor(profile.id, category), query = queries.get(key) || "";
     return `<section class="care-content" data-care-content data-care-pid="${text(profile.id)}" data-care-kind="${text(category)}">
       <div class="care-content-head"><label class="care-search">${ic("search")}<input class="field" type="search" data-care-search placeholder="Найти среди установленных…" value="${text(query)}" aria-label="Найти установленное дополнение"/></label></div>
-      <div class="care-bulk"><label><input type="checkbox" data-care-all/> Выбрать видимые</label><span data-care-count>${chosen(profile.id, category).size} выбрано</span>
-      ${actionButton("enable", "Включить", "check")}${actionButton("disable", "Отключить", "close")}${actionButton("remove", "Удалить", "trash")}</div>
+      <div class="care-bulk"><label><input type="checkbox" data-care-all/> Выбрать видимые</label><div class="care-bulk-actions"><span data-care-count>${chosen(profile.id, category).size} выбрано</span>
+      ${actionButton("enable", "Включить", "check")}${actionButton("disable", "Отключить", "close")}${actionButton("remove", "Удалить", "trash")}</div></div>
       <div class="care-list">${rows.map(r => rowMarkup(r, profile.id, category)).join("") || '<div class="empty">Пока нет установленных дополнений.</div>'}</div>
       <p class="care-footnote">Отключённые файлы остаются в сборке. Перед изменениями автоматически сохраняется точка восстановления.</p>
     </section>`;
@@ -106,24 +106,23 @@ window.BuildCareUI = (() => {
     const points = data.snapshots.filter(s => !world || s.world === world);
     modal(world ? "Копии мира · " + world : "Восстановление сборки", `<div data-care-pid="${text(pid)}" class="care-recovery">
       <p>Точка сборки сохраняет дополнения, конфигурацию и настройки. Резервные копии миров хранятся отдельно. Перед откатом текущее состояние тоже сохраняется.</p>
-      <div class="actions">${actionButton("snapshot", "Создать точку", "plus")}</div>
-      <div class="care-points">${points.length ? points.map(s => `<article class="care-point"><div><strong>${text(s.label)}</strong><span>${s.scope === "world" ? "Мир · " + text(s.world) : "Сборка"} · ${date(s.created)} · ${fmt(s.size)}</span></div><button type="button" class="btn" data-care-restore="${text(s.id)}" data-care-scope="${text(s.scope)}" data-care-world="${text(s.world)}">Восстановить</button></article>`).join("") : '<div class="empty">Копий пока нет. Первая появится при изменении сборки.</div>'}</div>
+      <div class="care-points" tabindex="0" aria-label="Точки восстановления">${points.length ? points.map(s => `<article class="care-point"><div><strong>${text(s.label)}</strong><span>${s.scope === "world" ? "Мир · " + text(s.world) : "Сборка"} · ${date(s.created)} · ${fmt(s.size)}</span></div><button type="button" class="btn" data-care-restore="${text(s.id)}" data-care-scope="${text(s.scope)}" data-care-world="${text(s.world)}">Восстановить</button></article>`).join("") : '<div class="empty">Копий пока нет. Первая появится при изменении сборки.</div>'}</div>
       <details class="care-history"><summary>История изменений</summary>${data.history.map(h => `<p><strong>${text(h.action)}</strong><time>${date(h.created)}</time><span>${text(h.detail)}</span></p>`).join("") || '<p>История пока пуста.</p>'}</details>
       <details class="care-retention"><summary>Хранение копий · занято ${fmt(data.recoveryBytes)}</summary><p>Сохранять последние копии отдельно для сборки и каждого мира. Общий лимит применяется ко всем сборкам; старые точки удаляются автоматически.</p><div class="care-retention-fields"><label>Копий в истории<input class="field" type="number" min="1" max="100" data-care-retention-count value="${data.retention.count}"/></label><label>Общий лимит, МБ<input class="field" type="number" min="128" max="102400" data-care-retention-budget value="${data.retention.budgetMiB}"/></label>${actionButton("retention", "Сохранить лимиты", "check")}</div><p class="care-footnote">Только что созданная копия сохраняется, даже если сама превышает лимит.</p></details>
-    </div>`);
+    </div>`, {headerActions: actionButton("snapshot", "Создать точку", "plus", `data-care-pid="${text(pid)}"`)});
   }
   function worlds(profile = active()) {
     if (!profile) return '<div class="empty">Создай сборку, чтобы управлять её мирами.</div>';
-    return `<section class="care-worlds" data-care-pid="${text(profile.id)}" data-care-worlds><div class="care-worlds-head"><div><h2>Миры · ${text(profile.name)}</h2><p>Создавай копии после выхода из Minecraft. Дата показывает изменение level.dat.</p></div>${actionButton("history", "Все копии", "refresh")}</div><div data-care-world-list><div class="empty">Читаем список миров…</div></div></section>`;
+    return `<section class="care-worlds" data-care-pid="${text(profile.id)}" data-care-worlds><div class="care-worlds-head"><div><h2>Миры · ${text(profile.name)}</h2><p>Изменённые миры сохраняются автоматически после выхода из Minecraft. Дата показывает последнее изменение мира.</p></div><div class="actions">${actionButton("backup-all", "Скопировать все миры", "copy")}${actionButton("history", "Все копии", "refresh")}</div></div><div data-care-world-list><div class="empty">Читаем список миров…</div></div></section>`;
   }
   async function mountWorlds(container) {
     const pid = container.dataset.carePid, request = ++worldsRequest;
     const [data, care] = await Promise.all([feature("careWorlds", {id: pid}), load(pid)]);
     if (request !== worldsRequest || !container.isConnected) return;
-    container.querySelector("[data-care-world-list]").innerHTML = `<div class="care-auto-world"><label class="care-checkbox"><input type="checkbox" data-care-auto-backup ${care.autoWorldBackup ? "checked" : ""}/> Сохранять изменённые миры после выхода из игры</label>${actionButton("backup-all", "Скопировать все миры", "copy")}</div>` + (data.worlds.map(w => {
+    container.querySelector("[data-care-world-list]").innerHTML = data.worlds.map(w => {
       const copies = care.snapshots.filter(s => s.scope === "world" && s.world === w.name);
       return `<article class="care-world"><div>${ic("layers")}<strong>${text(w.name)}</strong><span>${fmt(w.size)} · ${date(w.lastPlayed)}</span><small>${copies.length ? "Копий: " + copies.length + " · последняя " + date(copies[0].created) : "Резервных копий пока нет"}</small></div><div class="actions"><button type="button" class="btn" data-care-backup-world="${text(w.name)}">${ic("plus")}Создать копию</button><button type="button" class="btn" data-care-world-history="${text(w.name)}" ${copies.length ? "" : "disabled"}>Восстановить</button></div></article>`;
-    }).join("") || '<div class="empty">Сохранённых миров пока нет. Здесь появятся миры, созданные в этой сборке.</div>');
+    }).join("") || '<div class="empty">Сохранённых миров пока нет. Здесь появятся миры, созданные в этой сборке.</div>';
   }
   function mount() {
     const container = document.querySelector("[data-care-content]");
@@ -155,12 +154,14 @@ window.BuildCareUI = (() => {
       const names = [...chosen(pid, category)];
       if (!names.length) throw new Error("Сначала выбери дополнения.");
       if (action === "remove") {
-        modal("Удалить выбранные дополнения?", `<p>Будет удалено файлов: ${names.length}. Перед изменением сохранится точка восстановления.</p><div class="actions">${actionButton("cancel", "Отмена")}<button type="button" class="btn danger" id="careConfirmDelete">Удалить</button></div>`);
-        document.querySelector("#careConfirmDelete").onclick = async () => { try { closeDialog(); await change(pid, category, names, "remove"); } catch(error) { notice(error.message, true); } };
-        return;
+        return confirmRemoval(pid, category, names);
       }
       return change(pid, category, names, action);
     }
+  }
+  function confirmRemoval(pid, category, names) {
+    modal(names.length === 1 ? "Удалить дополнение?" : "Удалить выбранные дополнения?", `<p>Будет удалено файлов: ${names.length}. Перед изменением сохранится точка восстановления.</p><ul class="care-removal-files">${names.map(name => `<li>${text(name)}</li>`).join("")}</ul><div class="actions">${actionButton("cancel", "Отмена")}<button type="button" class="btn danger" id="careConfirmDelete">Удалить</button></div>`, {contentSized: true});
+    document.querySelector("#careConfirmDelete").onclick = async () => { try { closeDialog(); await change(pid, category, names, "remove"); } catch(error) { notice(error.message, true); } };
   }
   document.addEventListener("input", event => {
     if (!event.target.matches("[data-care-search]")) return;
@@ -174,13 +175,8 @@ window.BuildCareUI = (() => {
   });
   document.addEventListener("change", async event => {
     const target = event.target;
-    if (!target.matches("[data-care-select], [data-care-all], [data-care-toggle], [data-care-auto-backup]")) return;
+    if (!target.matches("[data-care-select], [data-care-all], [data-care-toggle]")) return;
     const {pid, category} = context(target), selection = chosen(pid, category);
-    if (target.matches("[data-care-auto-backup]")) {
-      try { const result = await act("careAutoBackup", {id: pid, enabled: target.checked}); notice(result.message); cache.delete(pid); }
-      catch(error) { target.checked = !target.checked; notice(error.message, true); }
-      return;
-    }
     if (target.matches("[data-care-toggle]")) {
       target.disabled = true;
       try { if (!await change(pid, category, [target.dataset.careToggle], target.checked ? "enable" : "disable")) target.checked = !target.checked; }
@@ -197,18 +193,22 @@ window.BuildCareUI = (() => {
     if (count) count.textContent = selection.size + " выбрано";
   });
   document.addEventListener("click", async event => {
-    const element = event.target.closest("[data-care], [data-care-detail], [data-care-restore], [data-care-backup-world], [data-care-world-history]");
+    const element = event.target.closest("[data-care], [data-care-detail], [data-care-remove], [data-care-restore], [data-care-backup-world], [data-care-world-history]");
     if (!element || element.dataset.care === "confirm-change") return;
     event.preventDefault();
     const {pid, category} = context(element);
     try {
       if (element.dataset.care) await handle(element.dataset.care, element);
       else if (element.hasAttribute("data-care-detail")) await details(pid, category, element.dataset.careDetail);
+      else if (element.hasAttribute("data-care-remove")) confirmRemoval(pid, category, [element.dataset.careRemove]);
       else if (element.hasAttribute("data-care-backup-world")) { closeDialog(); await waitJob("careWorldBackup", {id: pid, world: element.dataset.careBackupWorld}); }
       else if (element.hasAttribute("data-care-world-history")) await history(pid, element.dataset.careWorldHistory);
       else if (element.hasAttribute("data-care-restore")) {
         const sid = element.dataset.careRestore, world = element.dataset.careWorld;
-        modal("Восстановить " + (world ? "мир?" : "сборку?"), `<p>${world ? "Содержимое мира «" + text(world) + "» будет заменено выбранной копией." : "Будут восстановлены дополнения, конфигурация и настройки запуска. Миры не меняются."} Текущее состояние будет сохранено перед заменой.</p><div class="actions">${actionButton("cancel", "Отмена")}<button type="button" class="btn main" id="careConfirmRestore">Восстановить</button></div>`);
+        modal("Восстановить " + (world ? "мир?" : "сборку?"), `<p>${world ? "Содержимое мира «" + text(world) + "» будет заменено выбранной копией." : "Будут восстановлены дополнения, конфигурация и настройки запуска. Миры не меняются."} Текущее состояние будет сохранено перед заменой.</p>`, {
+          headerActions: '<button type="button" class="btn main" id="careConfirmRestore">Восстановить</button>',
+          contentSized: true,
+        });
         document.querySelector("#careConfirmRestore").onclick = async () => { try { closeDialog(); await waitJob("careRestore", {id: pid, snapshot: sid}); } catch(error) { notice(error.message, true); } };
       }
     } catch (error) { notice(error.message, true); }

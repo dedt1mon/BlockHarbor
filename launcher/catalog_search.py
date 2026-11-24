@@ -24,7 +24,7 @@ def _confirmed(game, loader, kind, project, source, period):
     preferred = next((release for release in releases if release.channel == "release"), next(iter(releases), None))
     if preferred is None:
         return None
-    return {"version": preferred.version, "channel": preferred.channel}
+    return {"version": preferred.version, "channel": preferred.channel, "releases": tuple(releases)}
 
 
 class SearchService:
@@ -87,7 +87,7 @@ class SearchService:
                 if future.done():
                     return future.result()
 
-    def search(self, profile, kind, query, offset, filters=None, sort="relevance", source="community"):
+    def search(self, profile, kind, query, offset, filters=None, sort="relevance", source="community", *, installed_files=()):
         owner = lifecycle.current_scope()
         scope = lifecycle.CancellationScope()
         remove = self.scope.on_cancel(scope.cancel)
@@ -140,8 +140,19 @@ class SearchService:
             with self.lock:
                 if self.active is scope:
                     self.active = None
-        result = {**page, "hits": [{**hit, "compatibility": "release-metadata", "recommendedVersion": accepted[project]["version"]}
-                                   for project, hit in unique.items() if project in accepted],
+        hits = []
+        for project, hit in unique.items():
+            if project not in accepted:
+                continue
+            match = accepted[project]
+            # Release metadata has already been fetched for compatibility. Match
+            # local bytes against it without one more network request per card.
+            installed = next((release for release in match["releases"]
+                              if installed_files and any(modrinth._installed(installed_files, candidate)
+                                                         for candidate in modrinth._choices(release))), None)
+            hits.append({**hit, "compatibility": "release-metadata", "recommendedVersion": match["version"],
+                         "installed": installed is not None, "installedVersion": installed.version if installed else ""})
+        result = {**page, "hits": hits,
                   "verified": True, "totalIsEstimate": True}
         if unavailable:
             result.update(partial=True, message="Часть выпусков не удалось проверить. Показаны только дополнения с подтверждённой версией Minecraft и загрузчиком; повтори поиск позже.")

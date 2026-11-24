@@ -29,7 +29,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
     JOBS = set()
 
     def __init__(self, store):
@@ -284,6 +284,25 @@ class Experience:
             raise ValueError("Запись об удалении повреждена.") from exc
         return directory, record
 
+    def _trash_snapshot(self, pid, batch):
+        directory, record = self._trash_manifest(pid, batch)
+        available = []
+        for entry in record["images"]:
+            path = directory / entry["name"]
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                # A complete receipt can outlive an interrupted move/restore.
+                continue
+            if not stat.S_ISREG(info.st_mode) or self._redirected(path):
+                raise ValueError("Удалённый скриншот недоступен или перенаправлен.")
+            available.append((entry, info))
+        return directory, record, available
+
+    def _trash_token(self, record, available):
+        value = {"record": record, "files": [[entry["name"], *self._stamp(info)] for entry, info in available]}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
     def _trash_items(self, pid):
         folder = self._gallery_folder(pid)
         trash = folder / SCREENSHOT_TRASH
@@ -298,10 +317,9 @@ class Experience:
         items = []
         for path in batches[:100]:
             try:
-                directory, record = self._trash_manifest(pid, path.name)
-                available = [x for x in record["images"] if (directory / x["name"]).is_file() and not self._redirected(directory / x["name"])]
+                _, record, available = self._trash_snapshot(pid, path.name)
                 if available:
-                    items.append({"id": path.name, "created": record["created"], "count": len(available), "names": [x["name"] for x in available], "size": sum(x["size"] for x in available)})
+                    items.append({"id": path.name, "created": record["created"], "count": len(available), "names": [entry["name"] for entry, _ in available], "size": sum(entry["size"] for entry, _ in available), "token": self._trash_token(record, available)})
             except (OSError, ValueError):
                 continue
         return items
@@ -464,6 +482,54 @@ class Experience:
                 pass
         return {"ok": True, "restored": len(restored), "message": "Восстановлено скриншотов: " + str(len(restored)) + "."}
 
+    def purge_screenshots(self, pid, batch, token):
+        """Permanently remove only the files in one confirmed trash receipt."""
+        if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
+            raise ValueError("Обнови список удалённых скриншотов и подтверди удаление заново.")
+        directory, record, available = self._trash_snapshot(pid, batch)
+        if not available or not secrets.compare_digest(token, self._trash_token(record, available)):
+            raise ValueError("Удалённые скриншоты изменились. Обнови список и проверь выбор.")
+        identity = self._stamp(directory.lstat())[:2]
+        # Preflight the entire group before the first irreversible unlink. The
+        # receipt checksum also catches edits that preserve file timestamps.
+        for entry, info in available:
+            current, _, checksum = self._read_screenshot(directory / entry["name"])
+            if self._stamp(current) != self._stamp(info) or current.st_size != entry["size"] or checksum != entry["checksum"]:
+                raise ValueError("Удалённый скриншот «" + entry["name"] + "» изменился. Удаление отменено.")
+        removed, skipped = [], []
+        for entry, info in available:
+            try:
+                current_directory, current_record = self._trash_manifest(pid, batch)
+                if current_record != record or self._stamp(current_directory.lstat())[:2] != identity:
+                    raise ValueError("Группа удалённых скриншотов изменилась.")
+                path = current_directory / entry["name"]
+                current, _, checksum = self._read_screenshot(path)
+                if self._stamp(current) != self._stamp(info) or checksum != entry["checksum"]:
+                    raise ValueError("Удалённый скриншот изменился.")
+                path.unlink()
+                removed.append(entry["name"])
+            except (OSError, ValueError):
+                skipped.append(entry["name"])
+        if not removed:
+            raise ValueError("Скриншоты изменились или заняты. Обнови список удалённых и повтори.")
+        if not skipped:
+            try:
+                current_directory, current_record = self._trash_manifest(pid, batch)
+                if current_record == record and self._stamp(current_directory.lstat())[:2] == identity:
+                    # Never recurse: foreign files, directories and links in the
+                    # batch are not part of the user's confirmed selection.
+                    if {path.name for path in current_directory.iterdir()} == {"manifest.json"}:
+                        (current_directory / "manifest.json").unlink()
+                        current_directory.rmdir()
+            except (OSError, ValueError):
+                # Already removed images stay removed; a leftover receipt is
+                # harmless and must not turn successful deletion into an error.
+                pass
+        message = "Окончательно удалено скриншотов: " + str(len(removed)) + "."
+        if skipped:
+            message += " Не удалось удалить: " + str(len(skipped)) + ". Обнови список и повтори."
+        return {"ok": True, "deleted": len(removed), "skipped": skipped, "batch": batch, "message": message}
+
     def _favorite(self, p):
         pid, favorite = p.get("id"), p.get("favorite")
         if not isinstance(pid, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", pid):
@@ -548,6 +614,8 @@ class Experience:
             return self.delete_screenshots(p["id"], p.get("images"))
         if action == "experienceRestoreScreenshots":
             return self.restore_screenshots(p["id"], p.get("batch"))
+        if action == "experiencePurgeScreenshots":
+            return self.purge_screenshots(p["id"], p.get("batch"), p.get("token"))
         if action == "experienceNotifications":
             return self.notifications()
         if action == "experienceReadNotifications":

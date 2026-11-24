@@ -89,7 +89,7 @@ class FeatureApiTests(unittest.TestCase):
         self.assertEqual(len(self.app.store.all()),1)  # preview never installs silently
 
     def test_auto_world_backup_is_deferred_outside_state_poll(self):
-        self.app.store.set("careAutoWorldBackup:"+self.pid,"1")
+        self.app.store.set("careAutoWorldBackup:"+self.pid,"0")
         with patch.object(self.app.care,"backup_after_game",return_value="Копия готова") as backup:
             self.app._game_finished(0,"Мир",self.pid)
             self.assertEqual(self.app.pending_world_backups,{self.pid})

@@ -2,6 +2,9 @@
 import threading
 import time
 import unittest
+import hashlib
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from http.client import IncompleteRead
 from unittest.mock import patch
@@ -45,6 +48,26 @@ class VerifiedSearchTests(unittest.TestCase):
         self.assertEqual([hit["id"] for hit in result["hits"]], ["good"])
         self.assertTrue(result["partial"])
         self.assertIn("не удалось проверить", result["message"])
+
+    def test_installed_cards_match_bytes_including_renamed_and_disabled_addons(self):
+        payload = b"verified addon contents"
+        release = SimpleNamespace(version="stable", channel="release", alternatives=(),
+                                  size=len(payload), sha512=hashlib.sha512(payload).hexdigest())
+        with tempfile.TemporaryDirectory() as directory, patch.object(modrinth, "_releases", return_value=[release]):
+            service = catalog_search.SearchService()
+            self.addCleanup(service.close)
+            for kind, extension in (("mods", ".jar"), ("shaderpacks", ".zip"), ("resourcepacks", ".zip")):
+                with self.subTest(kind=kind):
+                    folder = Path(directory) / kind
+                    folder.mkdir()
+                    file = folder / ("renamed" + extension + ".disabled")
+                    file.write_bytes(payload)
+                    files = modrinth._files(folder, kind, include_disabled=True)
+                    result = service.search(self.profile, kind, "", 0, installed_files=files)
+                    self.assertTrue(all(hit["installed"] and hit["installedVersion"] == "stable" for hit in result["hits"]))
+                    file.write_bytes(b"x" * len(payload))
+                    changed = service.search(self.profile, kind, "", 0, installed_files=files)
+                    self.assertFalse(any(hit["installed"] for hit in changed["hits"]))
 
     def test_total_deadline_cancels_pending_checks_without_cancelling_launcher(self):
         owner = lifecycle.CancellationScope()

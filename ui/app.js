@@ -622,12 +622,10 @@ function addons() {
     '<div class="build-settings-bar"><div class="tags build-settings-info">' + selectInfo(p) +
     '</div><div class="build-settings-actions" role="group" aria-label="Действия сборки">' +
     btn("folder", "Папка сборки", "folder") +
-    (kind === "errors"
-      ? '<button type="button" class="btn" data-experience="diagnostics" data-experience-profile="' + esc(p.id) + '">' + ic("search") + 'Проверить сборку</button>'
-      : "") + "</div></div>" +
+    "</div></div>" +
     '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button><button class="' + (kind === "errors" ? "on" : "") + '" data-kind="errors">Ошибки сборки</button></div>' +
     (kind === "errors"
-      ? '<section class="panel" id="buildErrorsPanel"><h2>Ошибки сборки</h2><div data-error-list aria-live="polite">Загружаем записи…</div></section>'
+      ? '<section class="panel" id="buildErrorsPanel"><div class="build-errors-heading"><h2>Ошибки сборки</h2><button type="button" class="btn" data-experience="diagnostics" data-experience-profile="' + esc(p.id) + '">' + ic("search") + 'Проверить сборку</button></div><div data-error-list aria-live="polite">Загружаем записи…</div></section>'
       : kind === "worlds"
       ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')
       : '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать", "download", "main") + '</div></div>' +
@@ -750,7 +748,7 @@ function friendsView() {
     '<ol class="steam-steps"><li>В одиночном мире нажми <strong>Esc → Открыть для сети</strong>.</li>' +
     "<li>Выбери <strong>Для друзей Steam</strong> или <strong>Только по приглашению</strong> и открой мир.</li>" +
     "<li>Нажми <strong>Пригласить друзей</strong> и выбери друга в оверлее Steam.</li></ol></section>" +
-    '<section class="panel"><h3>Принять приглашение</h3>' +
+    '<section class="panel friends-join"><h3>Принять приглашение</h3>' +
     '<ol class="steam-steps"><li>Запусти сборку и дождись главного меню Minecraft.</li>' +
     "<li>Прими приглашение друга в Steam. Оверлей обычно открывается сочетанием <strong>Shift + Tab</strong>.</li>" +
     '<li>Подтверди вход в Minecraft. Хозяин должен оставаться в мире.</li></ol><p class="note">Если приглашение не приходит, хозяин может открыть мир в режиме «Для друзей Steam». Вставь его полный зелёный адрес <code>s-…-….steam</code> из чата в «Сетевая игра → Прямое подключение». После повторного открытия мира понадобится новый адрес.</p><p class="note">С включённым VPN Steam выбирает доступное прямое соединение или ретранслятор Valve. Если подключение зависло, проверьте на обоих компьютерах, разрешает ли VPN игровой трафик Steam и UDP. Когда VPN поддерживает раздельную маршрутизацию, Steam и Java можно направить через рабочий маршрут.</p></section></div>'
@@ -811,7 +809,7 @@ function profile() {
             btn("importBuild", "Загрузить сборку", "download"),
       "Ник общий для всех сборок и миров. Изменения профиля применяются при следующем запуске игры.",
     ) +
-    '<div class="panel side-panel"><div class="skin-stage" id="skinStage">' +
+    '<div class="profile-panels"><section class="panel side-panel"><div class="skin-stage" id="skinStage">' +
     (state.skin || draft.file
       ? '<img id="skinPreview" alt="Персонаж с выбранным скином">'
       : ic("user") + "<small>Предпросмотр скина</small>") +
@@ -828,23 +826,23 @@ function profile() {
     ">Slim · узкие руки</option></select></label>" +
     '<div class="actions">' +
     pick +
+    btn("saveProfile", "Сохранить все параметры", "check", "main") +
+    "</div>" +
     (draft.file
       ? '<small class="note">' + esc(draft.file.name) + "</small>"
       : "") +
-    "</div>" +
     (hasBuild && state.canUseFabricSkin && (state.skin || draft.file)
       ? '<label><span><input type="checkbox" id="useFabricSkin"> Установить Fabric для скина в выбранной сборке</span></label>'
       : "") +
-    '<div class="actions">' +
-    btn("saveProfile", "Сохранить все параметры", "check", "main") +
-    "</div>" +
     (state.skinNetwork
       ? '<small class="note">В общем мире с поддержкой BlockHarbor другие участники увидят сохранённый скин при входе.</small>'
       : "") +
     (state.skin
       ? '<div><button type="button" class="linkbtn" data-act="officialSkin">Установить скин в Java-профиле</button></div>'
       : "") +
-    "</div></div>"
+    "</div></section>" +
+    (window.ExperienceUI?.wardrobe() || "") +
+    "</div>"
   );
 }
 function generalSettings() {
@@ -934,7 +932,6 @@ function render() {
     settings,
     gallery: () => window.ExperienceUI?.gallery() || "",
   }[view]();
-  if (view === "profile" && window.ExperienceUI) $("#view").insertAdjacentHTML("beforeend", ExperienceUI.wardrobe());
   window.ExperienceUI?.mount();
   window.BuildCareUI?.mount();
   window.PackHubUI?.mount();
@@ -969,8 +966,13 @@ async function preview() {
     notice(e.message, true);
   }
 }
-function modal(title, body) {
+function modal(title, body, options = {}) {
   const d = $("#dialog");
+  const actions = $("#dialogHeaderActions");
+  actions.innerHTML = options.headerActions || "";
+  actions.hidden = !options.headerActions;
+  d.classList.toggle("dialog-large", options.size === "large");
+  d.classList.toggle("dialog-content-sized", Boolean(options.contentSized));
   $("#dialogTitle").textContent = title;
   $("#dialogBody").innerHTML = body;
   $("#dialogBody").scrollTop = 0;
@@ -1060,7 +1062,7 @@ function updateBuildLoaderUI(form) {
           : row?.message || "Совместимость загрузчика пока не подтверждена. Проверим её при установке."
         : row.message || (loaders[selected] + " доступен для Minecraft " + version + ".");
   form.querySelector("#buildVanillaChoice").hidden = !unsupported;
-  form.querySelector('[type="submit"]').disabled = data.loading || data.submitting || unsupported || pendingBuild?.form === form;
+  form.elements.namedItem("createBuildSubmit").disabled = data.loading || data.submitting || unsupported || pendingBuild?.form === form;
 }
 function loadBuildLoaders(form, force = false) {
   const data = newBuildForms.get(form);
@@ -1158,11 +1160,8 @@ function createBox(preferredLoader = "fabric") {
         .join("") +
       '</select></label></div><label class="build-version-toggle"><input type="checkbox" id="allBuildVersions" disabled> Показывать снапшоты и старые версии</label><div class="build-loader-compatibility"><p id="loaderStatus" class="note" aria-live="polite"></p><button type="button" class="linkbtn" id="buildVanillaChoice" data-act="useVanilla" hidden>Выбрать Vanilla</button></div><button type="button" class="linkbtn" data-act="versions">' +
       ic("refresh") +
-      ' Обновить список версий</button><p id="catalogStatus" class="note" hidden></p><div class="dialog-actions">' +
-      btn("close", "Отмена", "") +
-      '<button class="btn main" type="submit">' +
-      ic("plus") +
-      "Создать сборку</button></div></form>",
+      ' Обновить список версий</button><p id="catalogStatus" class="note" hidden></p></form>',
+    {contentSized: true, headerActions: '<button class="btn main" type="submit" form="newForm" name="createBuildSubmit">' + ic("plus") + "Создать сборку</button>"},
   );
   const form = $("#newForm");
   newBuildForms.set(form, {releases: [...state.versions], allVersions: [], version: "", request: 0,
@@ -1612,14 +1611,12 @@ document.addEventListener("click", async (e) => {
       return modal(
         "Выгрузить сборку «" + build.name + "»",
         "<p>В ZIP войдут версия Minecraft, загрузчик, моды, шейдеры, ресурс-паки и настройки модов.</p>" +
-          '<label><input type="checkbox" id="archiveWorlds"> Включить сохранённые миры</label>' +
-          '<div class="dialog-actions">' +
-          btn("close", "Отмена", "") +
-          '<button type="button" class="btn main" data-save-archive="' +
+          '<label class="inline-check"><input type="checkbox" id="archiveWorlds"> Включить сохранённые миры</label>',
+        {contentSized: true, headerActions: '<button type="button" class="btn main" data-save-archive="' +
           esc(build.id) +
           '">' +
           ic("download") +
-          "Скачать ZIP</button></div>",
+          "Скачать ZIP</button>"},
       );
     }
     if (el.dataset.saveArchive) {
@@ -1652,14 +1649,12 @@ document.addEventListener("click", async (e) => {
       if (!build) return;
       modal(
         "Удалить сборку «" + build.name + "»?",
-        "<p>Сборка вместе с мирами и дополнениями переместится в папку удалённых сборок. Её можно вернуть через раздел «Удалённые сборки».</p>" +
-          '<div class="dialog-actions">' +
-          btn("close", "Отмена", "") +
-          '<button type="button" class="btn remove-confirm" data-confirm-build="' +
+        "<p>Сборка вместе с мирами и дополнениями переместится в папку удалённых сборок. Её можно вернуть через раздел «Удалённые сборки».</p>",
+        {contentSized: true, headerActions: '<button type="button" class="btn remove-confirm" data-confirm-build="' +
           esc(build.id) +
           '">' +
           ic("trash") +
-          "Удалить сборку</button></div>",
+          "Удалить сборку</button>"},
       );
       return;
     }
@@ -1747,7 +1742,7 @@ document.addEventListener("submit", async (e) => {
   if (e.target.id !== "newForm") return;
   e.preventDefault();
   const form = e.target,
-    submit = form.querySelector('[type="submit"]');
+    submit = form.elements.namedItem("createBuildSubmit");
   if (submit.disabled) return;
   const data = newBuildForms.get(form);
   const destination = view === "friends" ? "friends" : "addons";

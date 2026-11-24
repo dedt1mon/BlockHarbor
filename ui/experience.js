@@ -42,7 +42,9 @@
   async function notifications() {
     const request = ++notificationRequest;
     const requestedAt = notificationObservation;
-    modal("История уведомлений", '<section class="notification-panel"><p role="status">Загружаем уведомления…</p></section>');
+    modal("История уведомлений", '<section class="notification-panel"><p role="status">Загружаем уведомления…</p></section>', {
+      headerActions: expButton("clearNotifications", "Очистить", "trash", "disabled"),
+    });
     const host = document.querySelector(".notification-panel");
     const current = () => request === notificationRequest && host.isConnected && $("#dialog").open;
     let data;
@@ -56,7 +58,8 @@
     }
     if (!current()) return;
     const items = data.items || [];
-    host.innerHTML = `<div class="notification-history" aria-label="Уведомления">${items.length ? items.map(n => `<article class="notification-item ${esc(n.level)}${n.read ? "" : " unread"}"><div class="notification-heading"><time datetime="${new Date(n.created * 1000).toISOString()}">${date(n.created)}</time>${n.read ? "" : '<span class="notification-new">Новое</span>'}</div><p>${esc(n.message)}</p></article>`).join("") : '<p class="note">История пока пуста.</p>'}</div><div class="dialog-actions"><button class="btn" type="button" data-notifications-refresh hidden>${ic("refresh")}Показать новые</button>${expButton("clearNotifications", "Очистить историю", "trash", items.length ? "" : "disabled")}</div><p class="notification-read-error" role="status" hidden></p>`;
+    host.innerHTML = `<div class="notification-history" aria-label="Уведомления">${items.length ? items.map(n => `<article class="notification-item ${esc(n.level)}${n.read ? "" : " unread"}"><div class="notification-heading"><time datetime="${new Date(n.created * 1000).toISOString()}">${date(n.created)}</time>${n.read ? "" : '<span class="notification-new">Новое</span>'}</div><p>${esc(n.message)}</p></article>`).join("") : '<p class="note">История пока пуста.</p>'}</div><div class="dialog-actions"><button class="btn" type="button" data-notifications-refresh hidden>${ic("refresh")}Показать новые</button></div><p class="notification-read-error" role="status" hidden></p>`;
+    document.querySelector('#dialogHeaderActions [data-experience="clearNotifications"]').disabled = !items.length;
     host.querySelector("[data-notifications-refresh]").onclick = () => notifications().catch(e => notice(e.message, true));
     if (notificationObservation === requestedAt) observeNotifications(data.unread);
     else observeNotifications(state.notificationUnread);
@@ -161,7 +164,10 @@
   async function deleteScreenshots(pid, images) {
     if (!images.length) return notice("Сначала выбери скриншоты.", true);
     const profile = state.profiles.find(p=>p.id===pid);
-    modal(images.length === 1 ? "Удалить скриншот?" : "Удалить выбранные скриншоты?", `<p>Сборка «${esc(profile?.name || "Выбранная сборка") }». Файлов: <strong>${images.length}</strong>.</p><ul class="gallery-file-list">${images.map(x=>`<li>${esc(x.name)}</li>`).join("")}</ul><p class="note">Снимки переместятся в удалённые. Их можно будет вернуть кнопкой «Удалённые» в галерее.</p><div class="actions"><button class="btn" data-experience="cancelScreenshotDelete">Отмена</button><button class="btn danger" id="confirmScreenshotDelete">${ic("trash")}Удалить · ${images.length}</button></div>`);
+    modal(images.length === 1 ? "Удалить скриншот?" : "Удалить выбранные скриншоты?", `<p>Сборка «${esc(profile?.name || "Выбранная сборка") }». Файлов: <strong>${images.length}</strong>.</p><ul class="gallery-file-list">${images.map(x=>`<li>${esc(x.name)}</li>`).join("")}</ul><p class="note">Снимки переместятся в удалённые. Их можно будет вернуть кнопкой «Удалённые» в галерее.</p>`, {
+      headerActions: `<button type="button" class="btn danger" id="confirmScreenshotDelete">${ic("trash")}Удалить</button>`,
+      contentSized: true,
+    });
     $("#confirmScreenshotDelete").onclick = async event => {
       const button = event.currentTarget; button.disabled = true;
       try {
@@ -179,7 +185,37 @@
   }
   function screenshotTrash(pid) {
     const data = galleryState(pid), profile = state.profiles.find(p=>p.id===pid);
-    modal("Удалённые скриншоты · " + (profile?.name || "Сборка"), `<p class="note">Восстановление вернёт снимки в галерею. Существующие файлы с такими же именами сохраняются.</p><div class="gallery-trash">${data.trash.length ? data.trash.map(batch=>`<section class="gallery-trash-batch"><div><strong>${date(batch.created)}</strong><small>${batch.count} файлов · ${fmt(batch.size)}</small><details><summary>Имена файлов</summary><ul class="gallery-file-list">${batch.names.map(name=>`<li>${esc(name)}</li>`).join("")}</ul></details></div>${expButton("restoreScreenshots", "Восстановить", "refresh", `data-gallery-profile="${pid}" data-gallery-batch="${batch.id}"`)}</section>`).join("") : '<p class="note">Удалённых снимков нет.</p>'}</div>`);
+    modal("Удалённые скриншоты · " + (profile?.name || "Сборка"), `<p class="note">Восстановление вернёт снимки в галерею. Существующие файлы с такими же именами сохраняются. Окончательное удаление нельзя отменить.</p><div class="gallery-trash" tabindex="0" aria-label="Удалённые скриншоты">${data.trash.length ? data.trash.map(batch=>`<section class="gallery-trash-batch"><div><strong>${date(batch.created)}</strong><small>${batch.count} файлов · ${fmt(batch.size)}</small><details><summary>Имена файлов</summary><ul class="gallery-file-list">${batch.names.map(name=>`<li>${esc(name)}</li>`).join("")}</ul></details></div><div class="gallery-trash-actions">${expButton("restoreScreenshots", "Восстановить", "refresh", `data-gallery-profile="${pid}" data-gallery-batch="${batch.id}"`)}${expButton("purgeScreenshots", "Удалить окончательно", "trash", `data-gallery-profile="${pid}" data-gallery-batch="${batch.id}"`)}</div></section>`).join("") : '<p class="note">Удалённых снимков нет.</p>'}</div>`);
+  }
+  function purgeScreenshots(pid, batchId) {
+    const batch = galleryState(pid).trash.find(item => item.id === batchId);
+    if (!batch?.token) return notice("Обнови галерею и выбери удалённые скриншоты заново.", true);
+    modal("Удалить скриншоты окончательно?", `<p>Будут окончательно удалены выбранные снимки из корзины: <strong>${batch.count}</strong>.</p><ul class="gallery-file-list">${batch.names.map(name => `<li>${esc(name)}</li>`).join("")}</ul><p class="note">Восстановить эти файлы после удаления не получится. Остальные скриншоты останутся на месте.</p>`, {
+      headerActions: `<button type="button" class="btn danger" id="confirmScreenshotPurge">${ic("trash")}Удалить окончательно</button>`,
+      contentSized: true,
+    });
+    $("#confirmScreenshotPurge").onclick = async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const result = await act("experiencePurgeScreenshots", {id: pid, batch: batch.id, token: batch.token});
+        const current = button.isConnected;
+        if (current) closeDialog();
+        if (view === "gallery" && active()?.id === pid) {
+          await loadGallery();
+          if (current && view === "gallery" && active()?.id === pid && !$("#dialog").open) screenshotTrash(pid);
+        }
+        notice(result.message, Boolean(result.skipped?.length));
+      } catch (error) {
+        const current = button.isConnected;
+        if (current) closeDialog();
+        if (view === "gallery" && active()?.id === pid) {
+          await loadGallery();
+          if (current && view === "gallery" && active()?.id === pid && !$("#dialog").open) screenshotTrash(pid);
+        }
+        notice(error.message, true);
+      }
+    };
   }
   async function loadBuildErrors() {
     const list = $("#buildErrorsPanel [data-error-list]");
@@ -226,11 +262,13 @@
     if (action === "diagnostics") return diagnosticsBox(el.dataset.experienceProfile);
     if (action === "manageDiagnosticBuild") {await act("select", {id:el.dataset.experienceProfile}); closeDialog(); view="addons"; kind="mods"; return refresh();}
     if (action === "savePreferences") { await act("experiencePreferences", {scale:Number($("#uiScale").value),reducedMotion:$("#reducedMotion").checked}); await refresh(); return notice("Оформление сохранено."); }
-    if (action === "image") return modal(el.dataset.title, `<img class="gallery-full" src="${media(el.dataset.image)}" alt="${esc(el.dataset.title)}"><div class="gallery-viewer-actions">${expButton("deleteScreenshot", "Удалить скриншот", "trash", `data-gallery-name="${esc(el.dataset.galleryName)}" data-gallery-token="${el.dataset.galleryToken}" data-gallery-profile="${el.dataset.galleryProfile}"`)}</div>`);
+    if (action === "image") return modal(el.dataset.title, `<img class="gallery-full" src="${media(el.dataset.image)}" alt="${esc(el.dataset.title)}">`, {
+      headerActions: expButton("deleteScreenshot", "Удалить", "trash", `data-gallery-name="${esc(el.dataset.galleryName)}" data-gallery-token="${el.dataset.galleryToken}" data-gallery-profile="${el.dataset.galleryProfile}"`),
+    });
     if (action === "deleteScreenshot") return deleteScreenshots(el.dataset.galleryProfile, [{name:el.dataset.galleryName, token:el.dataset.galleryToken}]);
     if (action === "deleteSelectedScreenshots") return deleteScreenshots(p.id, [...galleryState(p.id).selected].map(([name,token])=>({name,token})));
-    if (action === "cancelScreenshotDelete") return closeDialog();
     if (action === "screenshotTrash") return screenshotTrash(p.id);
+    if (action === "purgeScreenshots") return purgeScreenshots(el.dataset.galleryProfile, el.dataset.galleryBatch);
     if (action === "restoreScreenshots") {
       el.disabled = true;
       try {
@@ -243,9 +281,14 @@
     }
     if (action === "notifications") return notifications();
     if (action === "clearNotifications") {
-      await act("experienceClearNotifications");
-      await notifications();
-      return notice("История очищена.");
+      el.disabled = true;
+      try {
+        await act("experienceClearNotifications");
+        if (el.isConnected && $("#dialog").open) await notifications();
+        return notice("История очищена.");
+      } finally {
+        if (el.isConnected) el.disabled = false;
+      }
     }
     if (action === "saveSkin") {
       if (profileDraft?.file || (profileDraft && profileDraft.model !== state.model)) return notice("Сначала сохрани параметры профиля, чтобы добавить выбранный скин в гардероб.", true);
@@ -272,7 +315,7 @@
       modal("Убрать скин из гардероба?", '<p>Текущий скин персонажа останется выбранным.</p><button class="btn danger" id="confirmWardrobeDelete">Убрать</button>');
       $("#confirmWardrobeDelete").onclick=async()=>{try{await act("experienceDeleteSkin",{skin:id});closeDialog();await loadWardrobe();notice("Скин убран из гардероба.");}catch(e){notice(e.message,true);}};return;
     }
-    if (action === "report") return modal("Отчёт для проверки", `<p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea><div class="actions diagnostic-actions diagnostic-report-actions" role="group" aria-label="Действия с отчётом">${expButton("backToDiagnostics","Вернуться обратно","back")}${expButton("saveReport","Сохранить отчёт","download")}</div>`);
+    if (action === "report") return modal("Отчёт для проверки", `<div class="diagnostic-report"><p>Проверь текст перед передачей другому человеку. Токены, типичные адреса и пути пользователя скрыты автоматически; мод может записывать сведения в произвольном формате.</p><textarea class="field report-text" id="diagnosticReport" spellcheck="false">${esc(report)}</textarea><div class="actions diagnostic-actions diagnostic-report-actions" role="group" aria-label="Действия с отчётом">${expButton("backToDiagnostics","Вернуться обратно","back")}${expButton("saveReport","Сохранить отчёт","download")}</div></div>`, {size: "large"});
     if (action === "backToDiagnostics") {
       const previous = diagnosticSession;
       const profile = state.profiles.find(item => item.id === previous?.profileId);

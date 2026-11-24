@@ -107,7 +107,7 @@
       ? `<div class="settings-updates-head"><div><h2>Загрузки и обновления</h2><p class="muted">Обновление BlockHarbor и очередь скачиваемых файлов.</p></div>${actions}</div>`
       : head("Загрузки и обновления", actions, "Версии лаунчера, очередь файлов и результаты проверки.");
     return heading +
-      `<div id="updatesScreen"><div class="settings-grid"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" class="field" aria-label="Канал обновлений" ${savingChannel || !data ? "disabled" : ""} ${savingChannel ? 'aria-busy="true"' : ""}><option value="stable">Стабильный</option><option value="test" ${(pendingChannel || data?.channel) === "test" ? "selected" : ""}>Тестовый</option></select></label></section></div><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<div class="empty">Получаем состояние обновлений…</div>'}</div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div>${button("transferClear", "Очистить историю", "trash")}</div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
+      `<div id="updatesScreen"><div class="settings-grid update-overview-grid"><section class="panel updater-automatic"><label class="updater-auto-control" for="automaticUpdates"><span><strong>Автоматически обновлять BlockHarbor</strong><span>Проверка при запуске и каждые 10 минут, пока открыт лаунчер.</span></span><input type="checkbox" id="automaticUpdates" role="switch" aria-describedby="automaticUpdateHelp" ${data?.autoEnabled ? "checked" : ""} ${data ? "" : "disabled"}></label><p id="automaticUpdateHelp" class="muted">Лаунчер скачает и проверит новую версию из выбранного канала. Когда все игры, загрузки и операции завершатся и останется одно окно, BlockHarbor обновится и откроется снова. После обычного закрытия проверки и загрузки прекращаются.</p><p id="automaticUpdateStatus" class="updater-auto-status" role="status"></p></section><section class="panel updater-channel"><div><h2>Канал обновлений</h2><p class="muted">Стабильный — для обычной игры. Тестовый — для ранних версий BlockHarbor.</p></div><label>Канал<select id="updateChannel" class="field" aria-label="Канал обновлений" ${savingChannel || !data ? "disabled" : ""} ${savingChannel ? 'aria-busy="true"' : ""}><option value="stable">Стабильный</option><option value="test" ${(pendingChannel || data?.channel) === "test" ? "selected" : ""}>Тестовый</option></select></label></section><div id="updateRelease" aria-live="polite">${data ? releaseMarkup() : '<section class="panel updater-release"><p class="muted">Получаем состояние обновлений…</p></section>'}</div></div><section class="panel transfer-panel"><div class="transfer-heading"><div><h2>Загрузки</h2><p class="muted">Файл появляется в сборке после проверки контрольной суммы.</p></div><div class="actions transfer-history-actions">${historyToggleMarkup()}${button("transferClear", "Очистить историю", "trash")}</div></div><div id="transferList">${data ? transfersMarkup() : '<p class="muted">Загружаем очередь…</p>'}</div></section></div>`;
   }
 
   function releaseMarkup() {
@@ -147,11 +147,16 @@
     return `<section class="panel updater-release"><div class="update-release-icon">${ic("cube")}</div><div class="update-release-info"><h2>${heading}</h2>${body}<div class="actions">${actions}</div><p class="update-trust">${esc(data.trust)}</p></div></section>`;
   }
 
+  function historyToggleMarkup() {
+    const count = Math.max(0, (data?.transfers?.tasks?.length || 0) - recentTransferLimit);
+    return `<button class="btn transfer-history-toggle" type="button" data-transfer-history aria-expanded="${transferHistoryExpanded}" aria-controls="transferHistory" ${count ? "" : "disabled"}>${ic("down")}<span>${transferHistoryExpanded ? "Скрыть историю" : "Показать историю"}${count ? ` (${count})` : ""}</span></button>`;
+  }
+
   function transfersMarkup() {
     const tasks = data?.transfers?.tasks || [];
     const job = state?.job;
     const liveJob = job?.busy ? `<div class="transfer-stage"><span class="transfer-spinner">${ic("refresh")}</span><div><strong>Текущая операция</strong><p>${esc(job.message)}</p></div></div>` : "";
-    if (!tasks.length) return liveJob + '<div class="empty">Здесь появятся скачиваемые файлы и результаты их проверки.</div>';
+    if (!tasks.length) return liveJob + '<div class="empty">Здесь появятся скачиваемые файлы и результаты их проверки.</div><div id="transferHistory" hidden></div>';
     const row = (task) => {
       const running = ["queued", "downloading", "verifying"].includes(task.state);
       const total = Number(task.total);
@@ -164,9 +169,8 @@
     };
     const recent = tasks.slice(0, recentTransferLimit).map(row).join("");
     const older = tasks.slice(recentTransferLimit);
-    if (!older.length) return liveJob + recent;
+    if (!older.length) return liveJob + recent + '<div id="transferHistory" hidden></div>';
     return liveJob + recent +
-      `<div class="transfer-history-controls"><button class="btn transfer-history-toggle" type="button" data-transfer-history aria-expanded="${transferHistoryExpanded}" aria-controls="transferHistory">${ic("down")}${transferHistoryExpanded ? "Скрыть историю" : "Показать историю"} (${older.length})</button></div>` +
       `<div id="transferHistory" ${transferHistoryExpanded ? "" : "hidden"}>${transferHistoryExpanded ? older.map(row).join("") : ""}</div>`;
   }
 
@@ -198,6 +202,14 @@
       document.querySelector("#updateRelease").innerHTML = release;
       if (open && document.querySelector(".update-notes")) document.querySelector(".update-notes").open = true;
       lastReleaseMarkup = release;
+    }
+    const historyToggle = document.querySelector("[data-transfer-history]");
+    if (historyToggle) {
+      const olderCount = Math.max(0, (data.transfers?.tasks?.length || 0) - recentTransferLimit);
+      if (!olderCount) transferHistoryExpanded = false;
+      historyToggle.disabled = !olderCount;
+      historyToggle.setAttribute("aria-expanded", String(transferHistoryExpanded));
+      historyToggle.querySelector("span").textContent = (transferHistoryExpanded ? "Скрыть историю" : "Показать историю") + (olderCount ? ` (${olderCount})` : "");
     }
     const transfers = transfersMarkup();
     if (transfers !== lastTransferMarkup) {

@@ -8,11 +8,9 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
   const scope = profile.id + "/" + category;
   const browse = catalog.querySelector(".catalog-browse");
   const panel = catalog.querySelector(".catalog-filter-panel");
-  const toolbar = catalog.querySelector(".catalog-toolbar");
-  const toggle = toolbar.querySelector("button");
-  const sort = toolbar.querySelector('select[aria-label="Сортировка результатов"]');
+  const toggle = catalog.querySelector("[data-catalog-filters]");
   const dialog = catalog.closest("dialog");
-  const empty = { sort: "relevance", filters: "{}" };
+  const empty = { filters: "{}" };
   const saved = catalogPreferences.get(scope) || {
     preset: empty,
     titles: new Map(),
@@ -23,8 +21,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
   let schema, schemaRequest, draft, suggestions, timer;
 
   function restore(preset) {
-    saved.preset = preset;
-    sort.value = preset.sort;
+    saved.preset = {filters: preset.filters};
     const total = Object.values(JSON.parse(preset.filters)).reduce(
       (n, items) => n + items.length,
       0,
@@ -41,10 +38,6 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
         catalogFilterSchemas.set(category, schema);
       }
       if (!catalog.isConnected) return;
-      const fragment = new DocumentFragment();
-      for (const [id, name] of Object.entries(schema.sort))
-        fragment.append(new Option(name, id));
-      sort.replaceChildren(fragment);
       restore(saved.preset);
     } catch (error) {
       schemaRequest = null;
@@ -118,6 +111,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
     stopSuggestions();
     panel.hidden = true;
     browse.hidden = false;
+    catalog.dataset.catalogView = "browse";
     toggle.setAttribute("aria-expanded", "false");
     toggle.focus({ preventScroll: true });
   }
@@ -126,6 +120,7 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
     draft = JSON.parse(saved.preset.filters);
     browse.hidden = true;
     panel.hidden = false;
+    catalog.dataset.catalogView = "filters";
     toggle.setAttribute("aria-expanded", "true");
     panel.innerHTML = `
       <div class="catalog-filter-heading"><h3>Фильтры</h3>
@@ -255,16 +250,12 @@ function setupCatalogFilters(catalog, profile, category, pause, search) {
       renderDependencies();
     } else if (button.hasAttribute("data-filter-cancel")) closePanel();
     else if (button.hasAttribute("data-filter-apply")) {
-      restore({ sort: saved.preset.sort, filters: JSON.stringify(draft) });
+      restore({ filters: JSON.stringify(draft) });
       closePanel();
       search();
     }
   });
   toggle.addEventListener("click", openPanel);
-  sort.addEventListener("change", () => {
-    restore({ ...saved.preset, sort: sort.value });
-    search();
-  });
   restore(saved.preset);
   loadSchema().catch(() => {
     /* Opening the editor retries the local request. */

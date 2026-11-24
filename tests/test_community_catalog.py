@@ -31,7 +31,8 @@ class Registry:
         if (method, path) == ("GET", "capabilities"):
             return {"publicRetentionSeconds": 3600, "publishLimits": {
                 "maxArchiveBytes": catalog.MAX_PUBLIC_UPLOAD, "maxActive": 3,
-                "windowSeconds": 600, "maxAttempts": 10, "banSeconds": 18000}}
+                "burstAttempts": 3, "cooldownSeconds": 300,
+                "rateScope": "publisher-build", "stableBuildKeyRequired": True}}
         if (method, path) == ("POST", "uploads"):
             self.uploads += 1
             self.meta = payload.copy()
@@ -99,6 +100,23 @@ class CommunityCatalogTests(unittest.TestCase):
 
     def install(self):
         return self.reader.install(self.server.public_id.lower(), True, self.status)
+
+    def test_publication_build_key_survives_rename_and_client_restart_without_entering_archive(self):
+        first = self.publish()
+        build_key, old_digest = self.server.meta["buildKey"], self.server.meta["sha256"]
+        self.assertRegex(build_key, r"^[a-f0-9]{64}$")
+        self.assertNotIn("buildKey", first)
+        with zipfile.ZipFile(io.BytesIO(self.server.data)) as archive:
+            self.assertNotIn("buildKey", json.loads(archive.read(build_archive.MANIFEST)))
+        self.publisher.unpublish(self.pid, first["id"])
+        restarted = catalog.CommunityCatalog(self.author, self.server)
+        restarted.publish(self.pid, "Другое публичное имя", "adventure", self.status)
+        self.assertEqual(self.server.meta["buildKey"], build_key)
+        self.assertNotEqual(self.server.meta["sha256"], old_digest)
+        restarted.unpublish(self.pid, self.server.public_id)
+        other = self.author.create("Другая сборка", "1.20.1", "fabric")
+        restarted.publish(other, "Другое публичное имя", "adventure", self.status)
+        self.assertNotEqual(self.server.meta["buildKey"], build_key)
 
     def test_managed_archive_download_resumes_after_interruption_before_import(self):
         self.publish()

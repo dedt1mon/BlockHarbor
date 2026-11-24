@@ -37,8 +37,11 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertIn("padding: 0 4px 12px 0;", packs_scroll)
 
     def test_build_errors_heading_is_visually_separated(self):
-        rule = css_rule(self.experience, "#buildErrorsPanel > h2")
-        self.assertIn("margin: 0 0 18px;", rule)
+        rule = css_rule(self.catalog, ".build-errors-heading")
+        self.assertIn("margin-bottom: 16px;", rule)
+        self.assertIn("display: flex;", rule)
+        self.assertIn("justify-content: space-between;", rule)
+        self.assertIn("margin: 0;", css_rule(self.catalog, ".build-errors-heading h2"))
         self.assertIn('Пока нет записанных ошибок.', self.script)
         self.assertIn('Проверить сборку', self.app)
 
@@ -67,10 +70,11 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertIn('class="actions diagnostic-actions diagnostic-report-actions"', self.script)
 
 
-    def test_diagnostic_action_moves_from_error_list_to_header(self):
+    def test_diagnostic_action_is_next_to_error_section_heading(self):
         header = self.app.split('function addons()', 1)[1].split('async function showSteamCheck()', 1)[0]
         self.assertIn('btn("folder", "Папка сборки", "folder")', header)
         self.assertIn('kind === "errors"', header)
+        self.assertIn('class="build-errors-heading"><h2>Ошибки сборки</h2><button', header)
         self.assertIn('data-experience="diagnostics"', header)
         self.assertLess(header.index('btn("folder", "Папка сборки", "folder")'),
                         header.index('data-experience="diagnostics"'))
@@ -91,13 +95,17 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertLess(report.index('expButton("backToDiagnostics"'), report.index('expButton("saveReport"'))
         self.assertNotIn('Сохранить проверенный отчёт', report)
 
-    def test_share_dialog_primary_buttons_fill_two_columns(self):
-        self.assertIn('class="dialog-actions community-publish-actions"', self.pack_ui)
-        self.assertIn('button(\'data-act="close"\', "Закрыть")', self.pack_ui)
-        self.assertIn('Опубликовать</button>', self.pack_ui)
-        layout = self.packs.split(".community-publish .community-publish-actions,", 1)[1].split("}", 1)[0]
-        self.assertIn('grid-template-columns: repeat(2, minmax(0, 1fr));', layout)
-        self.assertIn('width: 100%;', layout)
+    def test_share_dialog_publish_action_uses_header_and_form_association(self):
+        publishing = self.pack_ui.split('function showPublish(', 1)[1].split('function setPublicationBusy(', 1)[0]
+        self.assertIn('id="communityPublishForm"', publishing)
+        self.assertIn('headerActions:', publishing)
+        self.assertIn('type="submit" form="communityPublishForm" data-pack-publish-submit', publishing)
+        self.assertNotIn('community-publish-actions', publishing)
+        self.assertNotIn('Закрыть', publishing)
+        self.assertIn('form.elements.namedItem("communityPublishSubmit")', self.pack_ui)
+        checkbox = css_rule(self.packs, ".community-config-toggle input")
+        self.assertIn('margin: 0;', checkbox)
+        self.assertIn('align-self: center;', checkbox)
 
     def test_published_dialog_uses_visible_code_without_dropdown(self):
         details = self.pack_ui.split('function publicationRows(', 1)[1].split('async function readPublications(', 1)[0]
@@ -106,10 +114,9 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         self.assertIn('class="community-code-label">Код сборки</label>', details)
         self.assertIn('data-pack-copy-id', details)
         self.assertIn('Удалить публикацию', details)
-        self.assertIn('Закрыть', details)
+        self.assertNotIn('Закрыть', details)
         self.assertLess(details.index('Код сборки</label>'), details.index('Скопировать ID'))
         self.assertLess(details.index('Скопировать ID'), details.index('Удалить публикацию'))
-        self.assertLess(details.index('Удалить публикацию'), details.index('Закрыть'))
         self.assertIn('data-pack-withdraw-confirm', details)
 
     def test_publication_fetch_error_and_confirmation_are_handled(self):

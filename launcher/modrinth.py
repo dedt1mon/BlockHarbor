@@ -401,11 +401,12 @@ def _community_releases(profile, kind, project):
     return sorted(items, key=lambda p: p.published, reverse=True)
 
 
-def _files(folder, kind):
+def _files(folder, kind, *, include_disabled=False):
+    endings = (KINDS[kind], KINDS[kind] + ".disabled") if include_disabled else (KINDS[kind],)
     return [
         f
         for f in folder.iterdir()
-        if f.suffix.lower() == KINDS[kind] and not f.is_symlink() and f.is_file()
+        if f.name.lower().endswith(endings) and not f.is_symlink() and f.is_file()
     ]
 
 
@@ -438,7 +439,7 @@ def _prefer_installed(files, release, loader):
 def versions(store, pid, kind, project, source="all"):
     profile = store.profile(pid)
     releases = _releases(profile, kind, _id(project), source=source)
-    existing = _files(store.content_folder(pid, kind), kind)
+    existing = _files(store.content_folder(pid, kind), kind, include_disabled=True)
     releases = [_prefer_installed(existing, r, profile["loader"]) for r in releases]
     return {
         "versions": [

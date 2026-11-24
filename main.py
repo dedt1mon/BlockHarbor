@@ -640,8 +640,7 @@ class App:
                     pass  # Always finish process cleanup even if the journal is unavailable.
             self.coordinator.release(pid)
             self.metrics.finish(pid, code)
-            if self.store.get("careAutoWorldBackup:" + pid) == "1":
-                self.pending_world_backups.add(pid)
+            self.pending_world_backups.add(pid)
         if code:
             self.game_exit = {
                 "id": secrets.token_hex(6),
@@ -1624,6 +1623,7 @@ class Handler(BaseHTTPRequestHandler):
                         json.loads(q.get("filters", "{}")),
                         q.get("sort", "relevance"),
                         source=q.get("source", "all"),
+                        installed_files=modrinth._files(store.content_folder(q["id"], q["kind"]), q["kind"], include_disabled=True),
                     )
                 else:
                     result = modrinth.versions(store, q["id"], q["kind"], q["project"], source=q.get("source", "all"))

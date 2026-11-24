@@ -413,7 +413,7 @@ class CommunityCatalog:
         return {"hits": [_listing(row) for row in hits], "total": total, "limit": PAGE, "offset": offset, "source": "primary"}
 
     def capabilities(self):
-        """Detect whether the live server actually enforces retention and bans.
+        """Detect whether the live server enforces retention and build cooldowns.
 
         Older server versions do not expose this endpoint. Never label those
         sites as enforcing the one-hour rule simply because the client knows it.
@@ -429,12 +429,14 @@ class CommunityCatalog:
         limits = data.get("publishLimits")
         if (data.get("publicRetentionSeconds") != 3600 or not isinstance(limits, dict)
                 or limits.get("maxArchiveBytes") != MAX_PUBLIC_UPLOAD
-                or limits.get("maxActive") != 3 or limits.get("windowSeconds") != 600
-                or limits.get("maxAttempts") != 10 or limits.get("banSeconds") != 18000):
+                or limits.get("maxActive") != 3 or limits.get("burstAttempts") != 3
+                or limits.get("cooldownSeconds") != 300
+                or limits.get("rateScope") != "publisher-build"
+                or limits.get("stableBuildKeyRequired") is not True):
             return {"enabled": False, "mode": "unsupported",
                     "message": "Новые публикации недоступны: эта версия сервера не подтверждает срок 60 минут и защиту от спама."}
         return {"enabled": True, "mode": "retention",
-                "message": "Подтверждено сервером: ссылка действует 60 минут, архив до 256 МиБ. После истечения срока сервер автоматически очищает хранилище.",
+                "message": "Подтверждено сервером: ссылка действует 60 минут, архив до 256 МиБ. Для одной сборки доступны три быстрые попытки, далее — одна в 5 минут. После истечения срока сервер автоматически очищает хранилище.",
                 "publicRetentionSeconds": 3600, "publishLimits": limits}
 
     def _reconcile_legacy(self, pid, item):
@@ -458,7 +460,10 @@ class CommunityCatalog:
         return current
 
     def _new_upload(self, pid, key, metadata):
-        session = self.api.json("POST", "uploads", payload=metadata)
+        # The profile UUID is stable across renames, content edits and launcher
+        # restarts. It is not an upload token and is never part of a public ZIP.
+        build_key = hashlib.sha256(("BlockHarbor-public-build-v1:" + pid).encode()).hexdigest()
+        session = self.api.json("POST", "uploads", payload={**metadata, "buildKey": build_key})
         upload, token = session.get("upload"), session.get("token")
         if (not isinstance(upload, str) or not re.fullmatch("[a-f0-9]{32}", upload)
                 or not isinstance(token, str) or not re.fullmatch("[a-f0-9]{64}", token)

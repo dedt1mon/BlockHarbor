@@ -9,16 +9,18 @@ import { fileURLToPath } from 'node:url';
 import worker from './worker.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const migration = readFileSync(new URL('drizzle/0000_catalog.sql', import.meta.url), 'utf8');
-const abuseMigration = readFileSync(new URL('drizzle/0001_abuse_guard.sql', import.meta.url), 'utf8')
-  .replaceAll('--> statement-breakpoint', '');
-const notificationMigration = readFileSync(new URL('drizzle/0002_expiry_notifications.sql', import.meta.url), 'utf8')
-  .replaceAll('--> statement-breakpoint', '');
+// Exercise the deployment migration journal, not a separate hard-coded list:
+// an unregistered migration must fail the same API contract here as in Sites.
+const journal = JSON.parse(readFileSync(new URL('drizzle/meta/_journal.json', import.meta.url), 'utf8'));
+const migrations = journal.entries.map(entry =>
+  readFileSync(new URL('drizzle/'+entry.tag+'.sql', import.meta.url), 'utf8')
+    .replaceAll('--> statement-breakpoint', ''));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const partSize = 8 * 1024 ** 2;
 const buildName = 'Моя сборка';
 const metadata = bytes => ({
   name: buildName, category: 'adventure', minecraft: '1.20.1', loader: 'fabric', size: bytes.length, sha256: sha(bytes),
+  buildKey: 'b'.repeat(64),
 });
 
 if (!crypto.DigestStream) {
@@ -64,9 +66,7 @@ class D1Fixture {
   constructor() {
     this.db = new DatabaseSync(':memory:');
     this.db.exec('PRAGMA foreign_keys = ON');
-    this.db.exec(migration);
-    this.db.exec(abuseMigration);
-    this.db.exec(notificationMigration);
+    for(const migration of migrations) this.db.exec(migration);
   }
   prepare(sql) {
     const statement = this.db.prepare(sql);
@@ -320,44 +320,52 @@ test('256 MiB cap, storage reserve, and per-network active-slot limit',async t =
   assert.equal(reserve.status,201);
   const third=await api.begin(metadata(small));
   assert.equal(third.status,201);
-  const fourth=await api.begin(metadata(small));
+  const fourth=await api.begin({...metadata(small),buildKey:'c'.repeat(64),sha256:'d'.repeat(64)});
   assert.equal(fourth.status,429);
   assert.match((await fourth.json()).error,/3 активных/);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,3);
   const otherNetwork=await api.begin(metadata(small),{ip:'198.51.100.44'});
   assert.equal(otherNetwork.status,201);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,4);
-  assert.equal(api.env.DB.db.prepare('SELECT length(subject) AS n FROM publisher_rate LIMIT 1').get().n,64);
-  const raw=api.env.DB.db.prepare('SELECT subject FROM publisher_rate LIMIT 1').get().subject;
+  assert.equal(api.env.DB.db.prepare('SELECT length(subject) AS n FROM publication_rate LIMIT 1').get().n,64);
+  const raw=api.env.DB.db.prepare('SELECT subject FROM publication_rate LIMIT 1').get().subject;
   assert.ok(!raw.includes('203.0.113.10'));
 });
 
-test('11th attempt in ten minutes triggers five-hour ban and Retry-After',async t => {
-  const api=registry(t), attempts=[];
-  for(let i=0;i<10;i++) attempts.push(await api.begin(metadata(small)));
-  assert.equal(attempts.slice(0,3).filter(r=>r.status===201).length,3);
-  assert.equal(attempts.slice(3).filter(r=>r.status===429).length,7);
-  const eleventh=await api.begin(metadata(small));
-  assert.equal(eleventh.status,429);
-  const info=await eleventh.json();
+test('three attempts then one each 300 seconds, including boundary, withdrawals and long idle',async t => {
+  let moment=2000000000;
+  t.mock.method(Date,'now',()=>moment*1000);
+  const api=registry(t);
+  async function publishAndWithdraw() {
+    const owner=await api.open(metadata(small));
+    assert.equal((await owner.put(1,small)).status,200);
+    const listing=await (await owner.finish()).json();
+    assert.equal((await owner.remove(listing.id)).status,200);
+  }
+  for(let i=0;i<3;i++) await publishAndWithdraw();
+  const fourth=await api.begin(metadata(small));
+  assert.equal(fourth.status,429);
+  const info=await fourth.json();
   assert.equal(info.code,'PUBLISH_RATE_BAN');
-  assert.ok(info.retryAfterSeconds>0 && info.retryAfterSeconds<=5*3600);
-  assert.ok(info.blockedUntil>Math.floor(Date.now()/1000));
-  assert.equal(eleventh.headers.get('Retry-After'),String(info.retryAfterSeconds));
-  const row=api.env.DB.db.prepare('SELECT * FROM publisher_rate').get();
-  assert.equal(row.attempts,11);
-  assert.equal(row.blocked_until,info.blockedUntil);
+  assert.equal(info.retryAfterSeconds,300);
+  assert.equal(info.blockedUntil,moment+300);
+  assert.equal(fourth.headers.get('Retry-After'),'300');
+  assert.deepEqual(api.env.DB.db.prepare('SELECT attempts,next_allowed FROM publication_rate').all()
+    .map(row=>({...row})),[{attempts:3,next_allowed:moment+300},{attempts:3,next_allowed:moment+300}]);
+  moment+=299;
   const again=await (await api.begin(metadata(small))).json();
-  assert.equal(again.blockedUntil,info.blockedUntil); // hammering cannot extend ban
+  assert.equal(again.blockedUntil,info.blockedUntil); // rejected retries never move the boundary
+  assert.equal(again.retryAfterSeconds,1);
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,0);
-  assert.equal(api.env.BUCKET.uploads.size,0); // pending spam reservations cancelled
-  api.env.DB.db.exec('DELETE FROM builds'); // simulate TTL cleanup before later retry
-  api.env.DB.db.exec('UPDATE publisher_rate SET blocked_until=0,window_start=0');
-  const recovered=await api.begin(metadata(small));
-  assert.equal(recovered.status,201);
-  const reset=api.env.DB.db.prepare('SELECT attempts,blocked_until FROM publisher_rate').get();
-  assert.equal(reset.attempts,1);
-  assert.equal(reset.blocked_until,0);
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  moment++;
+  await publishAndWithdraw();
+  assert.equal((await api.begin(metadata(small))).status,429);
+  moment+=86400;
+  await worker.scheduled({},api.env,{});
+  await publishAndWithdraw();
+  assert.equal((await api.begin(metadata(small))).status,429); // idle time cannot refill three tokens
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_rate').get().n,2);
 });
 
 test('concurrent publication bursts remain atomic even with many simultaneous clients',async t => {
@@ -366,8 +374,32 @@ test('concurrent publication bursts remain atomic even with many simultaneous cl
   assert.equal(results.filter(x=>x.status===201).length,3);
   const blocked=await Promise.all(results.map(async x=>x.status===429?await x.json():{}));
   assert.ok(blocked.some(x=>x.code==='PUBLISH_RATE_BAN'));
-  assert.equal(api.env.DB.db.prepare('SELECT attempts FROM publisher_rate').get().attempts,11);
-  assert.ok(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n<=3);
+  assert.deepEqual(api.env.DB.db.prepare('SELECT attempts FROM publication_rate').all().map(row=>row.attempts),[3,3]);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM builds').get().n,3);
+});
+
+test('same archive cannot reset its quota with another build key, and edited profile keeps its quota',async t => {
+  const api=registry(t);
+  for(let i=0;i<3;i++) assert.equal((await api.begin(metadata(small))).status,201);
+  const sameBytes={...metadata(small),buildKey:'c'.repeat(64)};
+  const renamed={...metadata(small),name:'Новое имя',sha256:'d'.repeat(64)};
+  for(const data of [sameBytes,renamed]) {
+    const response=await api.begin(data);
+    assert.equal(response.status,429);
+    assert.equal((await response.json()).code,'PUBLISH_RATE_BAN');
+  }
+  // Rejection must not leave half of a two-key reservation behind.
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_rate').get().n,2);
+  api.env.DB.db.exec("UPDATE builds SET created=0");
+  const otherBuild=await api.begin({...sameBytes,sha256:'d'.repeat(64)});
+  assert.equal(otherBuild.status,201);
+  assert.equal((await api.begin(metadata(small),{ip:'198.51.100.44'})).status,201);
+  const restarted=(await import('./worker.mjs?rate-restart='+crypto.randomUUID())).default;
+  const body=Buffer.from(JSON.stringify(metadata(small)));
+  const retry=await restarted.fetch(new Request('https://catalog.test/v1/uploads',{
+    method:'POST',body,headers:{'CF-Connecting-IP':'203.0.113.10','Content-Length':String(body.length)}}),api.env);
+  assert.equal(retry.status,429);
+  assert.equal((await retry.json()).code,'PUBLISH_RATE_BAN');
 });
 
 test('missing edge identity or secret fails closed only for publishing',async t => {
@@ -380,23 +412,35 @@ test('missing edge identity or secret fails closed only for publishing',async t 
   const withoutIp=await worker.fetch(new Request('https://catalog.test/v1/uploads',{
     method:'POST',body,headers:{'Content-Length':String(body.length)}}),api.env);
   assert.equal(withoutIp.status,403);
-  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_rate').get().n,0);
+});
+
+test('a stable build key is required before any reservation or quota is created',async t => {
+  const api=registry(t);
+  for(const buildKey of [undefined,'',123,'../profile','A'.repeat(64),'a'.repeat(65)]) {
+    assert.equal((await api.begin({...metadata(small),buildKey})).status,400);
+  }
+  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_rate').get().n,0);
 });
 
 
-test('a temporary ban removes only unfinished uploads, not verified builds',async t => {
+test('cooldown does not revoke verified builds or abort recoverable uploads',async t => {
   const api=registry(t), owner=await api.open(metadata(small));
   await owner.put(1,small);
   const published=await (await owner.finish()).json();
-  for(let i=0;i<9;i++) await api.begin(metadata(small));
+  const pending=await api.open(metadata(small));
+  await api.begin(metadata(small));
   const blocked=await api.begin(metadata(small));
   assert.equal((await blocked.json()).code,'PUBLISH_RATE_BAN');
   const remaining=await (await api.call('GET','builds')).json();
   assert.equal(remaining.total,1);
   assert.equal(remaining.hits[0].id,published.id);
   assert.equal(api.env.BUCKET.objects.size,1);
-  assert.equal(api.env.BUCKET.uploads.size,0);
+  assert.equal(api.env.BUCKET.uploads.size,2);
   assert.equal((await api.call('GET','builds/'+published.id+'/archive')).status,200);
+  assert.equal((await pending.put(1,small)).status,200);
+  assert.equal((await pending.finish()).status,200);
 });
 
 test('unfinished uploads expire after 30 minutes and release their reservation',async t => {
@@ -421,11 +465,11 @@ test('capabilities endpoint advertises effective one-hour and anti-spam constrai
     ownerNotificationFormat:1,
     publishLimits:{
       maxArchiveBytes:256*1024*1024, maxActive:3,
-      windowSeconds:600, maxAttempts:10, banSeconds:5*3600,
+      burstAttempts:3, cooldownSeconds:300,rateScope:'publisher-build',stableBuildKeyRequired:true,
     },
   });
   // Policy discovery is read-only and cannot consume any publisher quotas.
-  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_rate').get().n,0);
 });
 
 test('capabilities do not report an unconfigured publisher as operational',async t => {
@@ -434,7 +478,7 @@ test('capabilities do not report an unconfigured publisher as operational',async
   assert.equal((await api.call('GET','capabilities')).status,503);
   assert.equal((await api.call('GET','builds')).status,200);
   api.env.RATE_SALT='integration-test-only-long-random-test-salt-2026';
-  api.env.DB.db.exec('DROP TABLE publisher_rate');
+  api.env.DB.db.exec('DROP TABLE publication_rate');
   assert.equal((await api.call('GET','capabilities')).status,503);
   assert.equal((await api.call('GET','builds')).status,200);
 });
@@ -577,6 +621,49 @@ test('scheduled cleanup has a bounded per-invocation budget and drains the remai
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
   assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,150);
+});
+
+test('public scheduler endpoint is bounded, throttled across restart and cannot delete active publications',async t => {
+  let moment=2000000000;
+  t.mock.method(Date,'now',()=>moment*1000);
+  const api=registry(t), owner=await api.open(metadata(small));
+  await owner.put(1,small);
+  const active=await (await owner.finish()).json();
+  await api.open(metadata(small)); // a fresh unfinished upload must also survive
+  const insert=api.env.DB.db.prepare("INSERT INTO builds(id,upload,owner_hash,multipart,state,name,search_name,category,minecraft,loader,size,sha256,created,publisher) VALUES(?,?,?,?,'ready','Test','test','adventure','1.20.1','fabric',?,?,0,'test')");
+  for(let n=0;n<20;n++) {
+    const id='BH-'+n.toString(16).padStart(12,'0').toUpperCase();
+    insert.run(id,n.toString(16).padStart(32,'0'),'b'.repeat(64),'completed',small.length,sha(small));
+    api.env.BUCKET.objects.set(`builds/${id}.zip`,small);
+  }
+  const endpoint='https://catalog.test/v1/maintenance/prune';
+  for(const request of [
+    new Request(endpoint+'?id='+active.id,{method:'POST'}),
+    new Request(endpoint,{method:'POST',body:JSON.stringify({id:active.id}),headers:{'Content-Length':'30'}}),
+  ]) assert.equal((await worker.fetch(request,api.env)).status,400);
+  assert.equal((await worker.fetch(new Request(endpoint),api.env)).status,404);
+  assert.equal(api.env.BUCKET.objects.size,21);
+  api.env.RATE_SALT=''; // an external scheduler needs neither publisher nor admin credentials
+  const responses=await Promise.all(Array.from({length:8},()=>worker.fetch(new Request(endpoint,{method:'POST'}),api.env)));
+  for(const response of responses) assert.equal(response.status,200);
+  const stats=await Promise.all(responses.map(response=>response.json()));
+  assert.equal(stats.reduce((sum,row)=>sum+row.checked,0),16);
+  assert.equal(stats.filter(row=>row.throttled).length,7);
+  assert.equal(api.env.BUCKET.objects.size,5);
+  assert.equal(api.env.BUCKET.uploads.size,1);
+  const restarted=(await import('./worker.mjs?prune-restart='+crypto.randomUUID())).default;
+  assert.equal((await (await restarted.fetch(new Request(endpoint,{method:'POST'}),api.env)).json()).throttled,true);
+  moment+=5;
+  const remainder=await (await restarted.fetch(new Request(endpoint,{method:'POST'}),api.env)).json();
+  assert.equal(remainder.checked,4);
+  assert.equal(api.env.BUCKET.objects.size,1);
+  assert.equal((await api.call('GET','builds/'+active.id+'/archive')).status,200);
+  assert.equal(api.env.BUCKET.uploads.size,1);
+  moment+=5;
+  const empty=await restarted.fetch(new Request(endpoint,{method:'POST',headers:{'Content-Length':'0'}}),api.env);
+  assert.equal(empty.status,200);
+  assert.equal((await empty.json()).checked,0);
+  assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publication_events').get().n,20);
 });
 
 test('public archives resume with an immutable strong validator and every range obeys expiry',async t => {

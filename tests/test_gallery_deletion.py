@@ -209,6 +209,115 @@ class GalleryDeletionTests(unittest.TestCase):
                 self.experience.restore_screenshots(self.pid, batch)
         self.assertTrue(shot.exists())
 
+    def test_purge_removes_only_confirmed_receipt_files_and_preserves_foreign_content(self):
+        for name in ("one.png", "two.png", "other.png", "keep.png"):
+            self.screenshot(name)
+        selected = self.experience.delete_screenshots(self.pid, self.selection("one.png", "two.png"))
+        other = self.experience.delete_screenshots(self.pid, self.selection("other.png"))
+        directory = self.trash(selected["batch"])
+        (directory / "foreign.txt").write_text("keep this file")
+        (directory / "foreign-directory").mkdir()
+        item = next(row for row in self.experience.gallery(self.pid)["trash"] if row["id"] == selected["batch"])
+        result = self.experience.handle("experiencePurgeScreenshots", {"id": self.pid, "batch": item["id"], "token": item["token"]})
+        self.assertEqual(2, result["deleted"])
+        self.assertEqual([], result["skipped"])
+        self.assertFalse((directory / "one.png").exists())
+        self.assertFalse((directory / "two.png").exists())
+        self.assertEqual("keep this file", (directory / "foreign.txt").read_text())
+        self.assertTrue((directory / "foreign-directory").is_dir())
+        self.assertTrue((directory / "manifest.json").is_file())
+        self.assertTrue((self.trash(other["batch"]) / "other.png").is_file())
+        self.assertTrue((self.folder / "keep.png").is_file())
+
+    def test_purge_requires_current_token_for_the_named_profile_and_batch(self):
+        self.screenshot("one.png")
+        selected = self.experience.delete_screenshots(self.pid, self.selection())
+        item = self.experience.gallery(self.pid)["trash"][0]
+        for token in (None, "", "0" * 64):
+            with self.assertRaises(ValueError):
+                self.experience.purge_screenshots(self.pid, item["id"], token)
+        for batch in (None, "", "../screenshots", "0" * 32):
+            with self.assertRaises(ValueError):
+                self.experience.purge_screenshots(self.pid, batch, item["token"])
+        other_id = self.store.create("Другой", "1.20.1", "fabric")
+        with self.assertRaises(ValueError):
+            self.experience.purge_screenshots(other_id, item["id"], item["token"])
+        self.assertTrue((self.trash(selected["batch"]) / "one.png").is_file())
+
+    def test_purge_preflights_checksums_for_the_whole_group_before_deleting(self):
+        self.screenshot("one.png")
+        self.screenshot("two.png")
+        result = self.experience.delete_screenshots(self.pid, sorted(self.selection(), key=lambda item: item["name"]))
+        directory = self.trash(result["batch"])
+        (directory / "two.png").write_bytes(self.png((240, 20, 80)))
+        # Even a newly opened dialog cannot approve content that differs from
+        # the original deletion receipt, regardless of current timestamps.
+        item = self.experience.gallery(self.pid)["trash"][0]
+        with self.assertRaisesRegex(ValueError, "изменился"):
+            self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        self.assertTrue((directory / "one.png").is_file())
+        self.assertEqual(self.png((240, 20, 80)), (directory / "two.png").read_bytes())
+
+    def test_purge_rejects_changed_manifest_after_confirmation_was_opened(self):
+        self.screenshot("one.png")
+        result = self.experience.delete_screenshots(self.pid, self.selection())
+        item = self.experience.gallery(self.pid)["trash"][0]
+        manifest = self.trash(result["batch"]) / "manifest.json"
+        record = json.loads(manifest.read_text())
+        record["created"] += 1
+        manifest.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, "изменились"):
+            self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        self.assertTrue((manifest.parent / "one.png").is_file())
+
+    def test_purge_rejects_linked_file_or_batch_without_touching_target(self):
+        self.screenshot("one.png")
+        result = self.experience.delete_screenshots(self.pid, self.selection())
+        item = self.experience.gallery(self.pid)["trash"][0]
+        directory = self.trash(result["batch"])
+        original = (directory / "one.png").read_bytes()
+        external = self.root / "outside.png"
+        external.write_bytes(original)
+        (directory / "one.png").unlink()
+        (directory / "one.png").symlink_to(external)
+        with self.assertRaisesRegex(ValueError, "перенаправлен"):
+            self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        self.assertEqual(original, external.read_bytes())
+        (directory / "one.png").unlink()
+        (directory / "one.png").write_bytes(original)
+        item = self.experience.gallery(self.pid)["trash"][0]
+        moved = directory.with_name("moved-batch")
+        directory.rename(moved)
+        directory.symlink_to(moved, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "перенаправлена"):
+            self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        self.assertEqual(original, (moved / "one.png").read_bytes())
+
+    def test_purge_partial_failure_keeps_receipt_and_can_retry_remaining_selection(self):
+        self.screenshot("one.png")
+        self.screenshot("two.png")
+        result = self.experience.delete_screenshots(self.pid, sorted(self.selection(), key=lambda item: item["name"]))
+        directory = self.trash(result["batch"])
+        item = self.experience.gallery(self.pid)["trash"][0]
+        unlink = Path.unlink
+        def busy(path, *args, **kwargs):
+            if path.parent == directory and path.name == "two.png":
+                raise PermissionError("busy")
+            return unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", busy):
+            result = self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual(["two.png"], result["skipped"])
+        current = self.experience.gallery(self.pid)["trash"][0]
+        self.assertEqual(["two.png"], current["names"])
+        self.assertTrue((directory / "manifest.json").is_file())
+        with self.assertRaisesRegex(ValueError, "изменились"):
+            self.experience.purge_screenshots(self.pid, item["id"], item["token"])
+        result = self.experience.purge_screenshots(self.pid, current["id"], current["token"])
+        self.assertEqual(1, result["deleted"])
+        self.assertFalse(directory.exists())
+        self.assertEqual([], self.experience.gallery(self.pid)["trash"])
+
 
 if __name__ == "__main__":
     unittest.main()

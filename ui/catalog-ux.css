@@ -1,0 +1,30 @@
+/* Search, installed state and content-sized addon details share the modal header. */
+.catalog-browse { grid-template-rows: auto minmax(0, 1fr) auto; }
+.catalog-search { align-items: stretch; }
+.catalog-search > .btn { flex: none; }
+.catalog-pager { justify-content: center; gap: 16px; }
+.catalog-pager > .btn { flex: none; }
+.catalog-pager > span { min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.catalog-installed { display: inline-flex; align-items: center; gap: 5px; color: var(--lime); font-size: 12px; }
+.catalog-installed .ic { width: 14px; height: 14px; }
+.catalog-choice[data-installed="true"] > .catalog-mark { color: var(--lime); border-color: var(--selection-border); background: var(--selection-fill); opacity: 1; }
+
+dialog:has(.catalog[data-catalog-view="detail"]) #dialogBody { flex: 0 1 auto; overflow-y: auto; scrollbar-gutter: stable; }
+.catalog[data-catalog-view="detail"] { height: auto; min-height: 0; }
+.catalog[data-catalog-view="detail"] .catalog-output { flex: none; display: block; }
+.catalog[data-catalog-view="detail"] .catalog-detail { height: auto; overflow: visible; }
+.catalog[data-catalog-view="detail"] .catalog-project { margin-top: 0; }
+.catalog[data-catalog-view="detail"] .catalog-project > div { min-width: 0; }
+.catalog[data-catalog-view="detail"] .catalog-context { white-space: normal; }
+.catalog[data-catalog-view="detail"] .catalog-feedback:has([role="status"]:empty):has([hidden]) { display: none; }
+
+@media (max-width: 480px) {
+  .catalog-search { flex-wrap: wrap; }
+  .catalog-search > input { flex-basis: 100%; }
+  .catalog-search > .btn { flex: 1; }
+  .catalog-pager { gap: 8px; }
+}
+@media (max-height: 560px) {
+  .catalog-browse { grid-template-rows: auto minmax(160px, 40dvh) auto; }
+  .catalog-pager { position: sticky; bottom: 0; background: var(--bg); padding-block: 6px; }
+}

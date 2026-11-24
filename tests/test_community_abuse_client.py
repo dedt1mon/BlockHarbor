@@ -17,8 +17,8 @@ class RejectingOpener:
         response = {
             "error": "Публикация временно заблокирована из-за слишком частых попыток.",
             "code": "PUBLISH_RATE_BAN",
-            "retryAfterSeconds": 3600,
-            "blockedUntil": int(time.time()) + 3600,
+            "retryAfterSeconds": 300,
+            "blockedUntil": int(time.time()) + 300,
         }
         raise HTTPError(
             request.full_url, 429, "Too Many Requests", None,
@@ -35,7 +35,7 @@ class ClientAbuseTests(unittest.TestCase):
         error = caught.exception
         self.assertEqual(error.code, 429)
         self.assertEqual(error.reason_code, "PUBLISH_RATE_BAN")
-        self.assertEqual(error.retry_after, 3600)
+        self.assertEqual(error.retry_after, 300)
         self.assertGreater(error.blocked_until, time.time())
         self.assertIn("Публикация временно заблокирована", str(error))
 
@@ -99,8 +99,8 @@ class ClientAbuseTests(unittest.TestCase):
             "publicRetentionSeconds": 3600, "manifestFormat": 1,
             "publishLimits": {
                 "maxArchiveBytes": 256 * 1024**2,
-                "maxActive": 3, "windowSeconds": 600,
-                "maxAttempts": 10, "banSeconds": 5 * 3600,
+                "maxActive": 3, "burstAttempts": 3, "cooldownSeconds": 300,
+                "rateScope": "publisher-build", "stableBuildKeyRequired": True,
             },
         }
         class PolicyAPI:
@@ -114,14 +114,20 @@ class ClientAbuseTests(unittest.TestCase):
             store = Store(Path(folder))
             active = catalog.CommunityCatalog(store, PolicyAPI(policy))
             self.assertTrue(active.capabilities()["enabled"])
-            changed = {**policy, "publishLimits": {**policy["publishLimits"], "banSeconds": 60}}
-            self.assertFalse(catalog.CommunityCatalog(store, PolicyAPI(changed)).capabilities()["enabled"])
+            for changes in ({"cooldownSeconds": 60}, {"burstAttempts": 10},
+                            {"rateScope": "installation"}, {"stableBuildKeyRequired": False}):
+                changed = {**policy, "publishLimits": {**policy["publishLimits"], **changes}}
+                self.assertFalse(catalog.CommunityCatalog(store, PolicyAPI(changed)).capabilities()["enabled"])
+            old_policy = {**policy, "publishLimits": {
+                "maxArchiveBytes": catalog.MAX_PUBLIC_UPLOAD, "maxActive": 3,
+                "windowSeconds": 600, "maxAttempts": 10, "banSeconds": 18000}}
+            self.assertFalse(catalog.CommunityCatalog(store, PolicyAPI(old_policy)).capabilities()["enabled"])
 
     def test_ban_is_rendered_as_a_modal_not_a_global_launcher_lock(self):
         root = Path(__file__).resolve().parents[1]
         script = (root / "ui" / "pack-hub.js").read_text(encoding="utf-8")
         application = (root / "main.py").read_text(encoding="utf-8")
-        self.assertIn('modal("Публикация временно заблокирована"', script)
+        self.assertIn('modal("Повторная публикация"', script)
         self.assertIn('readPublicationCapabilities(form);', script)
         self.assertIn('Сервер не подтвердил срок автоматического удаления.', script)
         self.assertIn('community-policy-status', script)

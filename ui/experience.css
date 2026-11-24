@@ -18,7 +18,6 @@
 #buildErrorsPanel summary { cursor: pointer; }
 
 /* Match the unobtrusive scroll treatment used by the Mods → Download catalog. */
-#buildErrorsPanel > h2 { margin: 0 0 18px; }
 .diagnostic-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -55,6 +54,8 @@
   border: 2px solid #101717;
 }
 .report-text::-webkit-scrollbar-thumb:hover { background: #759376; }
+.diagnostic-report { min-width: 0; }
+.diagnostic-report .report-text { height: min(560px, 56dvh); min-height: 220px; }
 @media (max-width: 480px) {
   .diagnostic-actions { grid-template-columns: minmax(0, 1fr); }
 }
@@ -74,3 +75,11 @@
 .notification-new { color: var(--lime); font-size: 11px; }
 .notification-read-error { color: var(--danger-text); }
 .notification-history { scrollbar-gutter: stable; overscroll-behavior: contain; }
+.notification-panel .dialog-actions:has([data-notifications-refresh][hidden]) { display: none; }
+.gallery-trash { max-height: 58dvh; padding-inline-end: 14px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #59695d transparent; overscroll-behavior: contain; }
+.gallery-trash::-webkit-scrollbar { width: 9px; }
+.gallery-trash::-webkit-scrollbar-thumb { background: #59695d; border: 2px solid var(--card); border-radius: 999px; }
+.gallery-trash:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.gallery-trash-batch > div:first-child { flex: 1 1 180px; }
+.gallery-trash-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 1 auto; margin-inline-start: auto; }
+.gallery-trash-actions .btn { white-space: normal; }

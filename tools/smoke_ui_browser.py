@@ -150,7 +150,9 @@ class FixtureAPI:
                 elif path == "/api/catalog/filters":
                     result = {"sort": {"relevance": "По релевантности", "downloads": "По загрузкам"}, "groups": [], "dependencies": False}
                 elif path == "/api/catalog/search":
-                    source = first("source", "community")
+                    source = first("source", "all")
+                    if source == "all":
+                        source = "github"  # Search results carry their concrete origin.
                     hits = [{"id": "mod-" + str(i), "title": "Совместимое дополнение " + str(i), "description": "Очень длинное описание " * 20, "source": source, "sourceTitle": "Источник", "author": "Автор", "downloads": 100 + i, "recommendedVersion": "stable-1", "compatibility": "release-metadata"} for i in range(12)]
                     result = {"hits": [*hits, hits[0]], "offset": 0, "limit": 20, "total": 40, "totalIsEstimate": True, "verified": True}
                 elif path == "/api/catalog/check":
@@ -514,7 +516,7 @@ def production_views(page, api, output, label):
     page.locator("[data-pack-share]").first.click()
     settle(page)
     check_geometry("publication", True)
-    assert page.locator('.community-publish [type="submit"]').is_enabled()
+    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_enabled()
     if detailed_capture:
         page.screenshot(path=str(output / (label + "-publication.png")))
     page.locator("#dialogClose").click()
@@ -595,11 +597,11 @@ def interaction_flows(page, api, output, label):
     api.publication_enabled = False
     page.locator("[data-pack-share]").first.click()
     settle(page)
-    assert page.locator('.community-publish [type="submit"]').is_disabled(), "Unverified retention allowed publishing"
+    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_disabled(), "Unverified retention allowed publishing"
     api.publication_enabled = True
     page.locator("[data-pack-policy-retry]").click()
     settle(page)
-    assert page.locator('.community-publish [type="submit"]').is_enabled()
+    assert page.locator('#dialogHeaderActions [data-pack-publish-submit]').is_enabled()
     page.locator("#dialogClose").click()
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
@@ -615,9 +617,11 @@ def interaction_flows(page, api, output, label):
     page.evaluate("tick(true)")
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
-    open_select_picker(page, "[data-catalog-source]", output, label + "-catalog-source")
-    page.locator("[data-catalog-source]").select_option("github")
+    assert page.locator("[data-catalog-source], [data-catalog-sort]").count() == 0
+    page.locator("[data-catalog-filters]").click()
     settle(page)
+    assert page.locator("#catalogFilterPanel").is_visible()
+    page.locator("[data-filter-cancel]").click()
     for index in range(3):
         page.locator("[data-mark]").nth(index).click()
     api.preview_error = "mod-1"
@@ -684,8 +688,6 @@ def interaction_flows(page, api, output, label):
     page.locator("[data-batch-hide]").click()
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
-    page.locator("[data-catalog-source]").select_option("github")
-    settle(page)
     page.locator("[data-project]").first.click()
     settle(page)
     assert page.locator("#catalogVersion").input_value() == "stable-1"

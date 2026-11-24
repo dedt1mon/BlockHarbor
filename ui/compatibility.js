@@ -123,16 +123,21 @@ function releaseCompatibility(dialog, detail, profile, category) {
   whenDialogClosed(dialog, detail, cancel);
   async function check(project, version) {
     cancel();
-    const button = detail.querySelector("[data-install-project]");
+    const button = dialog.querySelector("#dialogHeaderActions [data-install-project]");
     const area = detail.querySelector(".compatibility-report");
-    if (!area) return;
+    if (!area || !button) return;
     button.disabled = true;
     delete button.dataset.acknowledgement;
     area.removeAttribute("aria-busy");
+    if (project.installed || version.installed) {
+      button.innerHTML = ic("check") + "Установлено";
+      area.innerHTML = '<p class="compat-clear">Дополнение уже установлено в этой сборке. Обновления доступны в разделе обслуживания сборки.</p>';
+      return;
+    }
 
     const current = new AbortController();
     request = current;
-    button.textContent = "Установить в сборку";
+    button.textContent = "Установить с зависимостями";
     area.setAttribute("aria-busy", "true");
     area.textContent = "Проверяем зависимости и совместимость…";
     const params = new URLSearchParams({
@@ -142,7 +147,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
       version: version.id,
       source: project.source || "all",
     });
-    const active = () => request === current && dialog.open && area.isConnected;
+    const active = () => request === current && dialog.open && area.isConnected && button.isConnected;
     try {
       const info = await api("/api/catalog/check?" + params, {
         signal: current.signal,
@@ -157,9 +162,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
         ? "Установка недоступна"
         : info.reviewToken
           ? "Установить с предупреждением"
-          : info.required.some((row) => !row.installed)
-            ? "Установить с зависимостями"
-            : version.installed ? "Проверить и восстановить зависимости" : "Установить в сборку";
+          : "Установить с зависимостями";
     } catch (error) {
       if (!active()) return;
       area.innerHTML =

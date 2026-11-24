@@ -3,9 +3,10 @@ const PART = 8 * 1024 ** 2;
 const MAX_SIZE = 256 * 1024 ** 2; // 256 MiB maximum per public archive.
 const STORAGE_LIMIT = 8 * 1024 ** 3; // Hard ceiling below R2's free allowance.
 const ACTIVE_PER_PUBLISHER = 3;
-const RATE_WINDOW = 10 * 60;
-const RATE_REQUESTS = 10;
-const RATE_BAN = 5 * 60 * 60;
+const RATE_BURST = 3;
+const RATE_COOLDOWN = 5 * 60;
+const MAX_RATE_SUBJECTS = 200000;
+const PRUNE_THROTTLE = 5;
 const UPLOAD_TTL = 30 * 60; // Unfinished multipart reservations expire in 30 min.
 const PUBLIC_TTL = 60 * 60; // Public archives are visible for one hour after completion.
 const CLEANUP_BATCH = 16;
@@ -44,7 +45,8 @@ function capabilities() {
     ownerNotificationFormat: 1,
     publishLimits: {
       maxArchiveBytes: MAX_SIZE, maxActive: ACTIVE_PER_PUBLISHER,
-      windowSeconds: RATE_WINDOW, maxAttempts: RATE_REQUESTS, banSeconds: RATE_BAN,
+      burstAttempts: RATE_BURST, cooldownSeconds: RATE_COOLDOWN,
+      rateScope: 'publisher-build', stableBuildKeyRequired: true,
     },
   };
 }
@@ -67,63 +69,46 @@ async function publisherKey(request, env) {
     {name:'HMAC',hash:'SHA-256'},false,['sign']);
   return hex(await crypto.subtle.sign('HMAC',key,text.encode(ip)));
 }
-async function checkPublicationRate(env, subject) {
+async function checkPublicationRate(env, publisher, data) {
   const moment=now();
-  // SQLite UPSERT + RETURNING is one atomic statement, so concurrent POSTs
-  // cannot defeat the 10-attempt window. 11th starts a fixed 5-hour block.
-  const sql = [
-    'INSERT INTO publisher_rate (subject,window_start,attempts,blocked_until,updated_at)',
-    'VALUES (?, ?, 1, 0, ?)',
-    'ON CONFLICT(subject) DO UPDATE SET',
-    'attempts=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.attempts',
-      'WHEN publisher_rate.window_start<=?-? THEN 1',
-      'ELSE publisher_rate.attempts+1 END,',
-    'blocked_until=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.blocked_until',
-      'WHEN publisher_rate.window_start> ?-? AND publisher_rate.attempts>=?',
-      'THEN ?+?',
-      'ELSE 0 END,',
-    'window_start=CASE',
-      'WHEN publisher_rate.blocked_until>? THEN publisher_rate.window_start',
-      'WHEN publisher_rate.window_start<=?-? THEN ?',
-      'ELSE publisher_rate.window_start END,',
-    'updated_at=?',
-    'RETURNING attempts,blocked_until,window_start'
-  ].join(' ');
-  const result=await env.DB.prepare(sql).bind(
-    subject,moment,moment,
-    moment,moment,RATE_WINDOW,
-    moment,moment,RATE_WINDOW,RATE_REQUESTS,moment,RATE_BAN,
-    moment,moment,RATE_WINDOW,moment,moment).first();
-  requireThat(result && Number.isInteger(result.attempts),503,
-    'Не удалось проверить ограничения публикации.');
-  if(result.blocked_until>moment) {
-    if(result.blocked_until===moment+RATE_BAN) {
-      // Immediately cancel unfinished spam reservations to free R2 capacity.
-      // Never unpublish already verified 'ready' builds.
-      try {
-        const {results:unfinished}=await env.DB.prepare(
-          "SELECT * FROM builds WHERE publisher=? AND state='uploading' LIMIT ?"
-        ).bind(subject,ACTIVE_PER_PUBLISHER).all();
-        for(const row of unfinished) await discard(env,row);
-      } catch(error) {
-        console.warn('Deferred cleanup for blocked publisher',error?.name || 'error');
-      }
-    }
-    const remaining=result.blocked_until-moment;
+  // The stable profile key survives edits, retries and new upload tokens.
+  // A second gate prevents rotating that key to republish identical content.
+  const subjects=await Promise.all([
+    hash('build:'+publisher+':'+data.buildKey),
+    hash('content:'+publisher+':'+data.sha256),
+  ]);
+  // Materialize eligibility BEFORE either upsert. Both guards consume one
+  // attempt atomically, or neither changes. The first three are immediate;
+  // thereafter each accepted attempt starts a new 300-second interval. No
+  // idle-time reset, janitor, withdrawal or complete replay restores a burst.
+  const {results}=await env.DB.prepare(`
+    WITH allowed AS MATERIALIZED (
+      SELECT 1 WHERE NOT EXISTS (
+        SELECT 1 FROM publication_rate WHERE subject IN (?,?) AND next_allowed>?
+      ) AND (SELECT count(*) FROM publication_rate)+2-
+        (SELECT count(*) FROM publication_rate WHERE subject IN (?,?))<=?
+    )
+    INSERT INTO publication_rate(subject,attempts,next_allowed,updated_at)
+      SELECT subject,1,0,? FROM (SELECT ? AS subject UNION ALL SELECT ?)
+      WHERE EXISTS (SELECT 1 FROM allowed)
+    ON CONFLICT(subject) DO UPDATE SET
+      attempts=MIN(?,publication_rate.attempts+1),
+      next_allowed=CASE WHEN publication_rate.attempts>=? THEN ?+? ELSE 0 END,
+      updated_at=?
+    RETURNING subject,attempts,next_allowed
+  `).bind(...subjects,moment,...subjects,MAX_RATE_SUBJECTS,moment,...subjects,
+    RATE_BURST,RATE_BURST-1,moment,RATE_COOLDOWN,moment).all();
+  if(results.length===2) return;
+  const blocked=await env.DB.prepare(
+    'SELECT MAX(next_allowed) AS until FROM publication_rate WHERE subject IN (?,?)'
+  ).bind(...subjects).first();
+  if(blocked?.until>moment) {
     throw new RequestError(429,
-      'Публикация временно заблокирована из-за слишком частых попыток.',
-      {code:'PUBLISH_RATE_BAN',retryAfterSeconds:remaining,blockedUntil:result.blocked_until});
+      'Три быстрые попытки уже использованы. Повторная публикация этой сборки доступна не чаще раза в 5 минут.',
+      // Keep the established error shape so older launchers show the modal.
+      {code:'PUBLISH_RATE_BAN',retryAfterSeconds:blocked.until-moment,blockedUntil:blocked.until});
   }
-}
-async function cleanupRateCounters(env) {
-  const cutoff=now()-RATE_BAN-RATE_WINDOW-3600;
-  await env.DB.prepare([
-    'DELETE FROM publisher_rate WHERE subject IN',
-    '(SELECT subject FROM publisher_rate',
-    'WHERE updated_at<? AND blocked_until<? ORDER BY updated_at LIMIT 256)'
-  ].join(' ')).bind(cutoff,now()).run();
+  throw new RequestError(503,'Сервис временно не принимает новые сборки: достигнут предел служебного хранилища.');
 }
 
 async function discard(env, row, expiredOnly = false) {
@@ -166,6 +151,24 @@ async function prune(env) {
   }
   return results.length;
 }
+async function publicPrune(request,env,url) {
+  // No ID, timestamp, owner token or arbitrary deletion command is accepted.
+  // A scheduler needs no privileged secret; only the server clock decides
+  // which already-expired records the existing idempotent janitor may remove.
+  requireThat(!url.search && (!request.body || request.headers.get('Content-Length')==='0'),400,
+    'Очистка принимает только пустой запрос без параметров.');
+  const moment=now();
+  const admitted=await env.DB.prepare(`INSERT INTO maintenance_runs(name,next_allowed)
+    VALUES ('prune',?) ON CONFLICT(name) DO UPDATE SET next_allowed=excluded.next_allowed
+    WHERE maintenance_runs.next_allowed<=? RETURNING next_allowed`)
+    .bind(moment+PRUNE_THROTTLE,moment).first();
+  if(!admitted) {
+    const state=await env.DB.prepare("SELECT next_allowed FROM maintenance_runs WHERE name='prune'").first();
+    return json({checked:0,limit:CLEANUP_BATCH,throttled:true,
+      retryAfterSeconds:Math.max(1,Math.min(PRUNE_THROTTLE,(state?.next_allowed || moment+1)-moment))});
+  }
+  return json({checked:await prune(env),limit:CLEANUP_BATCH,throttled:false,retryAfterSeconds:PRUNE_THROTTLE});
+}
 async function begin(request, env) {
   const length = Number(request.headers.get('Content-Length'));
   requireThat(length > 0 && length <= 4096, 400, 'Некорректный размер описания.');
@@ -180,8 +183,10 @@ async function begin(request, env) {
     'Размер публичного ZIP не должен превышать 256 МиБ.');
   requireThat(typeof data.sha256==='string' && /^[a-f0-9]{64}$/.test(data.sha256),400,
     'Неверная контрольная сумма сборки.');
+  requireThat(typeof data.buildKey==='string' && /^[a-f0-9]{64}$/.test(data.buildKey),400,
+    'Обнови лаунчер: для публикации нужен постоянный идентификатор сборки.');
   const publisher=await publisherKey(request,env);
-  await checkPublicationRate(env,publisher);
+  await checkPublicationRate(env,publisher,data);
   await prune(env);
   const token=random(32), upload=random(16), id='BH-'+random(6).toUpperCase();
   const multi=await env.BUCKET.createMultipartUpload(key({id}));
@@ -442,13 +447,15 @@ async function handle(request,env) {
     // appear ready in the launcher.
     requireThat(typeof env.RATE_SALT==='string' && env.RATE_SALT.length>=32 &&
       env.DB && env.BUCKET,503,'Сервис публикации ещё не настроен.');
-    await env.DB.prepare('SELECT subject FROM publisher_rate LIMIT 1').first();
+    await env.DB.prepare('SELECT subject,attempts,next_allowed FROM publication_rate LIMIT 1').first();
+    await env.DB.prepare('SELECT name,next_allowed FROM maintenance_runs LIMIT 1').first();
     await env.DB.prepare('SELECT cleanup_after,expired_at FROM builds LIMIT 1').first();
     await env.DB.prepare('SELECT id FROM publication_events LIMIT 1').first();
     return json(capabilities());
   }
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
+  if(path==='/v1/maintenance/prune' && method==='POST') return publicPrune(request,env,url);
   const events=/^\/v1\/publications\/(BH-[0-9A-F]{12})\/events$/.exec(path);
   if(events) return ownerEvents(request,env,events[1]);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);
@@ -519,6 +526,5 @@ export default {
       const count=await prune(env);
       if(count<CLEANUP_BATCH) break;
     }
-    await cleanupRateCounters(env);
   },
 };

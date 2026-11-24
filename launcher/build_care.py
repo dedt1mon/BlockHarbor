@@ -1102,8 +1102,6 @@ class BuildCare:
 
     def backup_after_game(self, pid, status=lambda _x: None):
         """Called only after the tracked game has exited, under the app mutation lock."""
-        if self.store.get("careAutoWorldBackup:" + pid) != "1":
-            return ""
         count = 0
         with self.lock:
             require_idle_files(self._writable_root(pid))
@@ -1128,7 +1126,7 @@ class BuildCare:
         plan = self._plans.get(pid)
         return {"contents": self.inventory(pid), "snapshots": snapshots, "history": history, "retention": self.retention(), "recoveryBytes": used,
                 "updatePlan": plan["public"] if plan else None, "recoveryError": self.recovery_errors.get(pid, ""),
-                "autoWorldBackup": self.store.get("careAutoWorldBackup:" + pid) == "1"}
+                "autoWorldBackup": True}
 
     def _recognized(self, pid, rows):
         """Network calls only happen on an explicit update check, never on UI polling."""
@@ -1353,8 +1351,9 @@ class BuildCare:
             return "Сохранено миров: " + str(len(worlds)) + "."
         if action == "careAutoBackup":
             self.store.profile(pid)
-            self.store.set("careAutoWorldBackup:" + pid, "1" if p.get("enabled") is True else "0")
-            return {"ok": True, "message": "Копии после выхода из игры включены." if p.get("enabled") is True else "Копии после выхода из игры отключены."}
+            if p.get("enabled") is not True:
+                raise ValueError("Автоматические копии миров после выхода из игры обязательны; отключить их нельзя.")
+            return {"ok": True, "message": "Копии миров после выхода из игры сохраняются автоматически."}
         if action == "careRestore":
             return self.restore(pid, p.get("snapshot"), status)
         if action == "careClone":

@@ -49,9 +49,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          go test tools/bootstrap_payload.go tools/bootstrap_payload_test.go
+          mkdir -p artifacts
+          go test -json tools/bootstrap_payload.go tools/bootstrap_payload_test.go | tee artifacts/go-bootstrap-linux.jsonl
           cd tools/data_cleanup
-          go test ./...
+          go test -json ./... | tee ../../artifacts/go-cleanup-linux.jsonl
       - name: Shared control geometry
         if: ${{ !cancelled() }}
         run: python tools/smoke_ui_layout.py
@@ -66,6 +67,7 @@ jobs:
           path: |
             artifacts/ui-audit
             artifacts/tests-linux.json
+            artifacts/go-*-linux.jsonl
           if-no-files-found: ignore
           retention-days: 14
 
@@ -100,6 +102,19 @@ jobs:
         if: ${{ !cancelled() }}
         id: portable
         run: python tools/build_windows.py --output "$env:BH_AUDIT_OUTPUT\portable"
+      - name: Native Windows cleanup and actual EXE payload regressions
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $env:BLOCKHARBOR_RELEASE_EXE = "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe"
+          go test -json tools/bootstrap_payload.go tools/bootstrap_payload_test.go | Tee-Object -FilePath artifacts/go-bootstrap-windows.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bootstrap regressions failed' }
+          Push-Location tools/data_cleanup
+          try {
+            go test -json ./... | Tee-Object -FilePath ../../artifacts/go-cleanup-windows.jsonl
+            if ($LASTEXITCODE -ne 0) { throw 'Native Windows cleanup regressions failed' }
+          } finally { Pop-Location }
       - name: Install Unicode x64 NSIS
         if: ${{ !cancelled() }}
         id: msys2
@@ -137,5 +152,6 @@ jobs:
           path: |
             artifacts/ui-audit
             artifacts/tests-windows.json
+            artifacts/go-*-windows.jsonl
           if-no-files-found: ignore
           retention-days: 14

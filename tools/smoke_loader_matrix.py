@@ -143,6 +143,9 @@ def exercise_settings(store, pid, status):
 def exercise_mod(store, pid, slug, status, cancel_first):
     result = {"state": "not-run", "slug": slug}
     manager = TransferManager(store.root)
+    prior_tasks = {row["id"] for row in manager.snapshot()["tasks"]}
+    def operation_tasks():
+        return [row for row in manager.snapshot()["tasks"] if row["id"] not in prior_tasks]
     try:
         project = modrinth._get("/project/" + slug)
         versions = modrinth.versions(store, pid, "mods", project["id"], source="community")["versions"]
@@ -168,13 +171,15 @@ def exercise_mod(store, pid, slug, status, cancel_first):
                     install(cancel_after_bytes)
                 result["recovery"] = {"firstAttempt": "completed-before-cancellation"}
             except (TransferCancelled, lifecycle.OperationCancelled):
-                tasks = manager.snapshot()["tasks"]
+                tasks = operation_tasks()
                 result["recovery"] = {"firstAttempt": "cancelled-during-download", "receivedBytes": max((row["bytes"] for row in tasks), default=0),
-                                      "partialFilesPreserved": len(list(manager.cache.glob("*.part"))), "publishedFilesAfterCancel": len(list(store.content_folder(pid, "mods").glob("*.jar")))}
+                                      "partialFilesPreserved": sum((manager.cache / (row["id"] + ".part")).is_file() for row in tasks),
+                                      "publishedFilesAfterCancel": len(list(store.content_folder(pid, "mods").glob("*.jar")))}
         install(status)
         result["state"] = "installed"
         if result.get("recovery"):
-            result["recovery"].update(retry="passed", rangeResumed=any(row.get("resumed") and row["state"] == "completed" for row in manager.snapshot()["tasks"]))
+            result["recovery"].update(retry="passed", rangeResumed=any(row.get("resumed") and row["state"] == "completed" for row in operation_tasks()))
+        result["transferEvidence"] = [{key: row[key] for key in ("title", "state", "bytes", "total", "resumed")} for row in operation_tasks()]
         files = []
         for path in sorted(store.content_folder(pid, "mods").glob("*.jar")):
             ids, version = modfiles.mod_info(path, modfiles.file_stamp(path))

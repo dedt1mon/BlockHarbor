@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from uuid import UUID
 
 from . import legacy_forge, lifecycle, loader_catalog, preparation, version_ids
+from .version import VERSION
 
 REDIRECT_URI = "http://localhost:43821/callback"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -1080,7 +1081,7 @@ def _start_java(
         "jvmArguments": [f"-Xmx{_memory(memory_mb)}M", "-Dstderr.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8"],
         "enableLoggingConfig": True,
         "launcherName": "BlockHarbor",
-        "launcherVersion": "2.6.8",
+        "launcherVersion": VERSION,
     }
     if record.get("java"):
         options["executablePath"] = record["java"]

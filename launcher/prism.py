@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from . import game, lifecycle
 from .store import input_profile
+from .version import VERSION
 
 # Official portable MinGW distribution includes Qt and its C++ runtime. Original
 # project signatures, branding, Microsoft login, and user-facing dialogs are intact.
@@ -59,7 +60,7 @@ def _engine(root: Path, status: Status) -> Path:
         digest = hashlib.sha256()
         size = 0
         status("Загружаем Prism с GitHub · 43,7 МБ")
-        request = Request(URL, headers={"User-Agent": "BlockHarbor/2.6.0"})
+        request = Request(URL, headers={"User-Agent": f"BlockHarbor/{VERSION}"})
         try:
             with lifecycle.response(urlopen(request, timeout=25)) as source, archive.open("wb") as dest:
                 while block := source.read(512 * 1024):

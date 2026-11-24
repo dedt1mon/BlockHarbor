@@ -23,6 +23,7 @@ from .modfiles import file_hash as _file_hash
 from .modfiles import file_stamp as _file_stamp
 from .modfiles import mod_info as _mod_info
 from .modfiles import publish_new as _publish
+from .version import VERSION
 
 _HERE = Path(__file__).resolve().parent
 _BUNDLED = _HERE.parent / "bundled" / "e4steam"
@@ -218,7 +219,7 @@ def _obtain(asset, cache, status):
     if _verified(target, asset):
         return target
     title = _TITLES[asset.role]
-    headers = {"User-Agent": "BlockHarbor/2.6.8", "Accept": "application/octet-stream"}
+    headers = {"User-Agent": f"BlockHarbor/{VERSION}", "Accept": "application/octet-stream"}
     attempts = list(asset.urls)
     reason = "Проверь соединение с сервером загрузки."
     for number, url in enumerate(attempts):

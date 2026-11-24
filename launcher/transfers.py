@@ -27,6 +27,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import lifecycle
 from .io_errors import storage_message
+from .version import VERSION
 
 MAX_BYTES = 8 * 1024**3
 MAX_HISTORY = 100
@@ -90,7 +91,7 @@ def open_https(url, hosts, *, headers=None, timeout=15):
     request = Request(
         url,
         headers={
-            "User-Agent": "BlockHarbor/2.6.0 (desktop launcher; dedt1mon/BlockHarbor)",
+            "User-Agent": f"BlockHarbor/{VERSION} (desktop launcher; dedt1mon/BlockHarbor)",
             "Accept-Encoding": "identity",
             **(headers or {}),
         },

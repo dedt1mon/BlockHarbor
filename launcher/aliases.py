@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from . import lifecycle
 from .skins import SkinError, _write_inside, validate_nickname
+from .version import VERSION
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,7 @@ def _download(release: ModRelease) -> bytes:
     lifecycle.check()
     request = Request(
         release.url,
-        headers={"User-Agent": "BlockHarbor/2.6.8 (Minecraft Java desktop launcher)"},
+        headers={"User-Agent": f"BlockHarbor/{VERSION} (Minecraft Java desktop launcher)"},
     )
     try:
         with lifecycle.response(urlopen(request, timeout=30)) as response:

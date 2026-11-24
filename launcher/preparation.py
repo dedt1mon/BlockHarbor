@@ -27,6 +27,7 @@ from urllib.request import Request, urlopen
 
 from . import lifecycle
 from .io_errors import storage_message
+from .version import VERSION
 
 ATTEMPTS = 3
 SOCKET_TIMEOUT = 25
@@ -35,7 +36,7 @@ MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
-_HEADERS = {"User-Agent": "BlockHarbor/2.6.8", "Accept-Encoding": "identity"}
+_HEADERS = {"User-Agent": f"BlockHarbor/{VERSION}", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 _POOLED_MOJANG = {"resources.download.minecraft.net", "piston-data.mojang.com", "launcher.mojang.com"}
 _NEO_ORIGIN = "https://maven.neoforged.net/releases/"

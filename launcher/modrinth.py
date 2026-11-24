@@ -22,6 +22,7 @@ from . import catalog_filters, compatibility, lifecycle, trusted_catalog, stagin
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
 from .store import KINDS, MAX_ADDON, PackLoaderMismatch, clean_filename, verify_pack
+from .version import VERSION
 
 _API = "https://api.modrinth.com/v2"
 _TYPES = {"mods": "mod", "shaderpacks": "shader", "resourcepacks": "resourcepack"}
@@ -30,7 +31,7 @@ _ICON_URL = re.compile(
     r"https://cdn\.modrinth\.com/data/([A-Za-z0-9]{1,32})/"
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?i:png|jpe?g|webp|gif|bmp|svgz?|rgb|avif|ico)"
 )
-_HEADERS = {"User-Agent": "BlockHarbor/2.6.0 (Minecraft Java desktop launcher)"}
+_HEADERS = {"User-Agent": f"BlockHarbor/{VERSION} (Minecraft Java desktop launcher)"}
 
 
 class CatalogError(ValueError):

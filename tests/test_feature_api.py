@@ -13,6 +13,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from unittest.mock import Mock, patch
 
 from main import App, Handler, Server
+from launcher.version import VERSION
 
 
 class FeatureApiTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class FeatureApiTests(unittest.TestCase):
                 result = self.call(f"/api/feature?action={action}&id={self.pid}")
                 self.assertIsInstance(result, dict)
         state = self.call("/api/state")
-        self.assertEqual(state["appVersion"], "2.6.8")
+        self.assertEqual(state["appVersion"], VERSION)
         for name in ("experience", "build-care", "pack-hub", "updates"):
             self.assertGreater(len(self.call("/" + name + ".js",auth=False,raw=True)), 100)
 

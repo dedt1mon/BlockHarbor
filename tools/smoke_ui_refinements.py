@@ -402,7 +402,7 @@ def effective_background(locator):
 
 def pagination_position(page, catalog):
     """Compare real control positions against the 2.6.14 spacing on the same DOM."""
-    result = page.evaluate("""kind => {
+    result = page.evaluate("""async kind => {
       const dialog = document.querySelector('#dialog');
       const footer = dialog.querySelector(kind === 'addons' ? '.catalog-pager' : '.pack-pagination');
       const row = kind === 'addons' ? footer : footer.querySelector('.pack-page-host .pack-pager');
@@ -410,25 +410,54 @@ def pagination_position(page, catalog):
       const read = () => {
         const d = dialog.getBoundingClientRect(), f = footer.getBoundingClientRect(), r = row.getBoundingClientRect();
         const a = buttons[0].getBoundingClientRect(), b = buttons.at(-1).getBoundingClientRect(), s = getComputedStyle(row);
+        const ds = getComputedStyle(dialog), fs = getComputedStyle(footer);
         const contentCenter = (r.top + parseFloat(s.paddingTop) + r.bottom - parseFloat(s.paddingBottom)) / 2;
         return {centerY: (a.top + a.bottom) / 2, dialogBottom: d.bottom, footerTop: f.top,
           bottomGap: d.bottom - Math.max(a.bottom, b.bottom), topGap: Math.min(a.top, b.top) - f.top,
+          dialogPaddingBottom: parseFloat(ds.paddingBottom), footerPaddingTop: parseFloat(fs.paddingTop),
+          footerPaddingBottom: parseFloat(fs.paddingBottom), footerMinHeight: parseFloat(fs.minHeight) || 0,
           horizontalOffset: Math.abs((a.left + b.right) / 2 - (r.left + r.right) / 2),
           verticalOffset: Math.abs((a.top + a.bottom) / 2 - contentCenter),
           reachable: buttons.every(el => {const p=el.getBoundingClientRect();
             return document.elementFromPoint(p.x+p.width/2, p.y+p.height/2)?.closest('button') === el;})};
       };
-      const current = read(), rows = [...footer.querySelectorAll('.pack-pager')];
-      const elements = [dialog, footer, ...rows], styles = elements.map(el => el.getAttribute('style'));
+      const current = read();
+      const sheet = [...document.styleSheets].find(item => item.href?.endsWith('/catalog-ux.css'));
+      if (!sheet) throw new Error('The production catalog stylesheet is not loaded');
+      const attribute = 'data-pagination-baseline', oldAttribute = dialog.getAttribute(attribute), inserted = [];
+      const scope = '#dialog[' + attribute + '="' + kind + '"]';
+      const addon = kind === 'addons';
+      const oldBottom = addon && matchMedia('(max-width: 480px), (max-height: 560px)').matches ? 16 : 24;
+      const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       try {
-        dialog.style.paddingBottom = kind === 'addons' && matchMedia('(max-width: 480px), (max-height: 560px)').matches ? '16px' : '24px';
-        footer.style.padding = kind === 'addons' ? '12px 0' : '10px 0 0';
-        footer.style.minHeight = kind === 'addons' ? '60px' : '0px';
-        for (const item of rows) item.style.minHeight = '0px';
+        // Use the loaded same-origin stylesheet, not transient inline styles.
+        // Measure after layout frames and explicitly verify that the baseline
+        // took effect before treating any coordinate as a 2.6.14 comparison.
+        const rules = [
+          scope + ' { padding-bottom: ' + oldBottom + 'px !important; transition: none !important; animation: none !important; }',
+          scope + (addon ? ' .catalog-pager' : ' .pack-pagination') + ' { padding: ' + (addon ? '12px 0' : '10px 0 0') + ' !important; min-height: ' + (addon ? '60px' : '0px') + ' !important; transition: none !important; animation: none !important; }',
+          scope + ' .pack-pager { min-height: 0 !important; transition: none !important; animation: none !important; }',
+        ];
+        dialog.setAttribute(attribute, kind);
+        for (const rule of rules) {
+          const index = sheet.insertRule(rule, sheet.cssRules.length);
+          inserted.push(sheet.cssRules[index]);
+        }
+        await frames();
         const previous = read();
+        if (previous.dialogPaddingBottom !== oldBottom || previous.footerPaddingTop !== (addon ? 12 : 10)
+            || previous.footerPaddingBottom !== (addon ? 12 : 0)) {
+          throw new Error('The 2.6.14 pagination baseline was not applied: ' + JSON.stringify(previous));
+        }
         return {current, previous, movedDown: current.centerY - previous.centerY};
       } finally {
-        elements.forEach((el, i) => styles[i] === null ? el.removeAttribute('style') : el.setAttribute('style', styles[i]));
+        for (const rule of inserted.reverse()) {
+          const index = [...sheet.cssRules].indexOf(rule);
+          if (index >= 0) sheet.deleteRule(index);
+        }
+        if (oldAttribute === null) dialog.removeAttribute(attribute);
+        else dialog.setAttribute(attribute, oldAttribute);
+        await frames();
       }
     }""", catalog)
     current, previous = result["current"], result["previous"]

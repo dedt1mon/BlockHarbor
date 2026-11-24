@@ -49,7 +49,7 @@ jobs:
           node --test community-registry/worker.test.mjs community-registry/skin-registry.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py
-      - name: Check changed UX and notification history
+      - name: Check download progress, pagination and notification history
         run: python -u tools/smoke_ui_refinements.py --output artifacts/ui-refinements
       - name: Save focused UI preview
         if: always()

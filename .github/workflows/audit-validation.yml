@@ -3,6 +3,7 @@ name: Validate stabilization branch (no release)
 on:
   push:
     branches: ['audit/**']
+    paths-ignore: ['docs/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -71,6 +72,8 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
+    env:
+      BH_AUDIT_OUTPUT: ${{ runner.temp }}\blockharbor-audit
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,7 +96,7 @@ jobs:
       - name: Build portable application without publishing
         if: ${{ !cancelled() }}
         id: portable
-        run: python tools/build_windows.py --output artifacts/portable
+        run: python tools/build_windows.py --output "$env:BH_AUDIT_OUTPUT\portable"
       - name: Install Unicode x64 NSIS
         if: ${{ !cancelled() }}
         id: msys2
@@ -111,9 +114,9 @@ jobs:
           $version = (python -c "from launcher.version import VERSION; print(VERSION)").Trim()
           $compiler = Join-Path $env:MSYS2_LOCATION 'clang64\bin\makensis.exe'
           $nsisRoot = Join-Path $env:MSYS2_LOCATION 'clang64\share\nsis'
-          python tools/build_installer.py --launcher artifacts/portable/BlockHarbor.exe --output artifacts/BlockHarbor-audit-Setup.exe --version $version --makensis $compiler --nsisdir $nsisRoot --go go --project-url 'https://github.com/dedt1mon/BlockHarbor'
+          python tools/build_installer.py --launcher "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe" --output "$env:BH_AUDIT_OUTPUT\BlockHarbor-audit-Setup.exe" --version $version --makensis $compiler --nsisdir $nsisRoot --go go --project-url 'https://github.com/dedt1mon/BlockHarbor'
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-          python tools/smoke_windows_release.py --setup artifacts/BlockHarbor-audit-Setup.exe --portable artifacts/portable/BlockHarbor.exe --version $version
+          python tools/smoke_windows_release.py --setup "$env:BH_AUDIT_OUTPUT\BlockHarbor-audit-Setup.exe" --portable "$env:BH_AUDIT_OUTPUT\portable\BlockHarbor.exe" --version $version
           if ($LASTEXITCODE -ne 0) { throw 'Windows setup and runtime smoke failed' }
       - name: Chromium UI scenarios on Windows
         if: ${{ !cancelled() }}

@@ -153,6 +153,17 @@ def abort_response(opened):
                     value.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
+                if isinstance(value, socket.socket):
+                    # HTTPResponse owns a makefile() reference. socket.close()
+                    # postpones its native close while that reference is alive;
+                    # on Windows shutdown alone left recv_into blocked until
+                    # the read timeout. CPython's owned-object close invalidates
+                    # sock_fd before closing it, so the later makefile close is
+                    # harmless even if the OS has reused the old handle number.
+                    try:
+                        value._real_close()
+                    except OSError:
+                        pass
                 return
         except (AttributeError, ValueError):
             continue

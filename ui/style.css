@@ -921,6 +921,7 @@ dialog {
   max-width: calc(100vw - 24px);
   max-height: min(90vh, calc(100dvh - 24px));
   overflow: auto;
+  overflow-wrap: anywhere;
 }
 #dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
 #dialog > .dialog-top { flex: none; }
@@ -979,6 +980,18 @@ dialog p {
   font-weight: 550;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+/* A modal owns its status message. Reserve space for it so a persistent job
+   notice cannot cover the dialog's actions in a short or scaled window. */
+dialog[open] > #notice {
+  position: static;
+  flex: none;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  max-height: min(25dvh, 120px);
+  margin-top: var(--space-3);
+  box-shadow: none;
 }
 #notice i {
   width: 24px;
@@ -1483,7 +1496,7 @@ dialog:has(.catalog) #dialogBody {
 }
 .catalog .catalog-context {
   flex: none;
-  margin: -9px 0 18px;
+  margin: 0 0 18px;
   color: var(--muted);
   overflow-wrap: anywhere;
   white-space: nowrap;

@@ -15,8 +15,8 @@ function deferred() {
 }
 const response = data => ({ok: true, json: async () => data});
 
-function appHarness() {
-  const polls = [], started = [], observed = [], unread = [];
+function appHarness({realRefresh = false} = {}) {
+  const polls = [], states = [], started = [], observed = [], unread = [], notices = [];
   const dummy = {addEventListener() {}, classList: {toggle() {}}, querySelector() { return dummy; }};
   const context = {
     document: {hidden: false, querySelector: () => dummy, querySelectorAll: () => [], addEventListener() {}},
@@ -26,25 +26,32 @@ function appHarness() {
     setTimeout: () => 1, clearTimeout() {}, URLSearchParams, AbortController,
     fetch(url, options) {
       assert.equal(options.headers.Authorization, "Bearer test-token");
-      if (url === "/api/state") return new Promise(() => {}); // Startup is independent of the controlled job scenario.
+      if (url === "/api/state") {
+        // The first request belongs to startup and remains independent of the
+        // explicitly controlled state refreshes in the regression scenarios.
+        const pending = deferred(); states.push(pending); return pending.promise;
+      }
       if (url === "/api/action") return Promise.resolve(response({job: "new-job"}));
       assert.equal(url, "/api/job");
       const pending = deferred(); polls.push(pending); return pending.promise;
     },
     refreshed: 0,
+    rendered: 0,
+    recordNotice: message => notices.push(message),
   };
   vm.createContext(context);
   vm.runInContext(source("app.js"), context, {filename: "ui/app.js"});
   vm.runInContext(`
     state = {profiles: [], job: {id: 'initial', busy: false}};
-    notice = () => {};
+    notice = message => recordNotice(message);
     backgroundNotice = () => {};
     updatePlayButtons = () => {};
     showGameExit = () => {};
     showStagedReview = () => {};
-    refresh = async () => { refreshed++; };
+    render = () => { rendered++; };
+    ${realRefresh ? "" : "refresh = async () => { refreshed++; };"}
   `, context);
-  return {context, polls, started, observed, unread, run: code => vm.runInContext(code, context)};
+  return {context, polls, states, started, observed, unread, notices, run: code => vm.runInContext(code, context)};
 }
 
 for (const busy of [false, true]) {
@@ -70,6 +77,44 @@ for (const busy of [false, true]) {
     assert.deepEqual(h.unread, [1]);
   });
 }
+
+test("a completion paused in its state refresh cannot publish over a newly accepted job", async () => {
+  const h = appHarness({realRefresh: true});
+  h.run("lastJob = 'old-job'");
+  const oldPoll = h.run("tick(true)");
+  h.polls[0].resolve(response({id: "old-job", busy: false, ok: true, message: "Old result", notificationUnread: 0}));
+  await flush();
+  assert.equal(h.states.length, 2, "Completion did not enter the delayed state refresh");
+  await h.run("runJob('installModrinth', {id:'profile',items:[{project:'new-project'}]})");
+  h.states[1].resolve(response({profiles: [], job: {id: "old-job", busy: false}, nickname: "Stale profile", notificationUnread: 0}));
+  await oldPoll;
+  assert.equal(h.run("lastJob"), "new-job");
+  assert.equal(h.run("state.nickname"), undefined, "Stale full state replaced the current profile");
+  assert.equal(h.context.rendered, 0, "Stale state refresh rerendered the new operation");
+  assert.deepEqual(h.observed, [], "Old completion reached observers after its delayed refresh");
+  assert.deepEqual(h.unread, []);
+  const currentPoll = h.run("tick(true)");
+  h.polls[1].resolve(response({id: "new-job", busy: false, ok: true, message: "Installed", notificationUnread: 1}));
+  await flush();
+  h.states[2].resolve(response({profiles: [], job: {id: "new-job", busy: false}, nickname: "Current profile", notificationUnread: 1}));
+  await currentPoll;
+  assert.equal(h.run("state.nickname"), "Current profile");
+  assert.equal(h.context.rendered, 1);
+  assert.deepEqual(h.observed, ["new-job"]);
+  assert.deepEqual(h.unread, [1]);
+});
+
+test("an obsolete poll error cannot replace the new job's notice", async () => {
+  const h = appHarness();
+  const oldPoll = h.run("tick(true)");
+  await h.run("runJob('installModrinth', {id:'profile',items:[{project:'new-project'}]})");
+  const currentNotices = [...h.notices];
+  h.polls[0].reject(new Error("Old request failed"));
+  await oldPoll;
+  assert.deepEqual(h.notices, currentNotices);
+  assert.equal(h.run("pollError"), "");
+  assert.equal(h.run("lastJob"), "new-job");
+});
 
 test("batch component waits for the id returned by its own start request", () => {
   const toggle = {hidden: true, title: "", setAttribute() {}, classList: {toggle(_name, value) { toggle.active = value; }}};

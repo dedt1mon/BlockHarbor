@@ -257,7 +257,10 @@ const act = (action, data = {}) =>
     body: JSON.stringify({ action, ...data }),
   });
 async function refresh() {
-  state = await api("/api/state");
+  const generation = acceptedJobGeneration;
+  const current = await api("/api/state");
+  if (generation !== acceptedJobGeneration) return;
+  state = current;
   render();
 }
 function navigate(v) {
@@ -1203,8 +1206,8 @@ async function tick(wake = false) {
   if (activePoll) return;
   clearTimeout(pollTimer);
   activePoll = true;
+  const generation = acceptedJobGeneration;
   try {
-    const generation = acceptedJobGeneration;
     const j = await api("/api/job");
     // A job accepted while this request was in flight owns the next snapshot.
     // An older response must not replace its state, result or per-item progress.
@@ -1248,6 +1251,7 @@ async function tick(wake = false) {
       if (j.id === lastPlayJob && j.ok && j.gameRunning)
         refreshAfterPlay = true;
       else await refresh();
+      if (generation !== acceptedJobGeneration) return;
       if (pendingBuild && j.id === pendingBuild.id) {
         const { form, destination } = pendingBuild;
         pendingBuild = null;
@@ -1257,12 +1261,14 @@ async function tick(wake = false) {
     }
     if (refreshAfterPlay && !document.hidden && (!j.gameRunning || wake)) {
       await refresh();
+      if (generation !== acceptedJobGeneration) return;
       refreshAfterPlay = false;
     }
     showGameExit(j);
     showStagedReview(j);
     observeProgress(j);
   } catch (e) {
+    if (generation !== acceptedJobGeneration) return;
     if (!window.UpdatesUI?.handoffPending() && pollError !== e.message) notice(e.message, true);
     pollError = e.message;
   } finally {

@@ -14,6 +14,7 @@ import math
 import mimetypes
 from pathlib import Path
 import shutil
+import sys
 import traceback
 from urllib.parse import parse_qs, urlsplit
 
@@ -183,6 +184,12 @@ def geometry(page, dialog=False):
         if (d.scrollWidth > d.clientWidth + 1) errors.push('dialog horizontal overflow');
         const body = document.querySelector('#dialogBody');
         if (body.scrollWidth > body.clientWidth + 1) errors.push('dialog content horizontal overflow ' + body.scrollWidth + '/' + body.clientWidth);
+        const notice = d.querySelector(':scope > #notice:not([hidden])');
+        if (notice) {
+          const n = notice.getBoundingClientRect(), b = body.getBoundingClientRect();
+          if (n.top < b.bottom - 1) errors.push('dialog notice overlaps its content');
+          if (n.bottom > r.bottom + 1 || n.right > r.right + 1) errors.push('dialog notice outside dialog');
+        }
         const close = document.querySelector('#dialogClose').getBoundingClientRect();
         if (close.top < r.top || close.bottom > r.bottom || close.right > r.right) errors.push('close control inaccessible');
       }
@@ -216,7 +223,12 @@ def production_views(page, api, output, label):
     page.wait_for_function("typeof state !== 'undefined' && state && window.ExperienceUI && window.BatchUI")
     settle(page)
     for destination in ("home", "builds", "friends", "profile", "settings", "gallery", "addons"):
-        page.evaluate("destination => navigate(destination)", destination)
+        if destination == "addons":
+            page.evaluate("navigate('addons')")
+        else:
+            # On a short viewport the lower sidebar entry requires scrolling.
+            # A real click checks its reachability instead of bypassing the UI.
+            page.locator(f'aside [data-view="{destination}"]').click()
         settle(page)
         check_geometry(destination)
         if detailed_capture:
@@ -253,6 +265,7 @@ def production_views(page, api, output, label):
     page.wait_for_selector(".catalog-choice")
     settle(page)
     check_geometry("catalog", True)
+    assert page.locator(".catalog-context").evaluate("el => el.getBoundingClientRect().top >= document.querySelector('#dialogBody').getBoundingClientRect().top - 1"), "Catalog build context is clipped by the dialog body"
     assert page.locator(".catalog-choice").count() == 12, "Duplicate catalog cards"
     assert "Проверенных: 12" in page.locator(".catalog-pager").inner_text()
     assert page.locator(".catalog-results").evaluate("el => el.clientHeight >= 24"), "Catalog controls collapsed the results viewport"
@@ -369,6 +382,8 @@ def interaction_flows(page, api):
     settle(page)
     retry = [item for item in api.actions if item["action"] == "installModrinth"][-1]
     assert len(retry["items"]) == 1 and retry["items"][0]["project"] == "mod-1", "Retry included successful projects"
+    assert page.locator("#dialog > #notice.busy").is_visible(), "Expected a real ongoing job notice beside the cancel action"
+    geometry(page, True)
     page.locator("[data-batch-cancel]").click()
     settle(page)
     assert page.locator(".batch-item").first.get_attribute("data-status") == "cancelled"
@@ -410,6 +425,12 @@ def interaction_flows(page, api):
 
 
 def main():
+    # Playwright diagnostics include the Russian UI text. Windows redirected
+    # stdout defaults to a legacy code page; reporting a failure must not abort
+    # the remaining independent cases or obscure the original browser error.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/blockharbor-ui-audit"))
     parser.add_argument("--browser", default=next((shutil.which(name) for name in ("chromium", "google-chrome", "chromium-browser") if shutil.which(name)), None))
@@ -417,9 +438,10 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     from playwright.sync_api import sync_playwright
     css = "\n".join((UI / name).read_text(encoding="utf-8") for name in ("style.css", "experience.css", "build-care.css", "updates.css", "pack-hub.css"))
-    report = {"coverage": "Production browser UI with deterministic API fixtures; DPI emulated, native Windows and Minecraft launches are outside this test", "cases": [], "failures": [], "checks": 0}
+    report = {"coverage": "Production browser UI with deterministic API fixtures; DPI emulated, native Windows DPI changes and Minecraft launches are outside this test", "platform": sys.platform, "cases": [], "failures": [], "checks": 0}
     with sync_playwright() as driver:
         browser = driver.chromium.launch(executable_path=args.browser, headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        report["browser"] = browser.version
         try:
             for width, height in RESOLUTIONS:
                 for scale in SCALES:
@@ -431,11 +453,12 @@ def main():
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     api = FixtureAPI()
                     case_failed = False
+                    geometry_failures = []
 
                     def record_failure(phase, error):
                         nonlocal case_failed
                         case_failed = True
-                        report["failures"].append({"case": label, "phase": phase, "error": str(error), "traceback": traceback.format_exc(), "api": list(api.errors), "javascript": list(errors)})
+                        report["failures"].append({"case": label, "phase": phase, "error": str(error), "traceback": traceback.format_exc(), "geometry": list(geometry_failures), "api": list(api.errors), "javascript": list(errors)})
                         page.screenshot(path=str(args.output / (label + "-" + phase + "-FAIL.png")))
                         print(f"FAIL: {label} ({phase}): {error}", flush=True)
 

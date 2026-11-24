@@ -35,7 +35,18 @@ def main():
     suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
     result = unittest.TextTestRunner(verbosity=2, resultclass=TimedResult).run(suite)
     faulthandler.cancel_dump_traceback_later()
-    report = {"tests": result.testsRun, "passed": result.testsRun - len(result.failures) - len(result.errors) - len(result.skipped) - len(result.expectedFailures) - len(result.unexpectedSuccesses),
+    # unittest records each failed subTest and can additionally report a cleanup
+    # error for its parent. Count passing test cases by distinct parent identity,
+    # rather than subtracting those records several times from testsRun.
+    def case_id(test):
+        return getattr(test, "test_case", test).id()
+
+    failed_cases = {case_id(test) for test, _detail in result.failures + result.errors}
+    nonpassing = failed_cases | {case_id(test) for test, _reason in result.skipped + result.expectedFailures}
+    nonpassing.update(case_id(test) for test in result.unexpectedSuccesses)
+    report = {"tests": result.testsRun, "passed": result.testsRun - len(nonpassing),
+              "failedCases": len(failed_cases),
+              "counting": "tests/passed/failedCases count test cases; failed/errors count unittest records, including subtests and cleanup",
               "failed": len(result.failures), "errors": len(result.errors), "skipped": len(result.skipped),
               "expectedFailures": len(result.expectedFailures), "unexpectedSuccesses": len(result.unexpectedSuccesses),
               "failures": [{"test": test.id(), "traceback": detail} for test, detail in result.failures + result.errors],

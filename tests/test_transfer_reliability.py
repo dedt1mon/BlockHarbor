@@ -15,6 +15,7 @@ import traceback
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -212,6 +213,27 @@ class TransferReliabilityTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             server_thread.join(timeout=3)
+
+    def test_aborted_makefile_socket_invalidates_handle_before_late_close(self):
+        receiver, sender = socket.socketpair()
+        self.addCleanup(receiver.close)
+        self.addCleanup(sender.close)
+        stream = receiver.makefile("rb")
+        self.addCleanup(stream.close)
+        receiver.close()  # HTTPConnection also closes its socket wrapper early.
+        self.assertGreaterEqual(receiver.fileno(), 0)
+        response = SimpleNamespace(fp=SimpleNamespace(raw=SimpleNamespace(_sock=receiver)))
+        lifecycle.abort_response(response)
+        self.assertEqual(receiver.fileno(), -1)
+        other, peer = socket.socketpair()
+        try:
+            stream.close()  # Must not close another socket reusing the old fd.
+            peer.sendall(b"usable")
+            other.settimeout(1)
+            self.assertEqual(other.recv(6), b"usable")
+        finally:
+            other.close()
+            peer.close()
 
     def test_minecraft_storage_error_preserves_specific_reason(self):
         download = preparation.Download(preparation.Progress(lambda _: None))

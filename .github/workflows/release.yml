@@ -45,6 +45,8 @@ jobs:
         run: |
           node tests/window-lifecycle.cjs
           node --test community-registry/worker.test.mjs
+      - name: Verify shared UI geometry in Chromium
+        run: python tools/smoke_ui_layout.py
 
   release:
     needs: tests

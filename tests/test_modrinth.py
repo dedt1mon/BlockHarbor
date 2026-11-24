@@ -417,6 +417,91 @@ class ModrinthTests(unittest.TestCase):
         self.assertEqual(self.request.call_count, 3)
         self.assertEqual({p.name for p in self.mods.iterdir()}, {"root.jar","dep.jar","next.jar","renamed-leaf.jar"})
 
+    def artifact(self, release, filename, content, *, primary=False, **extra):
+        url = "https://cdn.modrinth.com/data/" + release["project_id"] + "/versions/" + release["id"] + "/" + filename
+        self.data[url] = content
+        file = {
+            "filename": filename, "url": url, "size": len(content),
+            "hashes": {"sha512": hashlib.sha512(content).hexdigest()},
+            "primary": primary, **extra,
+        }
+        release["files"].append(file)
+        return file
+
+    @staticmethod
+    def forge_jar(mod="wrong"):
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            z.writestr("META-INF/mods.toml", '[[mods]]\nmodId="' + mod + '"\nversion="1"\n')
+        return out.getvalue()
+
+    def test_multi_loader_release_prefers_matching_runtime_artifact(self):
+        self.root["loaders"] = ["fabric", "forge"]
+        self.root["files"] = []
+        wrong = self.artifact(self.root, "root-forge.jar", self.forge_jar(), primary=True)
+        good = self.artifact(self.root, "root-fabric.jar", jar("root", "root1"), file_type="unknown")
+        sources = self.artifact(self.root, "root-fabric-sources.jar", jar("root", "sources"))
+        self.add("another", "another1", "another.jar")
+        items = [{"kind": "mods", "project": p} for p in ("root", "another")]
+        plan = modrinth.check_selection(self.store, self.pid, items)
+        self.assertEqual(plan["selected"][0]["filename"], "root-fabric.jar")
+        self.assertIn("3", modrinth.install_selection(self.store, self.pid, items, lambda _: None))
+        self.assertEqual({p.name for p in self.mods.iterdir()}, {"root-fabric.jar", "dep.jar", "another.jar"})
+        urls = [c.args[0] for c in self.request.call_args_list]
+        self.assertIn(good["url"], urls)
+        self.assertNotIn(wrong["url"], urls)
+        self.assertNotIn(sources["url"], urls)
+
+    def test_basket_retries_other_verified_artifact_and_reuses_it(self):
+        self.root["files"] = []
+        bad = self.artifact(self.root, "root-main.jar", self.forge_jar(), primary=True)
+        good = self.artifact(self.root, "root-universal.jar", jar("root", "root1"))
+        self.add("another", "another1", "another.jar")
+        items = [{"kind": "mods", "project": p} for p in ("root", "another")]
+        self.assertIn("3", modrinth.install_selection(self.store, self.pid, items, lambda _: None))
+        self.assertEqual({p.name for p in self.mods.iterdir()}, {"root-universal.jar", "dep.jar", "another.jar"})
+        urls = [c.args[0] for c in self.request.call_args_list]
+        self.assertIn(bad["url"], urls)
+        self.assertIn(good["url"], urls)
+        self.request.reset_mock()
+        self.assertIn("уже", modrinth.install_selection(self.store, self.pid, items, lambda _: None))
+        self.request.assert_not_called()
+        self.assertTrue(modrinth.versions(self.store, self.pid, "mods", "root")["versions"][0]["installed"])
+
+    def test_checksum_failure_never_falls_back_to_alternative(self):
+        self.root["files"] = []
+        bad = self.artifact(self.root, "root-main.jar", self.forge_jar(), primary=True)
+        bad["hashes"]["sha512"] = "0" * 128
+        good = self.artifact(self.root, "root-universal.jar", jar("root", "root1"))
+        with self.assertRaisesRegex(ValueError, "Контрольная"):
+            self.install()
+        self.assertNotIn(good["url"], [c.args[0] for c in self.request.call_args_list])
+        self.assertEqual(list(self.mods.iterdir()), [])
+
+    def test_incompatible_basket_names_offending_file_and_never_partially_installs(self):
+        self.root["files"] = []
+        self.artifact(self.root, "wrong.jar", self.forge_jar(), primary=True)
+        self.add("another", "another1", "another.jar")
+        items = [{"kind": "mods", "project": p} for p in ("another", "root")]
+        with self.assertRaisesRegex(modrinth.PlanConflict, r"wrong\.jar:.*fabric.*Forge"):
+            modrinth.install_selection(self.store, self.pid, items, lambda _: None)
+        self.assertEqual(list(self.mods.iterdir()), [])
+
+    def test_alternative_survives_descriptor_dependency_replan_and_review(self):
+        self.root["files"] = []
+        self.artifact(self.root, "root-main.jar", self.forge_jar(), primary=True)
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("fabric.mod.json", json.dumps(
+                {"id": "root", "version": "root1", "depends": {"helper": ">=2"}}))
+        self.artifact(self.root, "root-alt.jar", payload.getvalue())
+        self.add("helper", "2", "helper.jar")
+        with self.assertRaises(modrinth.NeedsReview) as review:
+            self.install()
+        self.assertEqual(list(self.mods.iterdir()), [])
+        self.assertIn("3", self.install(review.exception.review["token"]))
+        self.assertEqual({p.name for p in self.mods.iterdir()}, {"root-alt.jar", "dep.jar", "helper.jar"})
+
     def test_basket_conflicting_pins_and_partial_download_failure_publish_nothing(self):
         other = self.add("other", "other1", "other.jar", deps=[("required","dep","dep2")])
         self.add("dep","dep2","dep2.jar")

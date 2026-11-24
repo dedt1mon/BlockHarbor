@@ -10,7 +10,7 @@ import tempfile
 import time
 from collections import deque
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from http.client import HTTPException
 from pathlib import Path
@@ -21,7 +21,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from . import catalog_filters, compatibility, lifecycle, trusted_catalog
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
-from .store import KINDS, MAX_ADDON, clean_filename, verify_pack
+from .store import KINDS, MAX_ADDON, PackLoaderMismatch, clean_filename, verify_pack
 
 _API = "https://api.modrinth.com/v2"
 _TYPES = {"mods": "mod", "shaderpacks": "shader", "resourcepacks": "resourcepack"}
@@ -245,6 +245,45 @@ class Package:
     title: str = ""
     description: str = ""
     renderers: tuple = ()
+    alternatives: tuple = ()
+
+
+# Exclude development/source/installer artifacts even if a publisher did not
+# label their file_type in the catalog. An ordinary API/library mod is allowed.
+_NON_RUNTIME_JAR = re.compile(r"[-_.](?:sources?|javadoc|dev|deobf|installer)\.jar$", re.I)
+_LOADER_NAMES = {"fabric", "quilt", "forge", "neoforge"}
+_MAX_ARTIFACTS = 8
+
+
+def _artifact(file, project, version):
+    name = clean_filename(file["filename"])
+    sha = str(file.get("hashes", {}).get("sha512", "")).lower()
+    if not trusted_catalog.is_publisher_file(project, version, file):
+        _allowed(file["url"], _CDN_HOSTS)
+    size = int(file["size"])
+    if not re.fullmatch("[a-f0-9]{128}", sha) or not 0 < size <= MAX_ADDON:
+        return None
+    return name, size, sha, file["url"]
+
+
+def _artifact_rank(file, loader):
+    # File names are a preference only; actual JAR metadata remains mandatory.
+    tokens = set(re.split(r"[^a-z0-9]+", file["filename"].casefold()))
+    named = tokens & _LOADER_NAMES
+    if loader in named:
+        match = 0
+    elif not named or (loader == "quilt" and named == {"fabric"}):
+        match = 1
+    else:
+        match = 2
+    return match, not bool(file.get("primary"))
+
+
+def _choices(release):
+    yield release
+    for filename, size, sha512, url in release.alternatives:
+        yield replace(release, filename=filename, size=size, sha512=sha512,
+                      url=url, alternatives=())
 
 
 def _package(v, profile, kind, project, icon="", metadata=None):
@@ -258,19 +297,27 @@ def _package(v, profile, kind, project, icon="", metadata=None):
     ):
         return None
     files = [
-        f
-        for f in v["files"]
-        if f["filename"].lower().endswith(KINDS[kind]) and not f.get("file_type")
+        f for f in v["files"]
+        if f["filename"].lower().endswith(KINDS[kind])
+        and f.get("file_type") in (None, "", "unknown")
+        and (kind != "mods" or not _NON_RUNTIME_JAR.search(f["filename"]))
     ]
     if not files:
         return None
-    f = next((f for f in files if f.get("primary")), files[0])
-    name = clean_filename(f["filename"])
-    sha = str(f.get("hashes", {}).get("sha512", "")).lower()
-    if not trusted_catalog.is_publisher_file(project, v.get("id"), f):
-        _allowed(f["url"], _CDN_HOSTS)
-    if not re.fullmatch("[a-f0-9]{128}", sha) or not 0 < int(f["size"]) <= MAX_ADDON:
+    if kind == "mods" and len(files) > 1:
+        files.sort(key=lambda f: _artifact_rank(f, profile["loader"]))
+    else:
+        files.sort(key=lambda f: not bool(f.get("primary")))
+    # Validate the preferred artifact and every bounded alternative before
+    # constructing a download plan. Never infer a URL from the file name.
+    artifacts = []
+    for f in files[:_MAX_ARTIFACTS if kind == "mods" else 1]:
+        artifact = _artifact(f, project, v.get("id"))
+        if artifact and artifact not in artifacts:
+            artifacts.append(artifact)
+    if not artifacts:
         return None
+    name, size, sha, url = artifacts[0]
     renderers = {"iris": "Iris", "optifine": "OptiFine", "canvas": "Canvas", "vanilla": "Vanilla"}
     return Package(
         _id(v["id"]),
@@ -281,14 +328,15 @@ def _package(v, profile, kind, project, icon="", metadata=None):
         v["version_type"],
         v["date_published"],
         name,
-        int(f["size"]),
+        size,
         sha,
-        f["url"],
+        url,
         tuple(v.get("dependencies", [])),
         _icon_url(icon, project),
         str((metadata or {}).get("title", ""))[:180],
         str((metadata or {}).get("description", ""))[:500],
         tuple(renderers[r] for r in v["loaders"] if r in renderers) if kind == "shaderpacks" else (),
+        tuple(artifacts[1:]),
     )
 
 
@@ -371,10 +419,26 @@ def _installed(files, release):
     return None
 
 
+def _prefer_installed(files, release, loader):
+    """Keep a verified alternative already installed, including renamed files."""
+    for candidate in _choices(release):
+        path = _installed(files, candidate)
+        if not path:
+            continue
+        if candidate.kind == "mods":
+            try:
+                verify_pack(path, candidate.kind, loader)
+            except PackLoaderMismatch:
+                continue
+        return candidate
+    return release
+
+
 def versions(store, pid, kind, project, source="all"):
     profile = store.profile(pid)
     releases = _releases(profile, kind, _id(project), source=source)
     existing = _files(store.content_folder(pid, kind), kind)
+    releases = [_prefer_installed(existing, r, profile["loader"]) for r in releases]
     return {
         "versions": [
             {
@@ -433,6 +497,7 @@ def _plan_items(store, profile, items):
         if not category:
             category = _project_kind(project)
         releases = _releases(profile, category, project) if source == "all" else _releases(profile, category, project, source=source)
+        releases = [_prefer_installed(by_kind[category], r, profile["loader"]) for r in releases]
         present = [(r, file) for r in releases if (file := _installed(by_kind[category], r))]
         return category, releases, present
 
@@ -462,6 +527,8 @@ def _plan_items(store, profile, items):
                 release = next((r for r in compatible if trusted_catalog.canonical_version(r.version) == pin_id), None)
                 if release is None and source != "github":
                     release = _package(exact_version(pin), profile, category, project)
+                    if release is not None:
+                        release = _prefer_installed(by_kind[category], release, profile["loader"])
             else:
                 stable = next((r for r in compatible if r.channel == "release"), None)
                 release = present[0][0] if present else stable or next(iter(compatible), None)
@@ -864,6 +931,38 @@ def _download(release, target, transfer=None, status=lambda _message: None):
             )
 
 
+def _download_compatible(release, target, loader, transfer=None, status=lambda _message: None):
+    """Try only hash-verified runtime artifacts of the exact same release.
+
+    Retry a different artifact solely on loader mismatch, never on integrity,
+    transport, corruption or dependency failure. The chosen digest and file
+    name then flow through the final review and commit.
+    """
+    rejected = []
+    for candidate in _choices(release):
+        lifecycle.check()
+        status("Скачиваем " + candidate.filename + "…")
+        if transfer is None:
+            _download(candidate, target)
+        else:
+            _download(candidate, target, transfer, status)
+        try:
+            verify_pack(target, candidate.kind, loader)
+        except PackLoaderMismatch as exc:
+            rejected.append(candidate.filename + ": " + str(exc))
+            target.unlink()
+            continue
+        except ValueError as exc:
+            lifecycle.check()
+            raise CatalogError(candidate.filename + ": " + str(exc)) from exc
+        return candidate
+    raise PlanConflict(
+        (rejected[0] if rejected else release.filename)
+        + (" Проверены также: " + ", ".join(row.split(": ", 1)[0] for row in rejected[1:]) + "." if len(rejected) > 1 else "")
+        + " Выбери совместимый выпуск мода для " + loader + ". Установка не внесла изменений в сборку."
+    )
+
+
 def _publish_set(store, pid, releases, staged):
     lifecycle.check()
     # Recheck all destinations after downloading. Manual imports may have completed
@@ -990,23 +1089,37 @@ def install_selection(
         # Check dependencies declared only inside JARs, including roots already present on disk.
         # Each new dependency goes through the same verified provider and loader checks.
         discovered = {}
+        resolved = {}
         for _ in range(32):
+            releases = [resolved.get((r.project, r.version), r) for r in releases]
+            changed = False
+            for i, release in enumerate(releases):
+                if release.version in staged:
+                    continue
+                installed = _installed([p for p in inventory if p.parent.name == release.kind], release)
+                if installed:
+                    try:
+                        verify_pack(installed, release.kind, profile["loader"])
+                    except PackLoaderMismatch as exc:
+                        raise PlanConflict(installed.name + ": " + str(exc) + " Удали несовместимый файл и повтори установку.") from exc
+                    continue
+                tmp = Path(work) / release.version
+                actual = _download_compatible(release, tmp, profile["loader"], transfer, status)
+                changed |= actual.sha512 != release.sha512 or actual.filename != release.filename
+                resolved[(actual.project, actual.version)] = actual
+                releases[i] = actual
+                staged[actual.version] = tmp
+            # Name collisions and warnings must refer to the chosen binaries,
+            # including any replacement of an incompatible primary JAR.
             by_name = {}
             for release in releases:
                 key = (release.kind, release.filename.casefold())
-                if key in by_name and by_name[key] != release.sha512:
+                if key in by_name:
                     raise PlanConflict("Два выпуска используют одно имя файла: " + release.filename)
                 by_name[key] = release.sha512
-                if release.version in staged or _installed([p for p in inventory if p.parent.name == release.kind], release):
-                    continue
-                status("Скачиваем " + release.filename + "…")
-                tmp = Path(work) / release.version
-                if transfer is None:
-                    _download(release, tmp)
-                else:
-                    _download(release, tmp, transfer, status)
-                verify_pack(tmp, release.kind, profile["loader"])
-                staged[release.version] = tmp
+            if changed:
+                catalog = _catalog_report(releases, inventory, roots)
+                _require_no_conflicts(catalog)
             active = {p.name: p for p in inventory if p.parent.name == "mods"}
             additions = {}
             for r in releases:
@@ -1038,6 +1151,7 @@ def install_selection(
             if len(discovered) > 64:
                 raise PlanConflict("Превышен предел обязательных зависимостей. Проверь состав сборки.")
             releases = _plan_items(store, profile, selected + list(discovered.values()))
+            releases = [resolved.get((r.project, r.version), r) for r in releases]
             catalog = _catalog_report(releases, inventory, roots)
             _require_no_conflicts(catalog)
         else:

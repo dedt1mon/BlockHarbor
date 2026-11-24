@@ -25,7 +25,7 @@ from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_syn
 from .content_icons import _small_directory
 from .modfiles import file_hash, file_stamp, read_descriptor
 from .sessions import process_alive, process_identity, read_record
-from .store import KINDS, clean_filename, input_profile, require_idle_files, verify_pack
+from .store import KINDS, clean_filename, input_profile, require_idle_files
 
 BUILD_SECTIONS = (
     "mods", "resourcepacks", "shaderpacks", "config", "defaultconfigs",
@@ -997,18 +997,22 @@ class BuildCare:
                 if current and current[2] != release.sha512:
                     remove[(current[0]["kind"], current[0]["name"])] = current[0]
             staged = {}
-            for release in proposed.values():
-                current = installed.get(release.project)
+            for project, release in list(proposed.items()):
+                current = installed.get(project)
                 if current and current[2] == release.sha512:
                     continue
                 target = directory / release.version
                 status("Проверяем файл обновления: " + release.filename + "…")
-                if self.transfers:
-                    modrinth._download(release, target, self.transfers, status)
-                else:
-                    modrinth._download(release, target)
-                verify_pack(target, release.kind, profile["loader"])
-                staged[release.version] = target
+                actual = modrinth._download_compatible(
+                    release, target, profile["loader"], self.transfers, status)
+                proposed[project] = actual
+                if current and current[2] == actual.sha512:
+                    # The alternate is already installed. Do not remove it or
+                    # re-add it merely under another filename.
+                    target.unlink()
+                    remove.pop((current[0]["kind"], current[0]["name"]), None)
+                    continue
+                staged[actual.version] = target
             remaining = {self._profile_root(pid) / r["kind"] / r["name"]: tuple(r["stamp"]) for r in all_rows if (r["kind"], r["name"]) not in remove}
             catalog = modrinth._catalog_report(list(proposed.values()), remaining) if proposed else compatibility.report()
             additions = {r.filename: staged[r.version] for r in proposed.values() if r.kind == "mods" and r.version in staged}

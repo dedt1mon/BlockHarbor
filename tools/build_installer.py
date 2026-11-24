@@ -104,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--version", default="2.6.6")
+    parser.add_argument("--version", default="2.6.7")
     parser.add_argument("--makensis", default="makensis", help="NSIS 3.13+ compiler")
     parser.add_argument("--go", default="go", help="Go 1.25+ compiler for the safe data cleanup helper")
     parser.add_argument(

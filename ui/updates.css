@@ -75,3 +75,21 @@
 .settings-updates-head h2 { margin: 0 0 8px; font-size: 20px; }
 .settings-updates-head p { margin: 0; line-height: 1.5; }
 .settings-updates-head .btn { flex-shrink: 0; }
+
+.updater-channel label { min-width: min(205px,100%); }
+.updater-channel label > .field { margin-top: 0; }
+.updater-release, .updater-channel, .transfer-panel { min-width: 0; }
+.updater-auto-control { gap: var(--space-4); }
+.updater-auto-control > span { min-width: 0; overflow-wrap: anywhere; }
+.updater-auto-control input:focus-visible { outline-color: var(--focus-ring); outline-offset: 2px; }
+.transfer-title { flex-wrap: wrap; }
+.transfer-title strong { min-width: 0; }
+.transfer-actions .btn { min-height: var(--control-compact); }
+.update-pending, .transfer-stage, .update-problem { border-radius: var(--surface-radius); }
+.settings-updates-head > div { min-width: 0; }
+@media (max-width: 520px) {
+  .transfer-row { flex-wrap: wrap; }
+  .transfer-info { min-width: 0; flex-basis: calc(100% - 54px); }
+  .transfer-actions { margin-left: auto; }
+  .settings-tabs button { min-width: 0; }
+}

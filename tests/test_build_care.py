@@ -383,6 +383,31 @@ class BuildCareTests(unittest.TestCase):
         self.assertTrue((self.folder / "mods" / "example-2.jar").is_file())
         self.assertEqual(1, len(self.care.state(self.pid)["snapshots"]))
 
+    def test_updates_use_verified_alternative_when_primary_has_wrong_loader(self):
+        from dataclasses import replace
+
+        newer, old_hash, old, release = self.updates_fixture()
+        wrong = Path(self.temp.name) / "wrong.jar"
+        with zipfile.ZipFile(wrong, "w") as archive:
+            archive.writestr("META-INF/mods.toml", '[[mods]]\nmodId="wrong"\nversion="1"\n')
+        primary = replace(
+            release, filename="wrong.jar", size=wrong.stat().st_size,
+            sha512=hashlib.sha512(wrong.read_bytes()).hexdigest(),
+            alternatives=((release.filename, release.size, release.sha512, release.url),),
+        )
+
+        def download(candidate, target):
+            target.write_bytes(wrong.read_bytes() if candidate.filename == "wrong.jar" else newer.read_bytes())
+
+        with patch.object(modrinth, "_versions_by_hash", return_value={old_hash: old}), patch.object(modrinth, "_releases", return_value=[primary]), patch.object(modrinth, "_download", side_effect=download), patch.object(modrinth, "_catalog_report", return_value=compatibility.report()), patch.object(modrinth, "_get", return_value={"title": "Example"}):
+            self.care.check_updates(self.pid, "mods")
+        plan = self.care.state(self.pid)["updatePlan"]
+        self.assertFalse(plan["blocked"])
+        self.assertEqual(plan["entries"][0]["filename"], release.filename)
+        self.care.apply_updates(self.pid, plan["token"])
+        self.assertTrue((self.folder / "mods" / release.filename).is_file())
+        self.assertFalse((self.folder / "mods" / "wrong.jar").exists())
+
     def test_updates_reject_stale_plan_after_manual_change(self):
         newer, old_hash, old, release = self.updates_fixture()
         with patch.object(modrinth, "_versions_by_hash", return_value={old_hash: old}), patch.object(modrinth, "_releases", return_value=[release]), patch.object(modrinth, "_download", side_effect=lambda r, p: p.write_bytes(newer.read_bytes())), patch.object(modrinth, "_catalog_report", return_value=compatibility.report()), patch.object(modrinth, "_get", return_value={"title": "Example"}):

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import lifecycle, version_ids
 from .content_icons import IconCache
+from .modfiles import DESCRIPTORS, read_archive_entry
 
 LOADERS = ("fabric", "vanilla", "forge", "neoforge", "quilt")
 KINDS = {"mods": ".jar", "shaderpacks": ".zip", "resourcepacks": ".zip"}
@@ -51,6 +52,25 @@ def input_profile(name, version, loader):
     return name.strip(), version, loader
 
 
+class PackLoaderMismatch(ValueError):
+    """A readable JAR has no recognized marker for the selected loader."""
+
+
+def _manifest_fields(archive):
+    raw = read_archive_entry(archive, "META-INF/MANIFEST.MF", 65536)
+    if raw is None:
+        return {}
+    # Only the main manifest section counts. Named entries must not be able
+    # to advertise a false loader type; continuation lines are folded.
+    main = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n").partition(b"\n\n")[0]
+    result = {}
+    for line in main.replace(b"\n ", b"").split(b"\n"):
+        key, separator, value = line.partition(b":")
+        if separator:
+            result.setdefault(key.lower(), []).append(value.strip())
+    return {key: values[0] for key, values in result.items() if len(values) == 1}
+
+
 def verify_pack(path, kind, loader):
     if kind not in KINDS:
         raise ValueError("Неизвестная категория дополнений.")
@@ -71,17 +91,29 @@ def verify_pack(path, kind, loader):
                     "neoforge": ("META-INF/neoforge.mods.toml", "META-INF/mods.toml"),
                 }
                 supported = any(m in names for m in markers[loader])
-                if (
-                    not supported
-                    and loader == "forge"
-                    and "META-INF/MANIFEST.MF" in names
-                ):
-                    manifest = archive.getinfo("META-INF/MANIFEST.MF")
-                    if manifest.file_size <= 65536:
-                        supported = b"fmlcoreplugin:" in archive.read(manifest).lower()
+                if not supported and loader in ("forge", "neoforge"):
+                    # Modern FML also loads explicitly declared libraries and
+                    # language providers without mods.toml. Do not let a
+                    # manifest override an incompatible loader descriptor.
+                    if not names.intersection(DESCRIPTORS):
+                        fields = _manifest_fields(archive)
+                        library = fields.get(b"fmlmodtype", b"").upper()
+                        supported = library in (b"LIBRARY", b"GAMELIBRARY", b"LANGPROVIDER")
+                        if loader == "forge":
+                            supported = supported or bool(fields.get(b"fmlcoreplugin"))
                 if not supported:
-                    raise ValueError(
-                        "В JAR не найдены метаданные для загрузчика этой сборки."
+                    detected = []
+                    for label, known in (
+                        ("Fabric", ("fabric.mod.json",)),
+                        ("Quilt", ("quilt.mod.json",)),
+                        ("Forge / ранний NeoForge", ("META-INF/mods.toml", "mcmod.info")),
+                        ("NeoForge", ("META-INF/neoforge.mods.toml",)),
+                    ):
+                        if names.intersection(known):
+                            detected.append(label)
+                    detail = " Найдены метаданные: " + ", ".join(detected) + "." if detected else ""
+                    raise PackLoaderMismatch(
+                        "В JAR не найдены метаданные для загрузчика этой сборки (" + loader + ")." + detail
                     )
             elif kind == "resourcepacks" and "pack.mcmeta" not in names:
                 raise ValueError(

@@ -116,6 +116,74 @@ test("an obsolete poll error cannot replace the new job's notice", async () => {
   assert.equal(h.run("lastJob"), "new-job");
 });
 
+test("completion observers retain the newer full-state job and unread count", async () => {
+  const h = appHarness({realRefresh: true});
+  // ExperienceUI.mount observes this count during the actual render path.
+  h.run("lastJob = 'completed-job'; render = () => { rendered++; window.ExperienceUI.observeNotifications(state.notificationUnread); }");
+  const poll = h.run("tick(true)");
+  h.polls[0].resolve(response({id: "completed-job", busy: false, ok: true, message: "Done", notificationUnread: 0}));
+  await flush();
+  h.states[1].resolve(response({profiles: [], job: {id: "current-job", busy: true, message: "Current operation", notificationUnread: 0}, notificationUnread: 1}));
+  await poll;
+  assert.deepEqual(h.unread, [1, 1], "The old completion or embedded counter hid the newer unread event");
+  assert.deepEqual(h.observed, ["current-job"], "Observers reused the pre-refresh completed job");
+  assert.equal(h.run("state.job.notificationUnread"), 1);
+});
+
+test("startup observes the full state's latest counter instead of its earlier embedded job counter", async () => {
+  const h = appHarness({realRefresh: true});
+  h.run("render = () => { rendered++; window.ExperienceUI.observeNotifications(state.notificationUnread); }");
+  h.states[0].resolve(response({profiles: [], job: {id: "initial", busy: false, notificationUnread: 0}, notificationUnread: 1}));
+  await flush();
+  assert.deepEqual(h.unread, [1, 1]);
+  assert.deepEqual(h.observed, ["initial"]);
+});
+
+test("a direct running job poll still advances unread state without a full refresh", async () => {
+  const h = appHarness({realRefresh: true});
+  h.run("state.notificationUnread = 0");
+  const poll = h.run("tick(true)");
+  h.polls[0].resolve(response({id: "running-job", busy: true, message: "Downloading", notificationUnread: 2}));
+  await poll;
+  assert.deepEqual(h.unread, [2]);
+  assert.deepEqual(h.observed, ["running-job"]);
+  assert.equal(h.states.length, 1, "A running poll unexpectedly fetched the full state");
+});
+
+test("a newer running poll supersedes an earlier full-state response for the same job", async () => {
+  const h = appHarness({realRefresh: true});
+  h.run("render = () => { rendered++; window.ExperienceUI.observeNotifications(state.notificationUnread); }");
+  const olderState = h.run("refresh()");
+  const currentPoll = h.run("tick(true)");
+  h.polls[0].resolve(response({id: "same-job", busy: true, message: "Downloading", notificationUnread: 2}));
+  await currentPoll;
+  h.states[1].resolve(response({profiles: [], job: {id: "same-job", busy: true, message: "Checking", notificationUnread: 0}, notificationUnread: 0}));
+  await olderState;
+  assert.equal(h.run("state.job.message"), "Downloading");
+  assert.deepEqual(h.unread, [2]);
+  assert.equal(h.context.rendered, 0);
+});
+
+for (const outcome of ["success", "error"]) {
+  test(`a newer full state supersedes an earlier running poll ${outcome} for the same job`, async () => {
+    const h = appHarness({realRefresh: true});
+    h.run("render = () => { rendered++; window.ExperienceUI.observeNotifications(state.notificationUnread); }");
+    const olderPoll = h.run("tick(true)");
+    const currentState = h.run("refresh()");
+    h.states[1].resolve(response({profiles: [], job: {id: "same-job", busy: true, message: "Downloading", notificationUnread: 2}, notificationUnread: 2}));
+    await currentState;
+    const notices = [...h.notices];
+    if (outcome === "success") h.polls[0].resolve(response({id: "same-job", busy: true, message: "Checking", notificationUnread: 0}));
+    else h.polls[0].reject(new Error("Old poll failed"));
+    await olderPoll;
+    assert.equal(h.run("state.job.message"), "Downloading");
+    assert.deepEqual(h.unread, [2]);
+    assert.deepEqual(h.observed, []);
+    assert.deepEqual(h.notices, notices);
+    assert.equal(h.context.rendered, 1);
+  });
+}
+
 for (const outcome of ["success", "error"]) {
   test(`a navigation ${outcome} captured before a new job preserves that job and the requested destination`, async () => {
     const h = appHarness({realRefresh: true});

@@ -95,8 +95,8 @@ let state,
   kind = "mods",
   lastJob = "",
   acceptedJobGeneration = 0,
-  stateRequestSequence = 0,
-  appliedStateSequence = 0,
+  appRequestSequence = 0,
+  appliedAppSequence = 0,
   lastPlayJob = "",
   shownExit = "",
   activePoll = false,
@@ -259,14 +259,18 @@ const act = (action, data = {}) =>
     body: JSON.stringify({ action, ...data }),
   });
 async function updateAppState(isCurrent = () => true) {
-  const request = ++stateRequestSequence;
+  const request = ++appRequestSequence;
   const generation = acceptedJobGeneration;
-  const mayApply = () => generation === acceptedJobGeneration && request >= appliedStateSequence && isCurrent();
+  const mayApply = () => generation === acceptedJobGeneration && request >= appliedAppSequence && isCurrent();
   try {
     const current = await api("/api/state");
     if (!mayApply()) return false;
-    appliedStateSequence = request;
-    state = current;
+    appliedAppSequence = request;
+    // The full state reads this count after collecting the embedded job. Keep
+    // both views coherent, including an event that arrived during that read.
+    state = current.job && Number.isFinite(current.notificationUnread)
+      ? {...current, job: {...current.job, notificationUnread: current.notificationUnread}}
+      : current;
     return true;
   } catch (error) {
     // An obsolete full-state request must not replace a newer operation's
@@ -1223,11 +1227,15 @@ async function tick(wake = false) {
   clearTimeout(pollTimer);
   activePoll = true;
   const generation = acceptedJobGeneration;
+  const request = ++appRequestSequence;
+  let pollApplied = false;
   try {
     const j = await api("/api/job");
     // A job accepted while this request was in flight owns the next snapshot.
     // An older response must not replace its state, result or per-item progress.
-    if (generation !== acceptedJobGeneration) return;
+    if (generation !== acceptedJobGeneration || request < appliedAppSequence) return;
+    appliedAppSequence = request;
+    pollApplied = true;
     pollError = "";
     if (typeof j.gameRunning === "boolean") state.gameRunning = j.gameRunning;
     if (Array.isArray(j.runningProfiles)) state.runningProfiles = j.runningProfiles;
@@ -1280,11 +1288,14 @@ async function tick(wake = false) {
       if (generation !== acceptedJobGeneration) return;
       refreshAfterPlay = false;
     }
-    showGameExit(j);
-    showStagedReview(j);
-    observeProgress(j);
+    // A full refresh above may have applied a newer snapshot, even without a
+    // locally accepted job. Observers must use the state that was rendered.
+    const current = state.job || j;
+    showGameExit(current);
+    showStagedReview(current);
+    observeProgress(current);
   } catch (e) {
-    if (generation !== acceptedJobGeneration) return;
+    if (generation !== acceptedJobGeneration || (!pollApplied && request < appliedAppSequence)) return;
     if (!window.UpdatesUI?.handoffPending() && pollError !== e.message) notice(e.message, true);
     pollError = e.message;
   } finally {

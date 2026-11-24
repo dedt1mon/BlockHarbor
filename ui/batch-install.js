@@ -84,7 +84,9 @@
         <div class="batch-reviews"></div><p class="batch-request-error" role="alert" hidden></p><div class="dialog-actions batch-actions"><button class="btn" type="button" data-batch-hide>Свернуть</button><button class="btn" type="button" data-batch-retry-failed hidden>${ic("refresh")}Повторить неустановленные</button><button class="btn danger" type="button" data-batch-cancel hidden>Отменить оставшиеся</button></div>`;
     }
     const profile = state?.profiles?.find(item => item.id === snapshot.profileId);
-    host.querySelector(".batch-context").textContent = profile ? `${profile.name} · ${loaders[profile.loader]} · ${profile.version}` : "Выбранная сборка";
+    const context = host.querySelector(".batch-context");
+    context.textContent = profile ? `${profile.name} · ${loaders[profile.loader]} · ${profile.version}` : "Выбранная сборка";
+    context.title = context.textContent;
     const counts = summary(snapshot);
     host.querySelector(".batch-summary").textContent = [
       "Выбрано: " + counts.selected,
@@ -100,7 +102,9 @@
     for (const row of host.querySelectorAll("[data-batch-project]")) {
       const item = snapshot.items.find(value => value.project === row.dataset.batchProject);
       row.dataset.status = item.status;
-      row.querySelector(".batch-item-title").textContent = name(item);
+      const title = row.querySelector(".batch-item-title");
+      title.textContent = name(item);
+      title.title = title.textContent;
       row.querySelector(".batch-item-status").textContent = labels[item.status] || "Подготовка…";
       const error = row.querySelector(".batch-item-error");
       error.textContent = item.error || item.warning || "";

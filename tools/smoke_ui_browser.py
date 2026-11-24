@@ -205,6 +205,32 @@ def controls_fixture(page, css):
     assert page.locator("body").get_attribute("data-layout-result") == "PASS", page.locator("body").get_attribute("data-layout-errors")
 
 
+def readable_batch_row(page):
+    result = page.evaluate("""() => {
+      const list = document.querySelector('.batch-items');
+      const row = list.querySelector('.batch-item');
+      const r = row.getBoundingClientRect(), l = list.getBoundingClientRect();
+      let top = Math.max(0, l.top), bottom = Math.min(innerHeight, l.bottom);
+      for (let parent = list.parentElement; parent; parent = parent.parentElement) {
+        if (/auto|scroll|hidden|clip/.test(getComputedStyle(parent).overflowY)) {
+          const p = parent.getBoundingClientRect();
+          top = Math.max(top, p.top); bottom = Math.min(bottom, p.bottom);
+        }
+      }
+      const actions = document.querySelector('.batch-actions');
+      if (['sticky', 'fixed'].includes(getComputedStyle(actions).position)) {
+        const a = actions.getBoundingClientRect();
+        if (a.top < bottom && a.bottom > top) bottom = Math.min(bottom, a.top);
+      }
+      const status = row.querySelector('.batch-item-status').getBoundingClientRect();
+      return {top, bottom, visibleListHeight: bottom - top, rowTop: r.top, rowBottom: r.bottom,
+        rowHeight: r.height, statusTop: status.top, statusBottom: status.bottom,
+        status: row.querySelector('.batch-item-status').textContent};
+    }""")
+    assert result["rowTop"] >= result["top"] - 1 and result["rowBottom"] <= result["bottom"] + 1, "No complete first batch item is visible: " + json.dumps(result, ensure_ascii=False)
+    assert result["status"] and result["statusBottom"] > result["statusTop"], "Visible batch row has no readable status"
+
+
 def production_views(page, api, output, label):
     detailed_capture = label in {"1366x768-100pct", "1280x720-200pct"}
     geometry_failures = []
@@ -275,6 +301,8 @@ def production_views(page, api, output, label):
     settle(page)
     check_geometry("large-dialog", True)
     assert page.evaluate("document.querySelector('#dialogBody').scrollHeight > document.querySelector('#dialogBody').clientHeight"), "Large dialog must use internal scrolling"
+    if detailed_capture:
+        page.screenshot(path=str(output / (label + "-large-dialog.png")))
     page.locator("#dialogClose").click()
     # This is a server fixture snapshot, not a claim of 32 real mod downloads.
     api.job = {**api.job, "kind": "catalog-install", "profileId": "profile-a", "id": "large-batch", "busy": True, "cancellable": True,
@@ -286,12 +314,13 @@ def production_views(page, api, output, label):
     check_geometry("batch", True)
     assert page.locator(".batch-item").count() == 32
     assert page.evaluate("document.querySelector('.batch-items').scrollHeight > document.querySelector('.batch-items').clientHeight"), "Large batch must scroll"
+    readable_batch_row(page)
     page.screenshot(path=str(output / (label + "-batch.png")))
     page.locator("[data-batch-hide]").click()
     return 14 - len(geometry_failures), geometry_failures
 
 
-def interaction_flows(page, api):
+def interaction_flows(page, api, output, label):
     # The clipped chosen value must not clip the native top-layer option picker.
     page.evaluate("navigate('home')")
     settle(page)
@@ -378,12 +407,15 @@ def interaction_flows(page, api):
     settle(page)
     assert "Контрольная сумма" in page.locator(".batch-item-error:visible").inner_text()
     assert "установлено: 2" in page.locator(".batch-summary").inner_text()
+    page.screenshot(path=str(output / (label + "-batch-result.png")))
     page.locator("[data-batch-retry='mod-1']").click()
     settle(page)
     retry = [item for item in api.actions if item["action"] == "installModrinth"][-1]
     assert len(retry["items"]) == 1 and retry["items"][0]["project"] == "mod-1", "Retry included successful projects"
     assert page.locator("#dialog > #notice.busy").is_visible(), "Expected a real ongoing job notice beside the cancel action"
     geometry(page, True)
+    readable_batch_row(page)
+    page.screenshot(path=str(output / (label + "-batch-busy.png")))
     page.locator("[data-batch-cancel]").click()
     settle(page)
     assert page.locator(".batch-item").first.get_attribute("data-status") == "cancelled"
@@ -474,7 +506,7 @@ def main():
                             passed_checks, geometry_failures = production_views(page, api, args.output, label)
                             report["checks"] += passed_checks
                             if (width, height, scale) in {(1366, 768, 1), (1280, 720, 2)}:
-                                report["checks"] += interaction_flows(page, api)
+                                report["checks"] += interaction_flows(page, api, args.output, label)
                             assert not geometry_failures, "; ".join(geometry_failures)
                             assert not api.errors, "; ".join(api.errors)
                             assert not errors, "; ".join(errors)

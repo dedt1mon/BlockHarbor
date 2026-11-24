@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -103,6 +104,129 @@ func TestWindowsRootPinsAndJunctionRemoval(t *testing.T) {
 	pin.close()
 	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("root not deleted", err)
+	}
+}
+
+func shortPathFixture(t *testing.T, name string) string {
+	t.Helper()
+	pointer, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]uint16, 32768)
+	n, _, nativeErr := kernel.NewProc("GetShortPathNameW").Call(uintptr(unsafe.Pointer(pointer)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 || n >= uintptr(len(buf)) {
+		t.Fatal("GetShortPathNameW:", nativeError(nativeErr))
+	}
+	short := normalizePath(syscall.UTF16ToString(buf[:n]))
+	if strings.EqualFold(short, normalizePath(name)) {
+		t.Skip("temporary volume does not expose DOS short-name aliases")
+	}
+	return short
+}
+
+func TestWindowsDirectoryPinsAcceptShortAncestorAndKeepIdentity(t *testing.T) {
+	base := t.TempDir()
+	parentName := filepath.Join(base, "Directory pin parent with spaces")
+	data := filepath.Join(parentName, "BlockHarbor")
+	if err := os.MkdirAll(data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	parentName, err := canonicalDirectory(parentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = filepath.Join(parentName, "BlockHarbor")
+	shortParent := shortPathFixture(t, parentName)
+	parent, err := pinDirectory(shortParent, false, false)
+	if err != nil {
+		t.Fatal("short ancestor rejected:", err)
+	}
+	defer parent.close()
+	pin, err := pinDirectory(filepath.Join(shortParent, "BlockHarbor"), false, true)
+	if err != nil {
+		t.Fatal("directory under short ancestor rejected:", err)
+	}
+	defer pin.close()
+	if err := os.Rename(parentName, parentName+"-moved"); err == nil {
+		t.Fatal("parent pin allowed rename")
+	}
+	if err := os.Rename(data, data+"-moved"); err == nil {
+		t.Fatal("directory pin allowed rename")
+	}
+	for _, item := range []struct {
+		name string
+		same bool
+	}{{data, true}, {parentName, false}} {
+		h, err := openNative(item.name, readAttributes, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, syscall.OPEN_EXISTING, backupSemantics|openReparse)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = sameFile(h, pin.info)
+		syscall.CloseHandle(h)
+		if (err == nil) != item.same {
+			t.Fatalf("identity check for %s: %v", item.name, err)
+		}
+	}
+	if err := deletePinned(pin); err != nil {
+		t.Fatal(err)
+	}
+	pin.close()
+	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("short-path pin did not remove its exact directory:", err)
+	}
+}
+
+func TestWindowsDirectoryPinsRejectLeafAndAncestorJunctions(t *testing.T) {
+	base, err := canonicalDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	child := filepath.Join(outside, "BlockHarbor")
+	if err := os.Mkdir(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(child, "keep.txt")
+	if err := os.WriteFile(keep, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "Redirected parent")
+	command := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, outside)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Skipf("junction creation unavailable: %s (%v)", output, err)
+	}
+	parent, err := pinDirectory(base, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.close()
+	for _, item := range []struct {
+		name      string
+		allowLink bool
+	}{{link, false}, {filepath.Join(link, "BlockHarbor"), false}, {filepath.Join(link, "BlockHarbor"), true}} {
+		pin, err := pinDirectory(item.name, item.allowLink, false)
+		if err == nil {
+			pin.close()
+			t.Fatalf("redirected path accepted: %s (allowLink=%v)", item.name, item.allowLink)
+		}
+	}
+	// The explicitly permitted final junction can still be removed as a link;
+	// allowLink must never authorize traversing it to a child in another tree.
+	pin, err := pinDirectory(link, true, true)
+	if err != nil {
+		t.Fatal("explicit link-only pin rejected:", err)
+	}
+	defer pin.close()
+	if err := deletePinned(pin); err != nil {
+		t.Fatal(err)
+	}
+	pin.close()
+	if _, err := os.Lstat(link); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("junction itself was not removed:", err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "outside" {
+		t.Fatal("junction target changed:", err)
 	}
 }
 

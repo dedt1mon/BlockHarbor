@@ -2067,3 +2067,23 @@ select.field:focus,
   .batch-actions > .btn { flex: 1 1 auto; }
   .batch-summary { min-height: 58px; }
 }
+@media (max-height: 560px) {
+  #dialog[open]:has(.batch-panel) { padding: 12px; max-height: calc(100dvh - 16px); }
+  #dialog:has(.batch-panel) .dialog-top { margin-bottom: 6px; }
+  #dialog:has(.batch-panel) .dialog-top h2 { font-size: 20px; }
+  .batch-panel .batch-context { margin: 0 0 6px; font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .batch-overview { padding: 8px; }
+  .batch-panel .batch-summary { min-height: 0; margin: 0 0 4px; font-size: 11px; line-height: 1.4; }
+  .batch-panel .operation-progress { height: 4px; }
+  .batch-items { min-height: 96px; max-height: min(38dvh, 180px); margin: 8px 0; }
+  .batch-item { min-height: 76px; padding: 8px; gap: 8px; }
+  .batch-item-title { font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .batch-item-status { min-height: 16px; margin-top: 4px; font-size: 11px; line-height: 1.4; }
+  /* In a short window actions remain reachable in the body scroll. Keeping
+     them sticky would cover the only visible item instead of helping it. */
+  .batch-actions { position: static; margin-top: 8px; padding-top: 0; gap: 8px; }
+  .batch-actions > .btn { min-height: var(--control-compact); padding: 7px 10px; font-size: 12px; }
+  #dialog:has(.batch-panel) > #notice { margin-top: 6px; padding: 5px 8px; gap: 6px; max-height: min(20dvh, 64px); font-size: 11px; line-height: 1.4; }
+  #dialog:has(.batch-panel) > #notice i { width: 16px; height: 16px; }
+  #dialog:has(.batch-panel) > #notice i svg { width: 12px; height: 12px; }
+}

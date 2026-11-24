@@ -109,6 +109,22 @@ def read_record(path):
         return {}
 
 
+def remove_record(path):
+    """Remove an owned record despite a short Windows reader/scanner handle.
+
+    The caller still owns its session/operation lock or verified handoff; this
+    helper does not revoke another session's record or ignore persistent denial.
+    """
+    for attempt in range(6):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                raise
+            time.sleep(min(.01 * (attempt + 1), .05))
+
+
 class FileMutex:
     """Nonblocking advisory byte lock, compatible with the older launcher lock."""
 
@@ -458,7 +474,7 @@ class SessionCoordinator:
             finally:
                 gate = read_record(path)
                 if gate.get("session") == self.session and not process_alive(gate.get("helper")):
-                    path.unlink(missing_ok=True)
+                    remove_record(path)
 
     def handoff(self):
         return {"sessionRoot": str(self.root), "launcherSession": self.session}
@@ -471,7 +487,7 @@ class SessionCoordinator:
             gate = read_record(path)
             if gate.get("session") != self.session or process_alive(gate.get("helper")):
                 return False
-            path.unlink(missing_ok=True)
+            remove_record(path)
             return True
 
     def close(self):
@@ -486,7 +502,7 @@ class SessionCoordinator:
                     if self.claims:
                         atomic_json(self.path, {"format": 1, "session": self.session, "owner": None, "profiles": self.claims})
                     else:
-                        self.path.unlink(missing_ok=True)
+                        remove_record(self.path)
         except OSError:
             pass  # A temporary/test data directory may already have been removed.
         finally:

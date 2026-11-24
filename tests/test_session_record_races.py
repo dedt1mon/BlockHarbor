@@ -42,6 +42,55 @@ class SessionRecordRaceTests(unittest.TestCase):
         self.assertIn("old", sessions.read_record(self.path)["profiles"])
         self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
 
+    def test_removal_retries_a_transient_reader_without_replacing_the_record(self):
+        sessions.atomic_json(self.path, {"session": "owned"})
+        real_unlink = Path.unlink
+        calls = []
+
+        def unlink(path, *args, **kwargs):
+            if path == self.path:
+                calls.append(path)
+                if len(calls) < 3:
+                    error = PermissionError("reader holds delete-denying handle")
+                    error.winerror = 32
+                    raise error
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", new=unlink):
+            sessions.remove_record(self.path)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(self.path.exists())
+
+    def test_removal_preserves_record_after_persistent_windows_denial(self):
+        sessions.atomic_json(self.path, {"session": "owned"})
+        error = PermissionError("persistent denial")
+        error.winerror = 32
+        with patch.object(Path, "unlink", side_effect=error) as unlink:
+            with self.assertRaises(PermissionError):
+                sessions.remove_record(self.path)
+        self.assertEqual(unlink.call_count, 6)
+        self.assertEqual(sessions.read_record(self.path), {"session": "owned"})
+
+    def test_real_polling_does_not_block_final_owned_record_removal(self):
+        sessions.atomic_json(self.path, {"session": "owned"})
+        started, stopped = threading.Event(), threading.Event()
+
+        def read():
+            while not stopped.is_set():
+                sessions.read_record(self.path)
+                started.set()
+
+        worker = threading.Thread(target=read, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(started.wait(2))
+            sessions.remove_record(self.path)
+        finally:
+            stopped.set()
+            worker.join(timeout=3)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(self.path.exists())
+
     def test_real_concurrent_polling_and_replacement_keep_records_valid(self):
         sessions.atomic_json(self.path, {"sequence": 0, "profiles": {}})
         stopped = threading.Event()

@@ -269,7 +269,8 @@ def run(path):
             try:
                 stored = json.loads(gate.read_text(encoding="utf-8"))
                 if stored.get("session") == data["launcherSession"]:
-                    gate.unlink(missing_ok=True)
+                    from launcher.sessions import remove_record
+                    remove_record(gate)
             except (OSError, ValueError):
                 pass
     if restart:

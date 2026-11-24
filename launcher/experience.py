@@ -29,7 +29,7 @@ SCREENSHOT_TRASH = ".blockharbor-trash"
 
 class Experience:
     READ_ACTIONS = {"experienceState", "experienceGallery", "experienceNotifications", "buildErrors"}
-    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceNotify", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
+    ACTIONS = READ_ACTIONS | {"experienceSaveBuild", "experienceFavorite", "experiencePreferences", "experienceSaveSkin", "experienceUseSkin", "experienceDeleteSkin", "experienceClearNotifications", "experienceReadNotifications", "experienceNotify", "experienceShortcut", "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots", "experienceClearBuildErrors"}
     JOBS = set()
 
     def __init__(self, store):
@@ -605,6 +605,8 @@ class Experience:
     def handle(self, action, p, status=lambda _: None):
         if action == "buildErrors":
             return build_errors.history(self.store, p["id"])
+        if action == "experienceClearBuildErrors":
+            return build_errors.clear(self.store, p["id"], p.get("throughId"))
         if action == "experienceState":
             data = self.state(p.get("id"))
             for skin in data["wardrobe"]:

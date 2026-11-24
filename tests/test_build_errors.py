@@ -38,6 +38,51 @@ class BuildErrorsTest(unittest.TestCase):
         self.assertIn("памяти", result["title"])
         self.assertIn("crash-reports/", result["events"][0]["evidence"])
 
+    def test_clear_snapshot_preserves_new_errors_other_builds_and_game_logs(self):
+        other = self.store.create("Вторая", "1.20.1", "forge")
+        logs = self.store.folder(self.pid) / "logs"
+        logs.mkdir()
+        log = logs / "latest.log"
+        log.write_text("Minecraft log remains available")
+        build_errors.record_operation(self.store, self.pid, "Скачивание", "HTTP 503 old")
+        snapshot = build_errors.history(self.store, self.pid)
+        build_errors.record_operation(self.store, other, "Скачивание", "HTTP 503 other")
+        build_errors.record_operation(self.store, self.pid, "Скачивание", "HTTP 503 new")
+
+        result = build_errors.clear(self.store, self.pid, snapshot["lastId"])
+
+        self.assertEqual(result["cleared"], 1)
+        remaining = build_errors.history(self.store, self.pid)
+        self.assertGreater(remaining["lastId"], snapshot["lastId"])
+        self.assertEqual([event["evidence"] for event in remaining["groups"][0]["events"]], ["HTTP 503 new"])
+        self.assertEqual(build_errors.history(self.store, other)["groups"][0]["events"][0]["evidence"], "HTTP 503 other")
+        self.assertEqual(log.read_text(), "Minecraft log remains available")
+
+    def test_clear_legacy_history_never_reuses_ids_after_reopen(self):
+        with self.store.connection() as db:
+            db.execute("INSERT INTO build_errors VALUES(42,?,?,?,?,?,?,?)",
+                       (self.pid, time.time(), "download", "Загрузка", "Повторить", "Скачивание", "HTTP 503 old"))
+        snapshot = build_errors.history(self.store, self.pid)
+        self.assertEqual(snapshot["lastId"], 42)
+        self.assertEqual(build_errors.clear(self.store, self.pid, snapshot["lastId"])["cleared"], 1)
+        self.assertEqual(build_errors.history(self.store, self.pid)["lastId"], 0)
+
+        reopened = Store(self.store.root)
+        build_errors.record_operation(reopened, self.pid, "Скачивание", "HTTP 503 new")
+        self.assertGreater(build_errors.history(reopened, self.pid)["lastId"], 42)
+        self.assertEqual(build_errors.clear(reopened, self.pid, snapshot["lastId"])["cleared"], 0)
+        self.assertEqual(len(build_errors.history(reopened, self.pid)["groups"][0]["events"]), 1)
+
+    def test_clear_requires_existing_profile_and_valid_snapshot(self):
+        build_errors.record_operation(self.store, self.pid, "Скачивание", "HTTP 503")
+        snapshot = build_errors.history(self.store, self.pid)
+        with self.assertRaisesRegex(ValueError, "Сборка не найдена"):
+            build_errors.clear(self.store, "missing", snapshot["lastId"])
+        for invalid in (None, True, -1, "1", 1.5, 2**63):
+            with self.subTest(through_id=invalid), self.assertRaises(ValueError):
+                build_errors.clear(self.store, self.pid, invalid)
+        self.assertEqual(build_errors.history(self.store, self.pid), snapshot)
+
     def test_only_current_crash_evidence_survives_following_launch(self):
         logs = self.store.folder(self.pid) / "logs"
         logs.mkdir()

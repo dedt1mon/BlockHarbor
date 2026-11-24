@@ -47,13 +47,26 @@ def _recent_lines(folder, relative, started, *, from_start=False):
         return []
 
 
+def _sequence(db):
+    # Old databases used reusable SQLite rowids. Preserve their highest ID
+    # before clearing so a delayed clear cannot erase a newly recorded error.
+    db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('buildErrorSequence','0')")
+    db.execute("""UPDATE settings SET value=CAST(MAX(CAST(value AS INTEGER),
+                  (SELECT COALESCE(MAX(id),0) FROM build_errors)) AS TEXT)
+                  WHERE key='buildErrorSequence'""")
+    return int(db.execute("SELECT value FROM settings WHERE key='buildErrorSequence'").fetchone()[0])
+
+
 def _save(store, pid, group, title, advice, stage, evidence):
     details = redact(evidence, store.root)[:2400]
     with store.connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        sequence = _sequence(db) + 1
+        db.execute("UPDATE settings SET value=? WHERE key='buildErrorSequence'", (str(sequence),))
         # Bind the entry to a still-existing build in this very transaction.
-        db.execute("""INSERT INTO build_errors(pid,created,category,title,advice,stage,evidence)
-                      SELECT id,?,?,?,?,?,? FROM profiles WHERE id=?""",
-                   (time.time(), group, title, advice, redact(stage, store.root)[:300], details, pid))
+        db.execute("""INSERT INTO build_errors(id,pid,created,category,title,advice,stage,evidence)
+                      SELECT ?,id,?,?,?,?,?,? FROM profiles WHERE id=?""",
+                   (sequence, time.time(), group, title, advice, redact(stage, store.root)[:300], details, pid))
         db.execute("""DELETE FROM build_errors WHERE pid=? AND id NOT IN
                       (SELECT id FROM build_errors WHERE pid=? ORDER BY id DESC LIMIT ?)""",
                    (pid, pid, HISTORY_LIMIT))
@@ -111,10 +124,22 @@ def record_exit(store, pid, code, started):
 def history(store, pid):
     store.profile(pid)
     with store.connection() as db:
-        rows = db.execute("""SELECT created,category,title,advice,stage,evidence FROM build_errors
+        rows = db.execute("""SELECT id,created,category,title,advice,stage,evidence FROM build_errors
                              WHERE pid=? ORDER BY id DESC LIMIT ?""", (pid, HISTORY_LIMIT)).fetchall()
     groups = {}
     for row in rows:
         group = groups.setdefault(row["category"], {"title": row["title"], "advice": row["advice"], "events": []})
         group["events"].append({key: row[key] for key in ("created", "stage", "evidence")})
-    return {"groups": list(groups.values()), "limit": HISTORY_LIMIT}
+    return {"groups": list(groups.values()), "limit": HISTORY_LIMIT, "lastId": rows[0]["id"] if rows else 0}
+
+
+def clear(store, pid, through_id):
+    if type(through_id) is not int or not 0 <= through_id <= 2**63 - 1:
+        raise ValueError("Обнови историю ошибок перед очисткой.")
+    with store.connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if not db.execute("SELECT 1 FROM profiles WHERE id=?", (pid,)).fetchone():
+            raise ValueError("Сборка не найдена.")
+        _sequence(db)
+        deleted = db.execute("DELETE FROM build_errors WHERE pid=? AND id<=?", (pid, through_id)).rowcount
+    return {"ok": True, "cleared": deleted, "message": "История ошибок сборки очищена."}

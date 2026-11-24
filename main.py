@@ -429,7 +429,7 @@ class App:
         # responsive during downloads without acquiring the game-files lock.
         concurrent = {"diagnostics", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare",
                       "transferCancel", "transferClear", "updateCancelInstall", "updateAutomatic", "updateState", "experienceFavorite",
-                      "experienceReadNotifications", "experienceClearNotifications", "experienceNotify"}
+                      "experienceReadNotifications", "experienceClearNotifications", "experienceNotify", "experienceClearBuildErrors"}
         if read or action in reads | concurrent:
             return self._feature_action(action, params, read=read)
         with self.coordinator.operation():
@@ -448,7 +448,7 @@ class App:
         if read and action not in reads:
             raise ValueError("Это действие требует запроса на изменение.")
         # Downloads are independent of Minecraft and must remain cancellable.
-        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceReadNotifications", "experienceFavorite", "experienceNotify"}
+        concurrent = reads | {"updateDownload", "updateCancelInstall", "updateAutomatic", "transferCancel", "transferRetry", "transferClear", "updateChannel", "updateInstall", "updateRollback", "packPreview", "packDiscard", "shareCreate", "shareInvite", "shareInspect", "shareCompare", "experiencePreferences", "experienceClearNotifications", "experienceReadNotifications", "experienceFavorite", "experienceNotify", "experienceClearBuildErrors"}
         if action in reads or action in {"packPreview", "shareCreate", "shareInvite", "shareInspect", "shareCompare"}:
             return service.handle(action, params)
         with self.lock:

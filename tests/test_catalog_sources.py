@@ -2,7 +2,6 @@
 
 import hashlib
 import unittest
-from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from launcher import catalog_search, catalog_sources, modrinth
@@ -55,7 +54,7 @@ class CatalogSourcesTests(unittest.TestCase):
             result = catalog_search.search(self.profile, "mods", "", 0)
         self.assertEqual(result["hits"], [])
 
-    def test_primary_outage_keeps_reviewed_github_results_and_external_links(self):
+    def test_primary_outage_keeps_reviewed_github_results_without_website_substitutes(self):
         with patch.object(modrinth, "_get", side_effect=modrinth.CatalogError("offline")) as get:
             result = catalog_search.search(self.profile, "shaderpacks", "bliss", 0, source="all")
         self.assertTrue(result["partial"])
@@ -65,25 +64,24 @@ class CatalogSourcesTests(unittest.TestCase):
         statuses = {item["id"]: item for item in result["sourceStatus"]}
         self.assertEqual(statuses["modrinth"]["status"], "unavailable")
         self.assertEqual(statuses["github"]["status"], "available")
-        self.assertEqual(statuses["curseforge"]["mode"], "website")
-        self.assertEqual(len(result["externalSources"]), 2)
+        self.assertEqual(statuses["curseforge"]["mode"], "disabled")
+        self.assertEqual(result["externalSources"], [])
 
-    def test_external_links_keep_category_and_literal_query_without_network(self):
+    def test_unconfigured_providers_remain_disabled_without_links_or_network(self):
         query = "a & search=other # /?привет"
-        with patch.object(modrinth, "_open", side_effect=AssertionError("No network for website links")):
-            for kind, cf, pmc in (("mods", "mc-mods", "/mods/"),
-                                   ("shaderpacks", "shaders", "/texture-packs/tag/shaders/"),
-                                   ("resourcepacks", "texture-packs", "/texture-packs/")):
+        with patch.object(modrinth, "_open", side_effect=AssertionError("No network for disabled providers")):
+            for kind in ("mods", "shaderpacks", "resourcepacks"):
                 with self.subTest(kind=kind):
                     result = catalog_sources.describe(self.profile, kind, query)
-                    curseforge, planet = [urlsplit(row["url"]) for row in result["externalSources"]]
-                    self.assertEqual((curseforge.scheme, curseforge.netloc), ("https", "www.curseforge.com"))
-                    self.assertEqual(parse_qs(curseforge.query)["class"], [cf])
-                    self.assertEqual(parse_qs(curseforge.query)["search"], [query])
-                    self.assertEqual(parse_qs(curseforge.query)["version"], [self.profile["version"]])
-                    self.assertEqual((planet.scheme, planet.netloc, planet.path), ("https", "www.planetminecraft.com", pmc))
-                    self.assertEqual(parse_qs(planet.query)["keywords"], [query])
-                    self.assertFalse(curseforge.fragment or planet.fragment)
+                    statuses = {item["id"]: item for item in result["sourceStatus"]}
+                    for provider in ("curseforge", "planetminecraft"):
+                        self.assertEqual(statuses[provider]["mode"], "disabled")
+                        self.assertEqual(statuses[provider]["status"], "disabled")
+                        self.assertTrue(statuses[provider]["reason"])
+                        self.assertNotIn("url", statuses[provider])
+                    self.assertEqual(statuses["modrinth"]["status"], "enabled")
+                    self.assertEqual(statuses["github"]["status"], "available")
+                    self.assertEqual(result["externalSources"], [])
         with self.assertRaises(ValueError):
             catalog_sources.describe(self.profile, "https://untrusted.example/", query)
 

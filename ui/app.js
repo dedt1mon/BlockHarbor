@@ -89,6 +89,7 @@ const kinds = {
 const pages = {
   steamInstall: "https://store.steampowered.com/about/",
 };
+let supportAmount = "100";
 let state,
   view = "home",
   settingsSection = "general",
@@ -296,11 +297,11 @@ async function navigateFresh(v, section = null) {
   if (request !== navigationRequest) return;
   // A job or newer refresh can supersede the fetched snapshot without
   // cancelling the user's still-current choice of destination.
-  if (section !== null) settingsSection = section === "downloads" ? "downloads" : "general";
+  if (section !== null) settingsSection = ["downloads", "support"].includes(section) ? section : "general";
   navigate(v);
 }
 function showSettingsSection(section) {
-  settingsSection = section === "downloads" ? "downloads" : "general";
+  settingsSection = ["downloads", "support"].includes(section) ? section : "general";
   navigate("settings");
 }
 function selectInfo(p) {
@@ -623,7 +624,7 @@ function addons() {
     "</div></div>" +
     '<div class="tabs" aria-label="Содержимое сборки">' + Object.entries(kinds).map(([k,[v]]) => '<button class="' + (k === kind ? "on" : "") + '" data-kind="' + k + '">' + v + ' · ' + state.contents[k].length + '</button>').join("") + '<button class="' + (kind === "worlds" ? "on" : "") + '" data-kind="worlds">Миры и копии</button><button class="' + (kind === "errors" ? "on" : "") + '" data-kind="errors">Ошибки сборки</button></div>' +
     (kind === "errors"
-      ? '<section class="panel" id="buildErrorsPanel"><div class="build-errors-heading"><h2>Ошибки сборки</h2><button type="button" class="btn" data-experience="diagnostics" data-experience-profile="' + esc(p.id) + '">' + ic("search") + 'Проверить сборку</button></div><div data-error-list aria-live="polite">Загружаем записи…</div></section>'
+      ? '<section class="panel" id="buildErrorsPanel"><div class="build-errors-heading"><h2>Ошибки сборки</h2><div class="build-error-actions"><button type="button" class="btn" data-experience="diagnostics" data-experience-profile="' + esc(p.id) + '">' + ic("search") + 'Проверить сборку</button><button type="button" class="btn" data-experience="clearBuildErrors" data-experience-profile="' + esc(p.id) + '" disabled>' + ic("trash") + 'Очистить</button></div></div><div data-error-list aria-live="polite">Загружаем записи…</div></section>'
       : kind === "worlds"
       ? (window.BuildCareUI?.worlds(p) || '<div class="empty">Подготавливаем список миров…</div>')
       : '<div class="splitbar"><p>' + desc[kind] + '</p><div class="actions">' + btn("add", "Добавить файл", "plus") + btn("openCatalog", "Скачать", "download", "main") + '</div></div>' +
@@ -737,11 +738,7 @@ function friendsView() {
     controls +
     (profile ? "" : btn("importBuild", "Загрузить сборку", "download")) +
     btn("openSteam", "Открыть Steam", "users") +
-    (profile ? btn("checkSteam", "Проверить подключение", "search") : "") +
-    '</div><p class="note">Друзья в Steam. Игра — через BlockHarbor; пользователь и права запуска — одинаковые. ' +
-    '<a href="' +
-    pages.steamInstall +
-    '" target="_blank" rel="noopener noreferrer">Скачать Steam</a></p></section>' +
+    '<a class="btn" href="' + pages.steamInstall + '" target="_blank" rel="noopener noreferrer">' + ic("download") + 'Скачать Steam</a></div></section>' +
     '<section class="panel"><h3>Пригласить друга</h3>' +
     '<ol class="steam-steps"><li>В одиночном мире нажми <strong>Esc → Открыть для сети</strong>.</li>' +
     "<li>Выбери <strong>Для друзей Steam</strong> или <strong>Только по приглашению</strong> и открой мир.</li>" +
@@ -805,7 +802,6 @@ function profile() {
         ? ""
         : btn("create", "Новая сборка", "plus", "main") +
             btn("importBuild", "Загрузить сборку", "download"),
-      "Ник общий для всех сборок и миров. Изменения профиля применяются при следующем запуске игры.",
     ) +
     '<div class="profile-panels"><section class="panel side-panel"><div class="skin-stage" id="skinStage">' +
     (state.skin || draft.file
@@ -831,9 +827,6 @@ function profile() {
       : "") +
     (hasBuild && state.canUseFabricSkin && (state.skin || draft.file)
       ? '<label><span><input type="checkbox" id="useFabricSkin"> Установить Fabric для скина в выбранной сборке</span></label>'
-      : "") +
-    (state.skinNetwork
-      ? '<small class="note">Для общих скинов обнови BlockHarbor у всех игроков и перезапусти игру. Нужные компоненты установятся автоматически для совместимых сборок.</small>'
       : "") +
     (state.skin
       ? '<div><button type="button" class="linkbtn" data-act="officialSkin">Установить скин в Java-профиле</button></div>'
@@ -881,14 +874,42 @@ function generalSettings() {
     "</span></div></div>"
   );
 }
+function supportSettings() {
+  return `<div class="support-grid">
+    <section class="panel support-card"><h3>${ic("share")}Предложить улучшение</h3>
+      <p>Есть идея для BlockHarbor? Напиши мне в Telegram.</p>
+      <a class="btn" href="https://t.me/Ded_Timon" target="_blank" rel="noopener noreferrer">Написать DedTimon ${ic("link")}</a></section>
+    <section class="panel support-card"><h3>${ic("layers")}Мои работы</h3>
+      <p>Другие проекты, дизайн и разработки — на моём сайте.</p>
+      <a class="btn" href="https://dedt1mon.github.io/" target="_blank" rel="noopener noreferrer">Открыть сайт ${ic("link")}</a></section>
+    <section class="panel support-donation"><div class="support-donation-heading"><h3>${ic("star")}Поддержать разработку</h3><span class="tag">По желанию</span></div>
+      <p>Закинь минуточку на развитие BlockHarbor. Выбери любую сумму от 50 ₽ и переведи её в своём банковском приложении.</p>
+      <div class="support-transfer"><div class="support-amount"><label for="supportAmount">Сумма, ₽</label>
+        <input id="supportAmount" class="field" type="number" min="50" step="1" required inputmode="numeric" value="${esc(supportAmount)}" aria-describedby="supportAmountHelp">
+        <div class="support-presets" role="group" aria-label="Выбрать сумму">${[50,100,250,500].map(amount => `<button type="button" class="btn" data-support-amount="${amount}" aria-pressed="${Number(supportAmount) === amount}">${amount} ₽</button>`).join("")}</div>
+        <small id="supportAmountHelp" class="note">От 50 ₽, другую сумму можно ввести вручную.</small></div>
+        <div class="support-card-number"><label for="supportCard">Номер карты</label>
+          <input id="supportCard" class="field" value="2200 2418 7795 1305" readonly spellcheck="false" inputmode="numeric">
+          ${btn("copySupportCard", "Скопировать карту", "copy", "main")}
+          <small class="note">Перевод выполняется в банковском приложении.</small></div></div></section>
+    </div>`;
+}
+function updateSupportAmount() {
+  const input = $("#supportAmount");
+  if (!input) return;
+  supportAmount = input.value;
+  document.querySelectorAll("[data-support-amount]").forEach(button => {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.supportAmount) === input.valueAsNumber));
+  });
+}
 function settings() {
-  const downloads = settingsSection === "downloads";
+  const sections = [["general", "settingsGeneralTab", "settings", "Основные"], ["downloads", "settingsDownloadsTab", "download", "Загрузки и обновления"], ["support", "settingsSupportTab", "star", "Улучшения и поддержка"]];
+  const selected = sections.find(([key]) => key === settingsSection) || sections[0];
   return head("Настройки") +
     '<div class="tabs settings-tabs" role="tablist" aria-label="Разделы настроек">' +
-    '<button type="button" role="tab" id="settingsGeneralTab" aria-controls="settingsPanel" aria-selected="' + !downloads + '" class="' + (!downloads ? "on" : "") + '" data-settings-section="general">' + ic("settings") + 'Основные</button>' +
-    '<button type="button" role="tab" id="settingsDownloadsTab" aria-controls="settingsPanel" aria-selected="' + downloads + '" class="' + (downloads ? "on" : "") + '" data-settings-section="downloads">' + ic("download") + 'Загрузки и обновления</button></div>' +
-    '<section id="settingsPanel" role="tabpanel" aria-labelledby="' + (downloads ? "settingsDownloadsTab" : "settingsGeneralTab") + '">' +
-    (downloads ? (window.UpdatesUI?.render({embedded: true}) || "") : '<div class="settings-grid">' + generalSettings() + (window.ExperienceUI?.settingsPanel() || "") + '</div>') + '</section>';
+    sections.map(([key, id, icon, title]) => `<button type="button" role="tab" id="${id}" aria-controls="settingsPanel" aria-selected="${key === selected[0]}" class="${key === selected[0] ? "on" : ""}" data-settings-section="${key}">${ic(icon)}${title}</button>`).join("") + '</div>' +
+    '<section id="settingsPanel" role="tabpanel" aria-labelledby="' + selected[1] + '">' +
+    (selected[0] === "support" ? supportSettings() : selected[0] === "downloads" ? (window.UpdatesUI?.render({embedded: true}) || "") : '<div class="settings-grid">' + generalSettings() + (window.ExperienceUI?.settingsPanel() || "") + '</div>') + '</section>';
 }
 function updateModeHelp() {
   const mode = $("#mode").value;
@@ -1399,6 +1420,20 @@ async function dispatch(action) {
         return notice("Код выделен. Нажми Ctrl+C, чтобы скопировать.");
       }
     }
+    case "copySupportCard": {
+      const amount = $("#supportAmount"), card = $("#supportCard");
+      if (!amount || !card || !amount.reportValidity()) return;
+      updateSupportAmount();
+      try {
+        await navigator.clipboard.writeText(card.value.replaceAll(" ", ""));
+        return notice("Номер карты скопирован. Переведи выбранную сумму в банковском приложении.");
+      } catch {
+        if (!card.isConnected) return;
+        card.focus();
+        card.select();
+        return notice("Номер карты выделен. Нажми Ctrl+C, чтобы скопировать.");
+      }
+    }
     case "openSteam": {
       const result = await act("openSteam");
       if (result.steamAction === "install")
@@ -1520,6 +1555,7 @@ async function saveAppearance(destination = "profile") {
   }
 }
 document.addEventListener("input", (e) => {
+  if (e.target.id === "supportAmount") updateSupportAmount();
   if (e.target.id === "nick") editCharacter("nickname", e.target.value);
   if (e.target.id === "realName") editCharacter("realName", e.target.value);
 });
@@ -1567,6 +1603,11 @@ document.addEventListener("click", async (e) => {
   const el = e.target.closest("button");
   if (!el || el.disabled) return;
   try {
+    if (el.dataset.supportAmount) {
+      const input = $("#supportAmount");
+      if (input) { input.value = el.dataset.supportAmount; updateSupportAmount(); }
+      return;
+    }
     if (el.dataset.settingsSection) return await navigateFresh("settings", el.dataset.settingsSection);
     if (el.dataset.view) { if ($("#dialog").open) closeDialog(); return await navigateFresh(el.dataset.view); }
     if (el.dataset.kind) {

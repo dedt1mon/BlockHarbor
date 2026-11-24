@@ -95,6 +95,8 @@ class AuthorCatalogTests(unittest.TestCase):
             for i in range(40)
         ]
         publishers = modrinth.search(self.fabric, "mods", "", 0, source="github")["hits"]
+        # A matching title alone must not hide a different author's project.
+        remote[0]["title"] = publishers[0]["title"]
         # A shared project has a second listing on the primary service.
         duplicate = {"project_id": publishers[0]["id"], "title": "Cross-listed", "downloads": 3000}
 

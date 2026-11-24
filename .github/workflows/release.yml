@@ -44,6 +44,7 @@ jobs:
       - name: Window lifecycle, catalog retention and shared skins
         run: |
           node tests/window-lifecycle.cjs
+          node --test tests/ui-pack-install.cjs
           node --test community-registry/worker.test.mjs community-registry/skin-registry.test.mjs
       - name: Verify shared UI geometry in Chromium
         run: python tools/smoke_ui_layout.py

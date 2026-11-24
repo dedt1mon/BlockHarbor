@@ -75,7 +75,7 @@ class FixtureAPI:
         if action == "careWorlds":
             return {"worlds": [{"name": LONG_NAME, "size": 1024, "lastPlayed": 1770000000}]}
         if action == "buildErrors":
-            return {"groups": []}
+            return {"groups": [], "lastId": 0, "limit": 50}
         if action == "communityPublication":
             return {"publications": []}
         if action == "communityCapabilities":

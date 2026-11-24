@@ -20,7 +20,6 @@ function openModrinth(profile, category) {
             <button class="btn" type="submit">${ic("search")}Найти</button>
             <button type="button" class="btn" data-catalog-filters aria-expanded="false" aria-controls="catalogFilterPanel">Фильтры</button>
           </form>
-          <div class="catalog-external-sources" aria-label="Поиск на других сайтах" hidden></div>
           <div class="catalog-pages"></div>
           <div class="catalog-pager" hidden>
             <button type="button" class="btn" data-page="previous">Назад</button>
@@ -44,33 +43,6 @@ function openModrinth(profile, category) {
   const detail = find(".catalog-detail");
   const compatibility = releaseCompatibility(dialog, detail, profile, category);
   const input = find("input");
-  let sourcesRequest = 0, sourcesTimer = 0, sourcesController = null;
-  function renderSources(data) {
-    const host = find(".catalog-external-sources");
-    const sources = (data.externalSources || []).filter(source => {
-      try { const url = new URL(source.url); return url.protocol === "https:" && ["www.curseforge.com", "www.planetminecraft.com"].includes(url.hostname); }
-      catch { return false; }
-    });
-    host.hidden = !sources.length;
-    host.innerHTML = '<span>Поиск на сайтах:</span>' + sources.map(source =>
-      `<a class="catalog-source-link" data-catalog-source="${esc(source.id)}" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer" title="Открыть поиск на ${esc(source.title)} в браузере">${esc(source.title)}${ic("link")}</a>`).join("");
-  }
-  async function loadSources(query = input.value.trim()) {
-    const current = ++sourcesRequest;
-    sourcesController?.abort();
-    const controller = new AbortController(); sourcesController = controller;
-    try {
-      const params = new URLSearchParams({id: profile.id, kind: category, q: query});
-      const data = await api("/api/catalog/sources?" + params, {signal: controller.signal});
-      if (catalog.isConnected && sourcesRequest === current) renderSources(data);
-    } catch { /* External links never block the built-in catalog. */ }
-  }
-  input.addEventListener("input", () => {
-    clearTimeout(sourcesTimer);
-    sourcesTimer = setTimeout(() => loadSources(), 200);
-  });
-  whenDialogClosed(dialog, catalog, () => { clearTimeout(sourcesTimer); sourcesController?.abort(); });
-  loadSources();
   const pages = find(".catalog-pages");
   const pager = find(".catalog-pager");
   const output = find(".catalog-output");
@@ -280,7 +252,6 @@ function openModrinth(profile, category) {
       page.list.scrollTop = page.scroll;
     }
     renderCartControls();
-    if (entry.data.externalSources) renderSources(entry.data);
     if (entry.data.partial) status.textContent = entry.data.message;
     updatePager();
     if (focusWasInList) {

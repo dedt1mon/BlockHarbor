@@ -119,9 +119,7 @@
     const download = tasks.find(task => activeTransfers.has(task.state));
     const recent = tasks.find(task => !release?.version || task.title?.endsWith(release.version));
     const busy = Boolean(download);
-    const rollback = data.rollback && !data.pending
-      ? button("rollbackDialog", "Вернуться к предыдущей версии", "back", "", !data.windows) : "";
-    let actions = check + rollback;
+    let actions = check;
     let heading = "";
     let body = `<p class="muted">Последняя проверка: ${esc(formatDate(data.checkedAt))}.</p>`;
     if (data.checkStatus?.message) body += `<p class="muted">${esc(data.checkStatus.message)}</p>`;

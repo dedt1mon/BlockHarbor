@@ -1,4 +1,4 @@
-"""Focused 2.6.12 UX checks, using production UI and a stateful local API fixture."""
+"""Focused 2.6.13 UX checks, using production UI and a stateful local API fixture."""
 from __future__ import annotations
 
 import argparse
@@ -44,16 +44,26 @@ class RefinementAPI(FixtureAPI):
             {"id": "copy-b", "label": "Копия мира после игры", "scope": "world", "world": "Мой мир", "created": 1770000001, "size": 4096},
         ]
         self.snapshot_delete_fail_once = True
+        self.build_error_rows = {"profile-a": [{"id": 1, "evidence": "Старая ошибка сборки"}],
+                                 "profile-b": [{"id": 2, "evidence": "Ошибка другой сборки"}]}
+        self.racing_build_error = True
         self.publications = {"profile-b": [
             {"build": "BH-0123456789AB", "name": "Вторая сборка", "expiresAt": 9999999999}]}
 
     def state(self):
         data = super().state()
-        data.update(appVersion="2.6.12", profiles=copy.deepcopy(self.profiles),
+        data.update(appVersion="2.6.13", profiles=copy.deepcopy(self.profiles),
                     deletedProfiles=copy.deepcopy(self.deleted), active=self.active)
         return data
 
     def feature(self, action, query=None):
+        if action == "buildErrors":
+            pid = (query or {}).get("id", [""])[0]
+            rows = self.build_error_rows.get(pid, [])
+            return {"lastId": max((row["id"] for row in rows), default=0), "limit": 50,
+                    "groups": [{"title": "Не удалось получить файл", "advice": "Повтори загрузку.",
+                                "events": [{"created": 1770000000 + row["id"], "stage": "Скачивание", "evidence": row["evidence"]}
+                                           for row in reversed(rows)]}] if rows else []}
         if action == "packVersions":
             return {"title": "Небольшая сборка", "description": "Короткое описание выпуска.",
                     "versions": [{"id": "pack-release", "number": "1.0", "name": "1.0", "type": "release",
@@ -71,7 +81,7 @@ class RefinementAPI(FixtureAPI):
         if action == "careState":
             result["snapshots"] = copy.deepcopy(self.snapshots)
         if action == "updateState":
-            result.update(current="2.6.12", rollback={"version": "2.6.11"})
+            result.update(current="2.6.13", rollback={"version": "2.6.12"})
         return result
 
     def start_job(self, action, data):
@@ -92,6 +102,8 @@ class RefinementAPI(FixtureAPI):
                 row for row in self.publications.get(data["id"], []) if row["build"] != data["build"]]
         elif action == "communityInstall":
             self.profiles.append({**self.profile, "id": "community-installed", "name": "Сборка игрока"})
+        elif action == "packInstall":
+            self.profiles.append({**self.profile, "id": "pack-installed", "name": data["name"]})
         elif action == "communityPublish":
             self.publications.setdefault(data["id"], []).append({"build": "BH-FEDCBA987654", "name": data["name"], "expiresAt": 9999999999})
         self.pending_job = None
@@ -100,10 +112,27 @@ class RefinementAPI(FixtureAPI):
     def action(self, data):
         action = data["action"]
         custom = {"create", "deleteBuild", "restoreBuild", "purgeBuild", "communityInstall", "communityUnpublish", "communityPublish", "careDeleteSnapshot",
+                  "packPreview", "packInstall", "experienceClearBuildErrors",
                   "experienceDeleteScreenshots", "experienceRestoreScreenshots", "experiencePurgeScreenshots"}
         if action not in custom:
             return super().action(data)
         self.actions.append(copy.deepcopy(data))
+        if action == "experienceClearBuildErrors":
+            assert data["id"] == self.active and type(data["throughId"]) is int
+            if self.racing_build_error:
+                self.racing_build_error = False
+                self.build_error_rows[data["id"]].append({"id": 3, "evidence": "Новая ошибка после открытия истории"})
+            rows = self.build_error_rows[data["id"]]
+            remaining = [row for row in rows if row["id"] > data["throughId"]]
+            self.build_error_rows[data["id"]] = remaining
+            return {"ok": True, "cleared": len(rows) - len(remaining), "message": "История ошибок сборки очищена."}
+        if action == "packPreview":
+            assert data["project"].startswith("pack-") and data["version"] == "pack-release"
+            return {"token": "preview-token", "name": "Небольшая сборка"}
+        if action == "packInstall":
+            assert data["token"] == "preview-token" and data["name"] == "Небольшая сборка"
+            assert data["allowWithoutSteam"] is True and not data.get("optional")
+            return self.start_job(action, data)
         if action == "create":
             assert data["allowWithoutSteam"] is True, "Creation must use the visible inline Steam notice"
             self.active = "profile-created"
@@ -386,15 +415,40 @@ def check_screens(page, api, output, width, height, case):
     assert page.locator("#updatesScreen > .panel:not(.transfer-panel)").count() == 1
     assert page.locator("#updateChannel, .updater-channel, .updater-current").count() == 0
     assert "Установлена" not in page.locator("#updatesScreen").inner_text()
-    assert page.locator('.updater-automatic [data-updates-action="rollbackDialog"]').is_visible()
+    assert page.locator('[data-updates-action="rollbackDialog"]').count() == 0
     assert page.locator(".updater-automatic #updateRelease").count() == 1
-    rollback = page.locator('[data-updates-action="rollbackDialog"]')
-    actions = rollback.locator("xpath=..")
-    assert actions.locator('[data-updates-action="updateCheck"]').count() == 1, "Rollback is not next to Check for updates"
-    case["updatesActions"] = row_metrics(actions, ":scope > button")
+    assert page.locator('[data-updates-action="updateCheck"]').is_visible()
     assert "SHA-256" not in page.locator("#updatesScreen").inner_text()
     assert "Подписи издателя" not in page.locator("#updatesScreen").inner_text()
     page.screenshot(path=str(output / f"{width}-updates.png"))
+
+    case["stage"] = "support"
+    tabs = page.locator(".settings-tabs [data-settings-section]")
+    assert tabs.evaluate_all("els => els.map(el => el.dataset.settingsSection)") == ["general", "downloads", "support"]
+    page.locator('[data-settings-section="support"]').click()
+    amount = page.locator("#supportAmount")
+    amount.wait_for(state="visible")
+    assert page.locator("#settingsPanel").get_attribute("aria-labelledby") == "settingsSupportTab"
+    assert page.locator("#settingsSupportTab").get_attribute("aria-selected") == "true"
+    assert amount.input_value() == "100" and amount.get_attribute("min") == "50"
+    amount.fill("49")
+    assert amount.evaluate("el => el.validity.rangeUnderflow && !el.checkValidity()")
+    amount.fill("175")
+    assert amount.evaluate("el => el.checkValidity()"), "A custom donation amount was rejected"
+    page.locator('[data-support-amount="50"]').click()
+    assert amount.input_value() == "50"
+    assert page.locator('[data-support-amount="50"]').get_attribute("aria-pressed") == "true"
+    card = page.locator("#supportCard")
+    assert card.input_value() == "2200 2418 7795 1305" and card.evaluate("el => el.readOnly")
+    assert page.locator('[data-act="copySupportCard"]').is_visible()
+    for href in ("https://t.me/Ded_Timon", "https://dedt1mon.github.io/"):
+        assert page.locator('#settingsPanel a[href="' + href + '"]').is_visible()
+    case["supportPresets"] = row_metrics(page.locator(".support-presets"), ":scope > button")
+    check_layout(page)
+    page.screenshot(path=str(output / f"{width}-support.png"))
+    page.locator('[data-settings-section="general"]').click()
+    page.locator("#mode").wait_for(state="visible")
+    assert page.locator("#supportAmount").count() == 0
 
     case["stage"] = "profile-friends"
     navigate(page, "profile", ".profile-panels")
@@ -415,6 +469,9 @@ def check_screens(page, api, output, width, height, case):
     check_layout(page)
     page.locator(".profile-panels").screenshot(path=str(output / f"{width}-profile.png"))
     navigate(page, "friends", ".friends-panels")
+    assert page.locator('.friends-panels [data-act="checkSteam"]').count() == 0
+    steam_download = page.locator('.steam-actions a[href="https://store.steampowered.com/about/"]')
+    assert steam_download.is_visible() and steam_download.inner_text().strip() == "Скачать Steam"
     cards = page.locator(".friends-panels > .panel:not(.friends-join)")
     first, second = (cards.nth(i).bounding_box() for i in range(2))
     assert abs(first["y"] - second["y"]) <= 1 and abs(first["height"] - second["height"]) <= 1, (first, second)
@@ -461,22 +518,24 @@ def check_screens(page, api, output, width, height, case):
             if page.locator("#dialog").evaluate("el => el.open"):
                 page.locator("#dialogClose").click()
 
-    case["stage"] = "addon-filters-and-source-links"
+    case["stage"] = "addon-filters-and-pagination"
     page.evaluate("navigate('addons')")
     page.locator("[data-care-content]").wait_for(state="visible")
     page.evaluate("openModrinth(active(), 'mods')")
     page.locator(".catalog-choice").first.wait_for(state="visible")
-    page.locator('.catalog-external-sources a[data-catalog-source="curseforge"]').wait_for(state="visible")
+    assert page.locator(".catalog-external-sources").count() == 0
     query = "оптимизация & свет"
     page.locator(".catalog-search input").fill(query)
     page.locator(".catalog-search input").press("Enter")
-    page.wait_for_function("""query => [...document.querySelectorAll('.catalog-external-sources a')].length === 2 &&
-      [...document.querySelectorAll('.catalog-external-sources a')].every(a => {
-        const u=new URL(a.href); return u.searchParams.get(a.dataset.catalogSource==='curseforge'?'search':'keywords') === query;
-      })""", arg=query)
-    case["sourceLinks"] = page.locator(".catalog-external-sources a").evaluate_all("els => els.map(el => ({title:el.textContent.trim(), href:el.href}))")
-    assert {urlsplit(row["href"]).netloc for row in case["sourceLinks"]} == {"www.curseforge.com", "www.planetminecraft.com"}
-    case["addonPagerBackground"] = effective_background(page.locator(".catalog-pager"))
+    settle(page)
+    searches = [row for row in api.requests if row["path"] == "/api/catalog/search"]
+    assert searches[-1]["query"]["q"] == [query]
+    assert page.locator('.catalog a[href*="curseforge.com"], .catalog a[href*="planetminecraft.com"]').count() == 0
+    pager = page.locator(".catalog-pager")
+    case["addonPagerBackground"] = effective_background(pager)
+    case["addonPager"] = row_metrics(pager, ":scope > button, :scope > span")
+    assert pager.evaluate("""el => {const r=el.getBoundingClientRect(), a=el.firstElementChild.getBoundingClientRect(), b=el.lastElementChild.getBoundingClientRect();
+      return Math.abs((a.left+b.right)/2-(r.left+r.right)/2)<=1 && Math.abs((a.top+a.bottom)/2-(r.top+r.bottom)/2)<=1; }"""), "Add-on pagination is not centered"
     page.locator("[data-catalog-filters]").click()
     footer = page.locator(".catalog-filter-footer")
     footer.wait_for(state="visible")
@@ -504,6 +563,26 @@ def check_screens(page, api, output, width, height, case):
     assert page.evaluate("catalogPreferences.get(active().id + '/mods').preset.filters") == "{}"
     assert sum(row["path"] == "/api/catalog/search" for row in api.requests) == previous_searches
     page.locator("#dialogClose").click()
+
+    case["stage"] = "build-error-clear"
+    page.evaluate("kind='errors';navigate('addons')")
+    clear_errors = page.locator('[data-experience="clearBuildErrors"]')
+    page.wait_for_function("document.querySelector('[data-experience=clearBuildErrors]')?.disabled === false")
+    case["errorActions"] = row_metrics(page.locator(".build-error-actions"), ":scope > button")
+    assert [row["text"] for row in case["errorActions"]] == ["Проверить сборку", "Очистить"]
+    clear_errors.click()
+    settle(page)
+    last_action(api, "experienceClearBuildErrors", id="profile-a", throughId=1)
+    no_confirmation(page)
+    assert "Новая ошибка после открытия истории" in page.locator("[data-error-list]").text_content()
+    assert "Старая ошибка сборки" not in page.locator("[data-error-list]").text_content()
+    assert clear_errors.is_enabled()
+    clear_errors.click()
+    settle(page)
+    last_action(api, "experienceClearBuildErrors", id="profile-a", throughId=3)
+    assert clear_errors.is_disabled() and "Пока нет записанных ошибок." in page.locator("[data-error-list]").inner_text()
+    assert len(api.build_error_rows["profile-b"]) == 1, "Clear affected another build"
+    check_layout(page)
 
     case["stage"] = "backup-delete-and-notification-history"
     page.evaluate("kind='worlds';navigate('addons')")
@@ -678,7 +757,16 @@ def check_screens(page, api, output, width, height, case):
         assert button.evaluate("""el => {const r = el.getBoundingClientRect();
           return document.elementFromPoint(r.x + r.width/2, r.y + r.height/2)?.closest('button') === el;}"""), selector + " is not reachable in the compact header"
     page.screenshot(path=str(output / f"{width}-header-640.png"))
-    page.locator("#dialogClose").click()
+    page.locator("[data-pack-prepare]").click()
+    page.wait_for_function("state.job && state.job.busy")
+    settle(page)
+    last_action(api, "packPreview", project="pack-0", version="pack-release")
+    last_action(api, "packInstall", token="preview-token", name="Небольшая сборка", allowWithoutSteam=True)
+    assert sum(row["action"] == "packInstall" for row in api.actions) == 1
+    assert page.locator(".pack-preview, #steamCompatibilityDialog").count() == 0
+    no_confirmation(page)
+    complete_job(page, api)
+    assert any(row["id"] == "pack-installed" for row in api.profiles)
     page.evaluate("""() => { window.__steamHeaderPrompt = showSteamCompatibilityWarning(
       {unknown:true}, [{version:'1.20.1', loader:'quilt'}]); }""")
     page.locator("#steamCompatibilityDialog").wait_for(state="visible")
@@ -749,7 +837,7 @@ def main():
                     check_screens(page, api, args.output, width, height, case)
                     assert not errors, "; ".join(errors)
                     case["result"] = "PASS"
-                    print(f"PASS: 2.6.12 UX at {width}x{height}", flush=True)
+                    print(f"PASS: 2.6.13 UX at {width}x{height}", flush=True)
                 except Exception as error:
                     case["error"] = type(error).__name__ + ": " + str(error)
                     case["traceback"] = traceback.format_exc()

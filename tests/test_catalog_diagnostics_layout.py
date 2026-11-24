@@ -74,8 +74,9 @@ class CatalogDiagnosticsLayoutTests(unittest.TestCase):
         header = self.app.split('function addons()', 1)[1].split('async function showSteamCheck()', 1)[0]
         self.assertIn('btn("folder", "Папка сборки", "folder")', header)
         self.assertIn('kind === "errors"', header)
-        self.assertIn('class="build-errors-heading"><h2>Ошибки сборки</h2><button', header)
+        self.assertIn('class="build-errors-heading"><h2>Ошибки сборки</h2><div class="build-error-actions">', header)
         self.assertIn('data-experience="diagnostics"', header)
+        self.assertLess(header.index('data-experience="diagnostics"'), header.index('data-experience="clearBuildErrors"'))
         self.assertLess(header.index('btn("folder", "Папка сборки", "folder")'),
                         header.index('data-experience="diagnostics"'))
         listing = self.script.split('async function loadBuildErrors()', 1)[1].split('function showDiagnosticResults', 1)[0]

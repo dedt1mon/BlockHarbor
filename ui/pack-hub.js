@@ -15,6 +15,7 @@
   const exactCommunityId = () => /^BH-[0-9A-F]{12}$/i.test(catalog.q.trim());
   const choices = new Map();
   const releaseRows = new Map();
+  const releaseInstalls = new Map();
   let searchGeneration = 0, selectedProject = null, prepared = null;
   let previewSteamAccepted = new Set();
   let searchController = null, releaseController = null, catalogScroll = 0, returnFocus = null, catalogOpen = false;
@@ -497,13 +498,82 @@
       const selected = data.versions.find(v => v.id === choices.get(project))?.id || data.versions.find(v => v.type === "release")?.id || data.versions[0]?.id;
       if (!selected) {host.innerHTML = empty("У этого модпака нет доступных выпусков .mrpack."); return;}
       choices.set(project, selected);
-      host.innerHTML = `<h3>${esc(data.title)}</h3><p>${esc(data.description)}</p><label>Выпуск<select class="field" data-pack-version="${esc(project)}">${data.versions.map(v => option(v.id, `${v.number || v.name} · ${v.minecraft.join(", ")} · ${v.loaders.join(", ")}${v.type !== "release" ? " · " + v.type : ""}`, selected)).join("")}</select></label><p class="note">Перед установкой покажем точную версию игры, размер загрузки и необязательные компоненты.</p>`;
-      document.querySelector("#dialogHeaderActions [data-pack-prepare]").disabled = false;
+      host.innerHTML = `<h3>${esc(data.title)}</h3><p>${esc(data.description)}</p><label>Выпуск<select class="field" data-pack-version="${esc(project)}">${data.versions.map(v => option(v.id, `${v.number || v.name} · ${v.minecraft.join(", ")} · ${v.loaders.join(", ")}${v.type !== "release" ? " · " + v.type : ""}`, selected)).join("")}</select></label><p class="note">Выбранный выпуск сразу установится в отдельную сборку. Необязательные компоненты не добавляются.</p><p class="note" data-pack-steam-note></p><p class="pack-status" data-pack-install-status role="status" aria-live="polite"></p>`;
+      updateReleaseSelection();
       host.querySelector("select")?.focus({preventScroll: true});
     } catch (error) {
       if (host.isConnected && !controller.signal.aborted) host.textContent = error.message;
     } finally {
       if (releaseController === controller) releaseController = null;
+    }
+  }
+
+  function updateReleaseSelection() {
+    const host = document.querySelector("#dialog .pack-release");
+    const select = host?.querySelector("[data-pack-version]");
+    if (!select) return;
+    const project = select.dataset.packVersion;
+    const version = choices.get(project);
+    const release = releaseRows.get(project)?.find(row => row.id === version);
+    const pending = releaseInstalls.get(`${project}:${version}`);
+    const button = document.querySelector("#dialogHeaderActions [data-pack-prepare]");
+    if (button) {
+      button.disabled = !release || Boolean(pending);
+      button.setAttribute("aria-busy", String(Boolean(pending)));
+    }
+    select.disabled = Boolean(pending);
+    host.querySelector("[data-pack-install-status]").textContent = pending
+      ? pending.submitting ? "Запускаем установку…" : "Загружаем и проверяем модпак…"
+      : "";
+    const steam = release?.steam;
+    host.querySelector("[data-pack-steam-note]").textContent = steam?.supported
+      ? "Если встроенное подключение через Steam недоступно, сборка установится без него."
+      : !steam || steam.unknown
+        ? "Поддержка Steam уточнится при установке. Если совместимого компонента нет, сборка установится без него."
+        : "Встроенное подключение через Steam доступно не для всех вариантов этого выпуска. При необходимости сборка установится без него.";
+  }
+
+  async function installRelease() {
+    const host = document.querySelector("#dialog .pack-release");
+    const project = selectedProject;
+    const version = choices.get(project);
+    const release = releaseRows.get(project)?.find(row => row.id === version);
+    if (!release) throw new Error("Выбери выпуск модпака ещё раз.");
+    const key = `${project}:${version}`;
+    if (releaseInstalls.has(key)) return;
+    const isCurrent = () => host?.isConnected && document.querySelector("#dialog").open
+      && selectedProject === project && choices.get(project) === version;
+    if (!isCurrent()) return;
+    const request = {submitting: false, accepted: false, token: ""};
+    releaseInstalls.set(key, request);
+    const feedback = host.querySelector("[data-pack-install-status]");
+    feedback.classList.remove("pack-error");
+    updateReleaseSelection();
+    let failure = null;
+    try {
+      const data = await act("packPreview", {project, version});
+      request.token = data.token;
+      if (!isCurrent()) return;
+      request.submitting = true;
+      updateReleaseSelection();
+      // Required files, optional defaults and the safe name remain backend-owned.
+      // The inline Steam note is accepted together with this installation click.
+      await runJob("packInstall", {token: data.token, name: data.name, allowWithoutSteam: true});
+      request.accepted = true;
+      if (isCurrent()) closeDialog();
+    } catch (error) {
+      failure = error;
+      if (isCurrent()) notice(error.message, true);
+    } finally {
+      // This token is deliberately separate from the manual-import preview:
+      // closing a dialog during job acceptance must not discard its archive.
+      if (request.token && !request.accepted) await act("packDiscard", {token: request.token}).catch(() => {});
+      if (releaseInstalls.get(key) === request) releaseInstalls.delete(key);
+      updateReleaseSelection();
+      if (failure && isCurrent()) {
+        feedback.textContent = failure.message;
+        feedback.classList.add("pack-error");
+      }
     }
   }
 
@@ -546,7 +616,10 @@
       searchCatalog();
     }
     const project = event.target.dataset.packVersion;
-    if (project) choices.set(project, event.target.value);
+    if (project) {
+      choices.set(project, event.target.value);
+      updateReleaseSelection();
+    }
   });
   document.addEventListener("click", async event => {
     const target = event.target.closest("button");
@@ -602,26 +675,7 @@
         return;
       }
       if (d.packProject) return await showReleases(d.packProject);
-      if ("packPrepare" in d) {
-        const host = document.querySelector("#dialog .pack-release");
-        const project = selectedProject;
-        const version = choices.get(project);
-        const release = releaseRows.get(project)?.find(row => row.id === version);
-        if (!release) throw new Error("Выбери выпуск модпака ещё раз.");
-        const isCurrent = () => host?.isConnected && document.querySelector("#dialog").open && selectedProject === project && choices.get(project) === version;
-        target.disabled = true;
-        const confirmation = await confirmSteamCompatibility({}, {report: release.steam || {supported: false, unknown: true, variants: []}, isCurrent});
-        if (!confirmation) return;
-        notice("Загружаем описание модпака…", false, true);
-        const data = await act("packPreview", {project, version});
-        notice("");
-        if (!isCurrent()) {
-          await act("packDiscard", {token: data.token});
-          return;
-        }
-        previewPack(data, {project, acceptedPairs: confirmation.acceptedPairs});
-        return;
-      }
+      if ("packPrepare" in d) return await installRelease();
       if ("packInstall" in d) {
         const current = prepared;
         if (!current) return;

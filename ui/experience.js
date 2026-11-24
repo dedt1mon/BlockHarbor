@@ -5,6 +5,8 @@
   let diagnosticSession = null;
   const galleries = new Map();
   const wardrobeDeletes = new Set();
+  const buildErrorViews = new WeakMap();
+  const buildErrorClears = new Set();
   let galleryRequest = 0;
   let notificationRequest = 0;
   let notificationObservation = 0;
@@ -116,7 +118,7 @@
     return `<section class="panel stack settings-card"><h3>Оформление</h3><label>Масштаб текста<select class="field" id="uiScale">${[85,90,100,110,120].map(v=>`<option value="${v}" ${(p.scale||100)===v?"selected":""}>${v}%</option>`).join("")}</select></label><label class="inline-check"><input type="checkbox" id="reducedMotion" ${p.reducedMotion?"checked":""}>Уменьшить анимацию</label><div class="actions">${expButton("savePreferences","Сохранить оформление","check")}</div></section>`;
   }
   function wardrobe() {
-    return `<section class="panel wardrobe-panel"><div class="wardrobe-heading"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><p class="note">Сохрани несколько вариантов и выбирай перед следующим входом в игру.</p><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
+    return `<section class="panel wardrobe-panel"><div class="wardrobe-heading"><h3>Гардероб</h3>${expButton("saveSkin","Сохранить текущий скин","plus")}</div><div id="wardrobe" class="wardrobe-grid"><p class="note">Загружаем сохранённые скины…</p></div></section>`;
   }
   async function loadWardrobe() {
     const el = $("#wardrobe"); if (!el) return;
@@ -212,9 +214,14 @@
     const list = $("#buildErrorsPanel [data-error-list]");
     const profile = active();
     if (!list || !profile) return;
+    const button = $("#buildErrorsPanel [data-experience='clearBuildErrors']");
+    const snapshot = {pid: profile.id, throughId: 0, loaded: false};
+    buildErrorViews.set(list, snapshot);
+    if (button) button.disabled = true;
+    const current = () => list.isConnected && active()?.id === snapshot.pid && buildErrorViews.get(list) === snapshot;
     try {
       const data = await query("buildErrors", {id:profile.id});
-      if (!list.isConnected) return;
+      if (!current()) return;
       const groups = data.groups.map(group => {
         const last = group.events[0];
         const rows = group.events.map(event =>
@@ -223,8 +230,36 @@
         return `<article class="diagnostic-finding"><div class="line"><h3>${esc(group.title)}</h3><small>${esc(date(last.created))}</small></div><p>${esc(group.advice)}</p><details><summary>Подробности (${group.events.length})</summary><ul class="build-error-events">${rows}</ul></details></article>`;
       }).join("");
       list.innerHTML = groups || '<p class="empty">Пока нет записанных ошибок.</p>';
+      snapshot.throughId = data.lastId;
+      snapshot.loaded = Number.isSafeInteger(data.lastId) && data.lastId >= 0;
     } catch (error) {
-      if (list.isConnected) list.textContent = error.message;
+      if (current()) list.textContent = error.message;
+    } finally {
+      if (current() && button) {
+        const busy = buildErrorClears.has(snapshot.pid);
+        button.disabled = busy || !snapshot.loaded || !snapshot.throughId;
+        if (busy) button.setAttribute("aria-busy", "true");
+        else button.removeAttribute("aria-busy");
+      }
+    }
+  }
+  async function clearBuildErrors(button) {
+    const pid = button.dataset.experienceProfile;
+    const list = button.closest("#buildErrorsPanel")?.querySelector("[data-error-list]");
+    const snapshot = buildErrorViews.get(list);
+    if (!snapshot?.loaded || !snapshot.throughId || snapshot.pid !== pid || active()?.id !== pid || buildErrorClears.has(pid)) return;
+    buildErrorClears.add(pid);
+    buildErrorViews.delete(list);
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    try {
+      const result = await act("experienceClearBuildErrors", {id: pid, throughId: snapshot.throughId});
+      notice(result.message);
+    } finally {
+      buildErrorClears.delete(pid);
+      // A rerender may have replaced this panel while the request was pending.
+      // Reload only the currently selected build; newer errors remain visible.
+      if (active()?.id === pid) await loadBuildErrors();
     }
   }
   function showDiagnosticResults(p, data) {
@@ -250,6 +285,7 @@
       kind = "errors";
       return navigateFresh("addons");
     }
+    if (action === "clearBuildErrors") return clearBuildErrors(el);
     if (action === "diagnostics") return diagnosticsBox(el.dataset.experienceProfile);
     if (action === "manageDiagnosticBuild") {await act("select", {id:el.dataset.experienceProfile}); closeDialog(); view="addons"; kind="mods"; return refresh();}
     if (action === "savePreferences") { await act("experiencePreferences", {scale:Number($("#uiScale").value),reducedMotion:$("#reducedMotion").checked}); await refresh(); return notice("Оформление сохранено."); }

@@ -27,7 +27,7 @@ from pathlib import Path
 from . import build_archive, e4steam, lifecycle, modrinth, room_bridge, steam_network
 from .modfiles import file_hash, file_stamp, mod_info, read_descriptor
 from .pack_hub import _hashes, _path, _size, _unique_name, _url, _validate_paths, download_verified
-from .sessions import atomic_json, process_alive, process_identity, read_record
+from .staging import create_directory, prune_abandoned
 from .store import KINDS, clean_filename, input_profile, require_idle_files, verify_pack
 
 MAX_DESCRIPTOR = 4 * 1024**2
@@ -192,20 +192,7 @@ class SharedBuilds:
 
     def recover_staging(self):
         """Remove only our abandoned downloads after the caller recovers journals."""
-        removed = 0
-        for directory in self.store.root.glob("share-sync-*"):
-            if (not re.fullmatch(r"share-sync-[a-z0-9_]{8}", directory.name)
-                    or not directory.is_dir() or build_archive._reparse(directory.lstat())):
-                continue
-            marker = read_record(directory / "owner.json")
-            owner = marker.get("owner")
-            if (marker.get("format") != "BlockHarborShareStaging/1" or not isinstance(owner, dict)
-                    or type(owner.get("pid")) is not int or not isinstance(owner.get("birth"), str)
-                    or process_alive(owner)):
-                continue
-            shutil.rmtree(directory)
-            removed += 1
-        return removed
+        return prune_abandoned(self.store.root, "share-sync-")
 
     def _inventory(self, pid):
         inventory = modrinth._inventory(self.store, pid)
@@ -384,9 +371,8 @@ class SharedBuilds:
             needed += sum(row["size"] for row in self._inventory(pid))
         if needed + 64 * 1024**2 > shutil.disk_usage(self.store.root).free:
             raise ValueError("Недостаточно места для подготовки общей сборки.")
-        temp = Path(tempfile.mkdtemp(dir=self.store.root, prefix="share-sync-"))
+        temp = create_directory(self.store.root, "share-sync-")
         try:
-            atomic_json(temp / "owner.json", {"format": "BlockHarborShareStaging/1", "owner": process_identity(os.getpid())})
             staged = {}
             for number, row in enumerate(wanted, 1):
                 status(f"Сверяем сборку друга: {number}/{len(wanted)} · {row['title']}")

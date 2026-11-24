@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import sqlite3
 import tempfile
 import threading
 import time
@@ -142,6 +143,44 @@ class CatalogBatchTests(unittest.TestCase):
         self.assertEqual(backups, ["snapshot"])
         self.assertFalse(list(care.root.glob("transaction-*")))
         self.assertFalse(list(care.root.glob("addon-stage-*")))
+
+    def test_optional_post_install_metadata_failure_cannot_report_verified_files_as_failed(self):
+        def fail_metadata(_releases):
+            raise sqlite3.OperationalError("metadata database unavailable")
+        result = self.run_batch(self.items("root"), after_publish=fail_metadata)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"]["installed"], 1)
+        self.assertEqual(result["summary"]["failed"], 0)
+        self.assertTrue(result["warnings"])
+        self.assertEqual({path.name for path in self.mods.iterdir()}, {"root.jar", "dep.jar"})
+
+    def test_selected_root_installed_as_dependency_after_temporary_metadata_error_is_counted(self):
+        self.add("parent", "parent1", "parent.jar", deps=[("required", "root", "root1")])
+        original = modrinth._plan_items
+        failed = False
+
+        def plan(store, profile, items):
+            nonlocal failed
+            if len(items) == 1 and items[0]["project"] == "root" and not failed:
+                failed = True
+                raise modrinth.CatalogError("temporary metadata failure")
+            return original(store, profile, items)
+
+        with patch.object(modrinth, "_plan_items", side_effect=plan):
+            result = self.run_batch(self.items("root", "parent"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"]["installed"], 2)
+        self.assertEqual(result["summary"]["failed"], 0)
+        self.assertEqual({path.name for path in self.mods.iterdir()}, {"root.jar", "dep.jar", "parent.jar"})
+
+    def test_dependency_does_not_satisfy_a_different_explicitly_selected_version(self):
+        self.add("parent", "parent1", "parent.jar", deps=[("required", "root", "root1")])
+        items = [{"kind": "mods", "project": "root", "version": "missingversion"}, *self.items("parent")]
+        result = self.run_batch(items)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["summary"]["installed"], 1)
+        self.assertEqual(result["summary"]["notInstalled"], 1)
+        self.assertEqual(result["items"][0]["version"], "missingversion")
 
 
 class CatalogCrashRecoveryTests(unittest.TestCase):

@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import catalog_filters, compatibility, lifecycle, trusted_catalog
+from . import catalog_filters, compatibility, lifecycle, trusted_catalog, staging
 from .content_icons import MAX_IMAGE
 from .modfiles import file_hash, file_stamp, mod_info, publish_new
 from .store import KINDS, MAX_ADDON, PackLoaderMismatch, clean_filename, verify_pack
@@ -786,8 +786,10 @@ def _staged_warnings(local, catalog):
     return warnings
 
 
-def check(store, pid, kind, project, version):
+def check(store, pid, kind, project, version, source="all"):
     request = {"id": pid, "kind": kind, "project": project, "version": version}
+    if source != "all":
+        request["source"] = source
     return check_selection(store, pid, [request], request=request)
 
 
@@ -1088,7 +1090,7 @@ def install_selection(
     warnings = list(catalog["warnings"])
     if warnings and not acknowledgement:
         raise NeedsReview(request, _review_token(request, releases, inventory, warnings), warnings)
-    with tempfile.TemporaryDirectory(dir=store.folder(pid), prefix=".catalog-") as work:
+    with staging.owned_directory(store.root, "catalog-") as work:
         staged = {}
         # Check dependencies declared only inside JARs, including roots already present on disk.
         # Each new dependency goes through the same verified provider and loader checks.
@@ -1186,6 +1188,7 @@ def install_selection(
             if staged and before_publish is not None:
                 before_publish()
             written = _publish_set(store, pid, publish, staged, publisher)
+            on_stage("published", releases)
     _save_project_icons(store, pid, releases, status)
     if after_publish is not None:
         after_publish(releases)

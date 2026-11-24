@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -21,7 +22,7 @@ import zipfile
 from collections import OrderedDict, deque
 from pathlib import Path, PurePosixPath
 
-from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync
+from . import compatibility, e4steam, lifecycle, modrinth, room_bridge, skin_sync, staging
 from .content_icons import _small_directory
 from .modfiles import file_hash, file_stamp, read_descriptor, publish_new
 from .sessions import process_alive, process_identity, read_record
@@ -39,6 +40,7 @@ MAX_TRANSACTION_TARGETS = 8001
 PROFILE_SETTINGS = ("performanceMemory", "performancePreset", "careAutoWorldBackup")
 _ID = re.compile(r"[a-f0-9]{32}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
+log = logging.getLogger(__name__)
 
 
 def _plain(value, limit=500):
@@ -70,6 +72,38 @@ def _remove(path):
         shutil.rmtree(path)
     else:
         path.unlink(missing_ok=True)
+
+
+def _new_file_identity(path):
+    """Record ownership and content before a new file can reach the build."""
+    before = path.stat()
+    if _reparse(path) or not stat.S_ISREG(before.st_mode):
+        raise ValueError("Новое дополнение должно быть обычным файлом.")
+    stamp = file_stamp(path)
+    digest = file_hash(path, stamp, "sha256")
+    after = path.stat()
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or file_stamp(path) != stamp:
+        raise ValueError("Файл изменился во время подготовки установки.")
+    return {"device": before.st_dev, "inode": before.st_ino,
+            "size": before.st_size, "sha256": digest}
+
+
+def _owns_new_file(path, identity):
+    """Never erase a replacement or an in-place manual edit during rollback."""
+    if not isinstance(identity, dict) or not identity.get("inode") or not os.path.lexists(path):
+        return False
+    st = path.stat()
+    if (_reparse(path) or not stat.S_ISREG(st.st_mode)
+            or (st.st_dev, st.st_ino, st.st_size) !=
+               (identity.get("device"), identity.get("inode"), identity.get("size"))):
+        return False
+    # Rollback must finish even when its operation's cancellation is already set.
+    with path.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    after = path.stat()
+    return (digest == identity.get("sha256") and
+            (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns))
 
 
 def _safe_relative(name):
@@ -139,7 +173,7 @@ def _walk(root, sections):
                 size += st.st_size
                 if count > MAX_FILES or size > MAX_BYTES:
                     raise ValueError("Для одной копии доступно до 16 ГБ и 60 000 файлов.")
-                yield path, name, (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                yield path, name, file_stamp(path)
             else:
                 raise ValueError("В сборке обнаружен неподдерживаемый тип файла.")
 
@@ -513,6 +547,7 @@ class BuildCare:
 
     def _rollback_transaction(self, work, journal):
         root = self._profile_root(journal["pid"])
+        preserved = []
         for target in reversed(journal["targets"]):
             name, had = target["name"], target["had"]
             dest = self._validate_target(root, name)
@@ -521,14 +556,15 @@ class BuildCare:
                 _remove(dest)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(backup, dest)
+            elif not had and target.get("noReplace") and os.path.lexists(dest):
+                # Both POSIX hard-link publication and Windows rename retain
+                # file identity. Content guards also preserve in-place edits.
+                if _owns_new_file(dest, target.get("newIdentity")):
+                    _remove(dest)
+                else:
+                    preserved.append(name)
             elif not had and not os.path.lexists(staged):
                 _remove(dest)
-            elif not had and target.get("noReplace") and os.path.lexists(staged) and os.path.lexists(dest):
-                # POSIX publication links first and then removes the staged name.
-                # A crash between those two operations must also roll back our
-                # link, while preserving an unrelated file that won the race.
-                if not _reparse(dest) and os.path.samefile(staged, dest):
-                    _remove(dest)
         old = journal["oldProfile"]
         with self.store.connection() as db:
             db.execute("UPDATE profiles SET version=?,loader=? WHERE id=?", (old["version"], old["loader"], journal["pid"]))
@@ -541,14 +577,19 @@ class BuildCare:
                         db.execute("DELETE FROM settings WHERE key=?", (key + ":" + journal["pid"],))
                     else:
                         db.execute("REPLACE INTO settings VALUES(?,?)", (key + ":" + journal["pid"], value))
+        return preserved
+
+    def _cleanup_committed(self, work):
+        try:
+            shutil.rmtree(work)
+        except OSError as exc:
+            # The durable commit has already succeeded. Retry the independent
+            # cleanup next time; do not fail the install or block the build.
+            log.warning("Committed transaction cleanup will be retried: %s: %s", work.name, exc)
 
     def _recover(self):
         self.recover_pending()
-        for work in self.root.glob("addon-stage-*"):
-            if (work.is_dir() and not _reparse(work)
-                    and _ID.fullmatch(work.name.removeprefix("addon-stage-"))
-                    and not process_alive(read_record(work / "owner.json").get("owner"))):
-                shutil.rmtree(work, ignore_errors=True)
+        staging.prune_abandoned(self.root, "addon-stage-")
         for work in self.root.glob("plan-*"):
             if work.is_dir() and not _reparse(work) and _ID.fullmatch(work.name.removeprefix("plan-")):
                 if process_alive(read_record(work / "owner.json").get("owner")):
@@ -583,9 +624,14 @@ class BuildCare:
                         targets = journal.get("targets")
                         if not isinstance(targets, list) or len(targets) > MAX_TRANSACTION_TARGETS:
                             raise ValueError("Повреждён список файлов в журнале восстановления.")
-                        self._rollback_transaction(work, journal)
-                        self.history(journal["pid"], "Восстановление после прерывания", "Незавершённые изменения отменены.")
-                    shutil.rmtree(work)
+                        preserved = self._rollback_transaction(work, journal)
+                        detail = "Незавершённые изменения отменены."
+                        if preserved:
+                            detail += " Изменённые вручную файлы сохранены: " + ", ".join(preserved)
+                        self.history(journal["pid"], "Восстановление после прерывания", detail)
+                        shutil.rmtree(work)
+                    else:
+                        self._cleanup_committed(work)
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     pid = journal.get("pid") if isinstance(journal, dict) else None
                     if isinstance(pid, str) and _ID.fullmatch(pid):
@@ -606,13 +652,10 @@ class BuildCare:
         """
         if not pending:
             return 0
-        work = self.root / ("addon-stage-" + secrets.token_hex(16))
-        work.mkdir()
-        _atomic_json(work / "owner.json", {"owner": self.owner})
-        prepared = work / "files"
-        prepared.mkdir()
-        sections = []
-        try:
+        with staging.owned_directory(self.root, "addon-stage-") as work:
+            prepared = work / "files"
+            prepared.mkdir()
+            sections = []
             for release, source, target in pending:
                 lifecycle.check()
                 if release.kind not in KINDS:
@@ -627,8 +670,6 @@ class BuildCare:
                 os.replace(source, destination)
                 sections.append(relative)
             self._transaction(pid, prepared, sections, no_replace=sections)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
         return len(pending)
 
     def _transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
@@ -636,12 +677,14 @@ class BuildCare:
         # commit (including rollback) against close; never publish after cancel.
         with lifecycle.guard():
             work = self._commit_transaction(pid, prepared, sections, new_profile, pins, settings, no_replace=no_replace)
-        shutil.rmtree(work)
+        self._cleanup_committed(work)
 
     def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
         root = self._writable_root(pid)
         require_idle_files(root)
         no_replace = frozenset(no_replace)
+        if not no_replace.issubset(sections):
+            raise ValueError("Неверный список новых файлов в транзакции.")
         if len(sections) > MAX_TRANSACTION_TARGETS:
             raise ValueError("Слишком много файлов в одной транзакции.")
         for name in no_replace:
@@ -650,8 +693,11 @@ class BuildCare:
         work = self.root / ("transaction-" + secrets.token_hex(16))
         work.mkdir()
         journal = {"phase": "prepared", "pid": pid, "oldProfile": self.store.profile(pid),
-                   "targets": [{"name": name, "had": os.path.lexists(self._validate_target(root, name)),
-                                "noReplace": name in no_replace} for name in sections]}
+                   "targets": [{"name": name,
+                                "had": False if name in no_replace else os.path.lexists(self._validate_target(root, name)),
+                                "noReplace": name in no_replace,
+                                **({"newIdentity": _new_file_identity(prepared / name)} if name in no_replace else {})}
+                               for name in sections]}
         if pins is not None:
             with self.store.connection() as db:
                 journal["oldPins"] = [list(r) for r in db.execute("SELECT kind,name FROM care_pins WHERE pid=?", (pid,))]

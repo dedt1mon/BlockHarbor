@@ -34,6 +34,7 @@ class FixtureAPI:
         self.reads = []
         self.racing_notification = True
         self.publication_enabled = True
+        self.preview_error = ""
         self.notifications = [{"id": 1, "created": 1770000000, "message": "Срок действия ссылки на сборку истёк. Сборка автоматически удалена с сервера", "level": "info", "read": False}]
         self.job = {"id": "", "busy": False, "ok": True, "message": "", "gameRunning": False, "localGameRunning": False, "runningProfiles": [], "gameExit": None, "launcherCount": 1}
         self.profile = {"id": "profile-a", "name": LONG_NAME, "version": "1.20.1", "loader": "fabric", "favorite": False, "description": "Описание " * 18}
@@ -150,9 +151,13 @@ class FixtureAPI:
                     hits = [{"id": "mod-" + str(i), "title": "Совместимое дополнение " + str(i), "description": "Очень длинное описание " * 20, "source": source, "sourceTitle": "Источник", "author": "Автор", "downloads": 100 + i, "recommendedVersion": "stable-1", "compatibility": "release-metadata"} for i in range(12)]
                     result = {"hits": [*hits, hits[0]], "offset": 0, "limit": 20, "total": 40, "totalIsEstimate": True, "verified": True}
                 elif path == "/api/catalog/check":
-                    data = request.post_data_json
+                    data = request.post_data_json if request.method == "POST" else {"items": [{"project": first("project"), "version": first("version"), "kind": first("kind"), "source": first("source", "all")} ]}
                     items = [{**item, "version": item.get("version") or "stable-1"} for item in data["items"]]
-                    result = {"items": items, "selected": [{**item, "installed": False} for item in items], "blocked": False, "required": [], "optional": [], "conflicts": [], "warnings": []}
+                    available = [item for item in items if item["project"] != self.preview_error]
+                    result = {"items": available, "selected": [{**item, "installed": False, "error": "Внешний каталог временно недоступен" if item["project"] == self.preview_error else ""} for item in items], "blocked": not available, "partial": len(available) < len(items), "required": [], "optional": [], "conflicts": [], "warnings": []}
+                elif path == "/api/catalog/versions":
+                    result = {"versions": [{"id": "beta-2", "name": "Новый тестовый выпуск", "number": "2.0-beta", "type": "beta", "published": "2026-02-01T00:00:00Z", "filename": "example-beta.jar", "size": 1024, "installed": False},
+                                           {"id": "stable-1", "name": "Стабильный выпуск", "number": "1.0", "type": "release", "published": "2026-01-01T00:00:00Z", "filename": "example.jar", "size": 1024, "installed": False}]}
                 else:
                     raise AssertionError("Unexpected API: " + path)
             route.fulfill(json=result)
@@ -188,10 +193,13 @@ def geometry(page, dialog=False):
 
 def controls_fixture(page, css):
     page.set_content('<!doctype html><html lang="ru"><meta charset="utf-8"><style>' + css + '</style><body class="reduced-motion">' + FIXTURE + '</body></html>')
+    page.bring_to_front()
+    page.wait_for_function("document.body.dataset.layoutResult")
     assert page.locator("body").get_attribute("data-layout-result") == "PASS", page.locator("body").get_attribute("data-layout-errors")
 
 
 def production_views(page, api, output, label):
+    detailed_capture = label in {"1366x768-100pct", "1280x720-200pct"}
     page.route("**/*", api.route)
     page.add_init_script("""window.__pendingRequests = 0; const originalFetch = window.fetch;
       window.fetch = async (...args) => { window.__pendingRequests++; try { return await originalFetch(...args); } finally { window.__pendingRequests--; } };""")
@@ -202,12 +210,18 @@ def production_views(page, api, output, label):
         page.evaluate("destination => navigate(destination)", destination)
         settle(page)
         geometry(page)
+        if detailed_capture:
+            page.screenshot(path=str(output / (label + "-" + destination + ".png")))
     page.evaluate("showSettingsSection('downloads')")
     settle(page)
     geometry(page)
+    if detailed_capture:
+        page.screenshot(path=str(output / (label + "-downloads.png")))
     page.evaluate("kind='worlds';navigate('addons')")
     settle(page)
     geometry(page)
+    if detailed_capture:
+        page.screenshot(path=str(output / (label + "-worlds.png")))
     page.evaluate("navigate('builds')")
     settle(page)
     page.screenshot(path=str(output / (label + "-builds.png")))
@@ -215,12 +229,16 @@ def production_views(page, api, output, label):
     settle(page)
     geometry(page, True)
     assert page.locator('.community-publish [type="submit"]').is_enabled()
+    if detailed_capture:
+        page.screenshot(path=str(output / (label + "-publication.png")))
     page.locator("#dialogClose").click()
     page.evaluate("PackHubUI.openCatalog()")
     settle(page)
     geometry(page, True)
     assert page.locator(".pack-card").count() == 12
     assert page.locator(".pack-results").evaluate("el => el.clientHeight >= 24"), "Pack filters collapsed the results viewport"
+    if detailed_capture:
+        page.screenshot(path=str(output / (label + "-packs.png")))
     page.locator("#dialogClose").click()
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
@@ -301,12 +319,18 @@ def interaction_flows(page, api):
     settle(page)
     for index in range(3):
         page.locator("[data-mark]").nth(index).click()
+    api.preview_error = "mod-1"
     page.locator("[data-cart-open]").click()
     settle(page)
+    assert "Внешний каталог временно недоступен" in page.locator(".catalog-selection-error").inner_text()
+    assert "доступные (2)" in page.locator("[data-cart-install]").inner_text()
     page.locator("[data-cart-install]").click()
     settle(page)
+    api.preview_error = ""
     assert page.locator(".batch-item").count() == 3
     install = [item for item in api.actions if item["action"] == "installModrinth"][-1]
+    assert len(install["items"]) == 3 and any(item["project"] == "mod-1" for item in install["items"]), "Preview failure disappeared from the batch selection"
+    assert not install.get("acknowledgement"), "Partial preview reused an acknowledgement for a smaller group"
     assert all(item["source"] == "github" for item in install["items"]), "Source lost from selection"
     assert all(item["version"] == "stable-1" for item in install["items"]), "Verified recommended version was not selected"
     for status in ("checking", "dependencies", "downloading", "installing"):
@@ -333,15 +357,37 @@ def interaction_flows(page, api):
     item = api.job["items"][0]
     item["status"] = "needs_review"
     api.job["reviews"] = [{"request": {"id": "profile-a", "items": [{k: item[k] for k in ("project", "kind", "version", "source")}]}, "token": "explicit-review-token", "warnings": ["Автор не подтвердил совместимость этой зависимости"]}]
+    api.job["review"] = api.job["reviews"][0]
     page.evaluate("tick(true)")
     settle(page)
     previous = len(api.actions)
     assert page.locator("[data-batch-review]").is_visible()
     assert len(api.actions) == previous, "Review was accepted automatically"
+    page.locator("[data-batch-hide]").click()
+    page.evaluate("tick(true)")
+    settle(page)
+    assert not page.locator("#dialog").evaluate("el => el.open"), "Collapsed review reopened by legacy modal handler"
+    page.locator("[data-batch-open]").click()
     page.locator("[data-batch-review]").click()
     settle(page)
     assert api.actions[-1]["acknowledgement"] == "explicit-review-token"
-    return 16
+
+    api.job.update(busy=False, ok=True)
+    api.job["items"][0]["status"] = "installed"
+    page.evaluate("tick(true)")
+    page.locator("[data-batch-hide]").click()
+    page.evaluate("openModrinth(active(), 'mods')")
+    page.wait_for_selector(".catalog-choice")
+    page.locator("[data-catalog-source]").select_option("github")
+    settle(page)
+    page.locator("[data-project]").first.click()
+    settle(page)
+    assert page.locator("#catalogVersion").input_value() == "stable-1"
+    assert any(entry["path"] == "/api/catalog/check" and entry["query"].get("source") == ["github"] for entry in api.requests), "Single preview lost source"
+    page.locator("[data-install-project]").click()
+    settle(page)
+    assert api.actions[-1]["source"] == "github", "Single installation lost source"
+    return 19
 
 
 def main():
@@ -365,29 +411,44 @@ def main():
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     api = FixtureAPI()
+                    case_failed = False
+
+                    def record_failure(phase, error):
+                        nonlocal case_failed
+                        case_failed = True
+                        report["failures"].append({"case": label, "phase": phase, "error": str(error), "traceback": traceback.format_exc(), "api": list(api.errors), "javascript": list(errors)})
+                        page.screenshot(path=str(args.output / (label + "-" + phase + "-FAIL.png")))
+                        print(f"FAIL: {label} ({phase}): {error}", flush=True)
+
                     try:
-                        controls_fixture(page, css)
-                        report["checks"] += 1
-                        report["checks"] += production_views(page, api, args.output, label)
-                        if (width, height, scale) in {(1366, 768, 1), (1280, 720, 2)}:
-                            report["checks"] += interaction_flows(page, api)
-                        assert not api.errors, "; ".join(api.errors)
-                        assert not errors, "; ".join(errors)
-                        observed = page.evaluate("({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})")
-                        assert observed == {**viewport, "dpr": scale}, observed
-                        report["cases"].append({"display": [width, height], "scale": scale, "viewport": observed, "result": "PASS"})
-                        print(f"PASS: {label}, CSS viewport {viewport['width']}x{viewport['height']}, production views, dialogs, 32-item batch", flush=True)
-                    except Exception as error:
-                        report["failures"].append({"case": label, "error": str(error), "traceback": traceback.format_exc(), "api": api.errors, "javascript": errors})
-                        page.screenshot(path=str(args.output / (label + "-FAIL.png")))
-                        print(f"FAIL: {label}: {error}", flush=True)
+                        try:
+                            controls_fixture(page, css)
+                            report["checks"] += 1
+                        except Exception as error:
+                            record_failure("controls", error)
+                        # A fixture failure remains fatal, but must not suppress
+                        # independent production-screen coverage and diagnostics.
+                        try:
+                            report["checks"] += production_views(page, api, args.output, label)
+                            if (width, height, scale) in {(1366, 768, 1), (1280, 720, 2)}:
+                                report["checks"] += interaction_flows(page, api)
+                            assert not api.errors, "; ".join(api.errors)
+                            assert not errors, "; ".join(errors)
+                            observed = page.evaluate("({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})")
+                            assert observed == {**viewport, "dpr": scale}, observed
+                        except Exception as error:
+                            record_failure("production", error)
+                        if not case_failed:
+                            report["cases"].append({"display": [width, height], "scale": scale, "viewport": observed, "result": "PASS"})
+                            print(f"PASS: {label}, CSS viewport {viewport['width']}x{viewport['height']}, production views, dialogs, 32-item batch", flush=True)
                     finally:
                         context.close()
         finally:
             browser.close()
             (args.output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if report["failures"]:
-        raise SystemExit(f"{len(report['failures'])} browser cases failed; see {args.output / 'report.json'}")
+        failed_cases = len({entry["case"] for entry in report["failures"]})
+        raise SystemExit(f"{failed_cases} browser cases failed; see {args.output / 'report.json'}")
     print(f"PASS: {len(report['cases'])} display/DPI combinations, {report['checks']} scenario checks; {args.output}")
 
 

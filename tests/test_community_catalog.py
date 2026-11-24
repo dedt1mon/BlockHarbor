@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from launcher import build_archive, community_catalog as catalog
 from launcher.store import Store
+from launcher.transfers import TransferManager, TransferNetworkError, TransferCancelled
 
 
 class Registry:
@@ -98,6 +99,78 @@ class CommunityCatalogTests(unittest.TestCase):
 
     def install(self):
         return self.reader.install(self.server.public_id.lower(), True, self.status)
+
+    def test_managed_archive_download_resumes_after_interruption_before_import(self):
+        self.publish()
+        manager = TransferManager(self.friend.root)
+        self.addCleanup(manager.close)
+        reader = catalog.CommunityCatalog(self.friend, self.server, transfers=manager)
+        requests = []
+        offset = 31
+        validator = '"sha256-' + self.server.listing["sha256"] + '"'
+
+        class Response(io.BytesIO):
+            def __init__(self, body, code, headers):
+                super().__init__(body)
+                self.code, self.headers = code, headers
+            def getcode(self):
+                return self.code
+
+        def open_archive(url, hosts, *, headers=None, timeout=None):
+            requests.append((url, headers or {}))
+            self.assertEqual(hosts, {"catalog.example"})
+            if len(requests) == 1:
+                return Response(self.server.data[:offset], 200,
+                                {"Content-Length": str(len(self.server.data)), "ETag": validator})
+            self.assertEqual(headers, {"Range": f"bytes={offset}-", "If-Range": validator})
+            return Response(self.server.data[offset:], 206,
+                            {"Content-Length": str(len(self.server.data) - offset), "ETag": validator,
+                             "Content-Range": f"bytes {offset}-{len(self.server.data)-1}/{len(self.server.data)}"})
+
+        with patch("launcher.transfers.open_https", side_effect=open_archive):
+            result = reader.install(self.server.public_id, True, self.status)
+        self.assertTrue(self.friend.folder(result["id"]).exists())
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(manager.snapshot()["tasks"][0]["state"], "completed")
+        self.assertTrue(manager.snapshot()["tasks"][0]["resumed"])
+        self.assertNotIn("b" * 64, manager.index.read_text())
+        self.assertFalse(list(self.friend.root.glob("community-download-*")))
+
+    def test_managed_archive_fallback_only_after_transport_failure_and_matching_manifest(self):
+        self.publish()
+        paths = []
+        class Manager:
+            def download(inner, url, destination, **kwargs):
+                paths.append(url)
+                if len(paths) == 1:
+                    raise TransferNetworkError("offline", status_code=503)
+                self.assertEqual(kwargs["hashes"], {"sha256": self.server.listing["sha256"]})
+                self.assertTrue(kwargs["resume"])
+                destination.write_bytes(self.server.data)
+                return destination
+        class Mirror:
+            def listing(inner, public_id):
+                self.assertEqual(public_id, self.server.public_id)
+                return self.server.listing.copy()
+        reader = catalog.CommunityCatalog(self.friend, self.server, Mirror(), transfers=Manager())
+        result = reader.install(self.server.public_id, True, self.status)
+        self.assertTrue(self.friend.folder(result["id"]).exists())
+        self.assertTrue(paths[0].startswith(self.server.origin))
+        self.assertTrue(paths[1].startswith("https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-"))
+
+    def test_managed_archive_does_not_bypass_checksum_cancellation_or_authoritative_404(self):
+        self.publish()
+        class Mirror:
+            def listing(inner, public_id):
+                self.fail("Integrity errors, cancellation and public deletion must not use a mirror")
+        for error in (ValueError("Контрольная сумма не совпала"), TransferCancelled("Отменено"), TransferNetworkError("HTTP404", status_code=404)):
+            class Manager:
+                def download(inner, *args, **kwargs):
+                    raise error
+            reader = catalog.CommunityCatalog(self.friend, self.server, Mirror(), transfers=Manager())
+            with self.subTest(error=type(error).__name__), self.assertRaises(ValueError):
+                reader.install(self.server.public_id, True, self.status)
+            self.assertEqual(self.friend.all(), [])
 
     def test_publication_install_separate_devices_privacy_and_retraction(self):
         files = {

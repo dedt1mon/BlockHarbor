@@ -1759,6 +1759,14 @@ dialog:has(.catalog) #dialogBody {
   width: auto;
   max-width: 65%;
 }
+@media (max-height: 560px) {
+  dialog:has(.catalog) #dialogBody { overflow: auto; scrollbar-gutter: stable; }
+  .catalog { height: auto; min-height: 100%; }
+  .catalog-output { flex: none; display: block; }
+  .catalog-browse { grid-template-rows: auto auto minmax(160px, 40dvh) 40px; }
+  .catalog-detail { height: auto; overflow: visible; }
+  .catalog .catalog-filter-panel { min-height: 220px; max-height: 75dvh; }
+}
 .catalog-filter-panel {
   min-height: 0;
   display: grid;
@@ -2030,6 +2038,7 @@ select.field:focus,
 .batch-item[data-status="error"] .batch-item-status,
 .batch-item[data-status="incompatible"] .batch-item-status,
 .batch-item-error, .batch-request-error { color: var(--danger-text); }
+.batch-item-error.is-warning { color: #e9cd87; }
 .batch-item[data-status="needs_review"] .batch-item-status { color: #e9cd87; }
 .batch-item .batch-item-error { margin: 7px 0 0; font-size: 12px; }
 .batch-item > .btn { flex: none; min-height: var(--control-compact); font-size: 12px; padding: 7px 10px; }

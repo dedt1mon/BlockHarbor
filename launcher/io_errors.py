@@ -13,4 +13,6 @@ def storage_message(error):
         return "Путь к файлу слишком длинный. Перемести данные BlockHarbor в папку с более коротким путём."
     if code in {errno.EMFILE, errno.ENFILE}:
         return "Система не может открыть ещё один файл. Закрой ненужные приложения и повтори операцию."
+    if code == errno.EIO:
+        return "Ошибка чтения или записи на диск. Проверь накопитель и доступность папки данных BlockHarbor."
     return None

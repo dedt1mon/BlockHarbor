@@ -4,18 +4,21 @@ import errno
 import hashlib
 import io
 import json
+import os
 import socket
 import ssl
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from launcher import preparation, transfers
+from launcher import lifecycle, preparation, transfers
 
 
 class TransferReliabilityTests(unittest.TestCase):
@@ -39,9 +42,17 @@ class TransferReliabilityTests(unittest.TestCase):
     def test_tls_validation_failure_is_not_retried_as_connectivity(self):
         error = URLError(ssl.SSLCertVerificationError("invalid certificate"))
         with patch.object(transfers, "open_https", side_effect=error) as opened:
-            with self.assertRaisesRegex(ValueError, "сертификат"):
+            with self.assertRaisesRegex(ValueError, "сертификат") as failure:
                 self.manager.download(self.url, self.destination, **self.options)
         self.assertEqual(opened.call_count, 1)
+        self.assertNotIsInstance(failure.exception, transfers.TransferNetworkError)
+
+    def test_http_failure_exposes_typed_network_status_for_approved_fallback(self):
+        error = HTTPError(self.url, 404, "not found", {}, None)
+        with patch.object(transfers, "open_https", side_effect=error):
+            with self.assertRaises(transfers.TransferNetworkError) as failure:
+                self.manager.download(self.url, self.destination, **self.options)
+        self.assertEqual(failure.exception.status_code, 404)
 
     def test_verified_existing_file_works_without_network(self):
         self.destination.parent.mkdir()
@@ -132,11 +143,89 @@ class TransferReliabilityTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=3)
 
+    def test_parent_operation_cancels_stalled_body_without_closing_manager(self):
+        payload = self.payload
+        started, release = threading.Event(), threading.Event()
+        calls = []
+        class Source(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+            def do_GET(self):
+                calls.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("ETag", '"cancel-fixture"')
+                self.end_headers()
+                if len(calls) == 1:
+                    self.wfile.write(payload[:1])
+                    self.wfile.flush()
+                    release.wait(5)
+                else:
+                    self.wfile.write(payload)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Source)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        errors = []
+        parent = lifecycle.CancellationScope()
+        def open_local(_url, _hosts, headers=None):
+            from urllib.request import Request
+            return urlopen(Request(f"http://127.0.0.1:{server.server_port}/file", headers=headers or {}), timeout=3)
+        def download():
+            try:
+                with lifecycle.bind(parent):
+                    self.manager.download(self.url, self.destination, status=lambda _: started.set(), **self.options)
+            except Exception as error:
+                errors.append(error)
+        worker = threading.Thread(target=download, daemon=True)
+        try:
+            with patch.object(transfers, "open_https", side_effect=open_local):
+                worker.start()
+                self.assertTrue(started.wait(3), "body did not start")
+                parent.cancel()
+                worker.join(timeout=2)
+                self.assertFalse(worker.is_alive(), "cancel left the body read blocked")
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], transfers.TransferCancelled)
+                self.assertFalse(self.manager.scope.event.is_set())
+                self.assertFalse(self.destination.exists())
+                release.set()
+                self.assertEqual(self.manager.download(self.url, self.destination, **self.options).read_bytes(), payload)
+        finally:
+            parent.cancel()
+            release.set()
+            worker.join(timeout=3)
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=3)
+
     def test_minecraft_storage_error_preserves_specific_reason(self):
         download = preparation.Download(preparation.Progress(lambda _: None))
         with patch.object(download, "fetch", side_effect=OSError(errno.ENOSPC, "full")):
             with self.assertRaisesRegex(preparation.DownloadError, "места"):
                 download(self.url, self.destination, sha1="0" * 40)
+
+    @unittest.skipUnless(os.name == "nt", "Requires actual Windows short-path aliases")
+    def test_native_windows_short_path_cannot_hang_destination_validation(self):
+        import ctypes
+        root = self.root / "BlockHarbor long cache folder"
+        root.mkdir()
+        short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        short_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        short_path.restype = ctypes.c_uint32
+        size = short_path(str(root), None, 0)
+        self.assertGreater(size, 0)
+        buffer = ctypes.create_unicode_buffer(size)
+        self.assertGreater(short_path(str(root), buffer, size), 0)
+        code = (
+            "from pathlib import Path; from launcher.transfers import TransferManager; import sys; "
+            "manager=TransferManager(sys.argv[1]); "
+            "actual=manager._inside(Path(sys.argv[2])/'content'/'mod.jar'); "
+            "assert actual == Path(sys.argv[1]).resolve()/'content'/'mod.jar'; manager.close()"
+        )
+        process = subprocess.run([sys.executable, "-c", code, str(root.resolve()), buffer.value],
+                                 cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                                 text=True, timeout=8)
+        self.assertEqual(process.returncode, 0, process.stderr)
 
 
 if __name__ == "__main__":

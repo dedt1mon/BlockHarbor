@@ -39,6 +39,7 @@ from launcher import (
     skin_sync,
     skins,
     steam_network,
+    staging,
     version_ids,
 )
 from launcher.memory import automatic_heap
@@ -145,6 +146,7 @@ class App:
         self.auth_generation = 0
         self.lock = threading.RLock()
         self.catalog_lock = threading.Lock()
+        self.catalog_search = catalog_search.SearchService(self.scope)
         self.jobs_lock = threading.Lock()
         self.job = {"id": "", "busy": False, "message": "", "ok": True}
         self.catalog_scope = None
@@ -168,7 +170,7 @@ class App:
         self.metrics = SessionMetrics(self.store)
         self.performance = PerformanceProfiles(self.store, self.care.before_change, self.metrics)
         self.packs = PackHub(self.store, self.transfers)
-        self.community = CommunityCatalog(self.store)
+        self.community = CommunityCatalog(self.store, transfers=self.transfers)
         self.sharing = SharedBuilds(self.store, self.transfers, self.care.before_change, self.profile_running,
                                    commit_changes=self.care._transaction)
         self.updates = UpdateService(self.store, self.transfers, VERSION, can_install=self._can_update, request_shutdown=self._shutdown_for_update,
@@ -190,6 +192,9 @@ class App:
             self.care._recover()
             self.initial_recovery = True
         self.sharing.recover_staging()
+        self.community.recover_staging()
+        self.packs.recover_staging()
+        staging.prune_abandoned(self.store.root, "catalog-")
 
     def _signal_close(self, reason):
         with self.lifecycle_lock:
@@ -785,6 +790,21 @@ class App:
 
         status.progress = progress
 
+        def finish(final):
+            with self.jobs_lock:
+                if self.job["id"] != jid:
+                    return
+                if self.job.get("kind") == "catalog-install" and "items" not in final:
+                    state = "cancelled" if final.get("cancelled") else "error"
+                    items = [{**row, "status": state, "error": final["message"], "detail": ""}
+                             if row["status"] not in catalog_batch.TERMINAL else dict(row)
+                             for row in self.job.get("items", [])]
+                    final.update(items=items, summary=catalog_batch.summary(items))
+                self.job.update(final)
+                self.job["cancellable"] = False
+                if self.catalog_scope is operation_scope:
+                    self.catalog_scope = None
+
         def worker():
             try:
                 with self.activity():
@@ -827,10 +847,7 @@ class App:
                     self.experience.notify(final["message"], "success" if final["ok"] else "error")
             except (OSError, sqlite3.Error):
                 pass  # A history failure must not hide the operation's result.
-            with self.jobs_lock:
-                self.job.update(final)
-                if self.catalog_scope is operation_scope:
-                    self.catalog_scope = None
+            finish(final)
 
         def owned_worker():
             try:
@@ -839,8 +856,7 @@ class App:
                 with self.activity():
                     worker()
             except lifecycle.OperationCancelled:
-                with self.jobs_lock:
-                    self.job.update(message="Лаунчер закрыт. Операция остановлена.", ok=False, busy=False, cancelled=True)
+                finish({"message": "Лаунчер закрыт. Операция остановлена.", "ok": False, "busy": False, "cancelled": True})
             finally:
                 remove_cancel()
 
@@ -1025,6 +1041,8 @@ class App:
                 request = {"id": pid, "items": selected}
             else:
                 request = {key: p[key] for key in ("id", "kind", "project", "version")}
+                if p.get("source", "all") != "all":
+                    request["source"] = p["source"]
                 selected = [request]
             return self.start_job(
                 lambda status: catalog_batch.install(
@@ -1034,7 +1052,7 @@ class App:
                     after_publish=lambda releases: [self.care.remember_project(pid, release, {"title": release.title, "description": release.description}) for release in releases],
                     on_progress=status.progress, review_request=request,
                     publisher=self.care.publish_addons,
-                ), profile=pid, job_data={"kind": "catalog-install", "profileId": pid}, cancellable=True
+                ), profile=pid, job_data=catalog_batch.initial_snapshot(pid, selected), cancellable=True
             )
         if action == "create":
             name, version, loader = input_profile(
@@ -1591,14 +1609,14 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path in ("/api/modrinth/check", "/api/catalog/check"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 result = modrinth.check(
-                    self.app.store, q["id"], q["kind"], q["project"], q["version"]
+                    self.app.store, q["id"], q["kind"], q["project"], q["version"], source=q.get("source", "all")
                 )
                 self.reply(200, result)
             elif u.path in ("/api/modrinth/search", "/api/modrinth/versions", "/api/catalog/search", "/api/catalog/versions"):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 store = self.app.store
                 if u.path.endswith("/search"):
-                    result = catalog_search.search(
+                    result = self.app.catalog_search.search(
                         store.profile(q["id"]),
                         q["kind"],
                         q.get("q", ""),

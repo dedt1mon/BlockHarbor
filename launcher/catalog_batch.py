@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 from http.client import HTTPException
 
 from . import compatibility, lifecycle, modrinth
@@ -34,6 +35,12 @@ def summary(items):
 
 def _row(item):
     return {**item, "title": item["project"], "status": "queued", "error": "", "detail": ""}
+
+
+def initial_snapshot(pid, items):
+    rows = [_row(item) for item in modrinth._selections(items)]
+    return {"kind": "catalog-install", "profileId": pid,
+            "items": rows, "summary": summary(rows), "reviews": []}
 
 
 def _error(exc):
@@ -163,6 +170,8 @@ def install(store, pid, items, status, mutation_lock=None, acknowledgement="", *
     profile = compatibility.installation_profile(store, pid)
     rows = {item["project"]: _row(item) for item in selected}
     reviews = []
+    requested = {item["project"]: item for item in selected}
+    post_install_warnings = []
     backed_up = False
 
     def snapshot():
@@ -181,22 +190,39 @@ def install(store, pid, items, status, mutation_lock=None, acknowledgement="", *
             before_publish()
         backed_up = True
 
+    def matches_requested(release):
+        item = requested.get(release.project)
+        if not item or item["kind"] != release.kind:
+            return False
+        canonical = modrinth.trusted_catalog.canonical_version
+        if item["version"] and canonical(item["version"]) != canonical(release.version):
+            return False
+        source = item.get("source", "all")
+        actual_source = "github" if modrinth.trusted_catalog.has_version(release.version) else "community"
+        return source == "all" or source == actual_source
+
     on_progress(snapshot())
     try:
         groups, failures = _components(store, profile, selected, emit)
         for group in groups:
             lifecycle.check()
             roots = {item["project"] for item in group}
-            captured = []
             initial = {}
 
             def stage(stage_name, release=None):
+                if stage_name == "published":
+                    for actual in release:
+                        if matches_requested(actual):
+                            previous = rows[actual.project]["status"]
+                            state = previous if previous in {"installed", "already_installed"} else "already_installed" if initial.get(actual.project) else "installed"
+                            emit(actual.project, state, version=actual.version,
+                                 title=actual.title or actual.name, filename=actual.filename, error="", detail="")
+                    return
                 detail = release.filename if release else ""
                 for project in roots:
                     emit(project, stage_name, detail=detail)
 
             def complete(releases):
-                captured.extend(releases)
                 if after_publish is not None:
                     after_publish(releases)
 
@@ -204,7 +230,7 @@ def install(store, pid, items, status, mutation_lock=None, acknowledgement="", *
                 # A preceding independent group may have changed the inventory.
                 # Rebuild and recheck against it before any next publication.
                 for release in modrinth._plan_items(store, profile, group):
-                    if release.project in roots:
+                    if matches_requested(release):
                         existing = modrinth._files(store.content_folder(pid, release.kind), release.kind)
                         initial[release.project] = bool(modrinth._installed(existing, release))
                         rows[release.project].update(title=release.title or release.name,
@@ -225,21 +251,33 @@ def install(store, pid, items, status, mutation_lock=None, acknowledgement="", *
                 reviews.append(exc.review)
                 for project in roots:
                     emit(project, "needs_review", error="Перед установкой проверь предупреждения.", detail="")
-            except (ValueError, OSError, HTTPException, KeyError, TypeError) as exc:
+            except (ValueError, OSError, HTTPException, KeyError, TypeError, sqlite3.Error) as exc:
                 for project in roots:
-                    emit(project, _status_for_error(exc), error=_error(exc), detail="")
+                    if rows[project]["status"] in {"installed", "already_installed"}:
+                        warning = "Файлы установлены, но не удалось сохранить дополнительные сведения: " + _error(exc)
+                        post_install_warnings.append(warning)
+                        emit(project, rows[project]["status"], warning=warning)
+                    else:
+                        emit(project, _status_for_error(exc), error=_error(exc), detail="")
     except lifecycle.OperationCancelled:
         for project, row in rows.items():
             if row["status"] not in TERMINAL:
                 emit(project, "cancelled", error="Установка отменена. Уже установленные группы сохранены.", detail="")
         raise
     result = snapshot()
+    result["reviews"] = [review for review in reviews if any(
+        rows.get(item["project"], {}).get("status") == "needs_review"
+        for item in review.get("request", {}).get("items", [])
+    )]
     totals = result["summary"]
     result["ok"] = not bool(totals["notInstalled"])
     result["message"] = (
         f"Установлено: {totals['installed']}; уже установлено: {totals['alreadyInstalled']}; "
         f"не установлено: {totals['notInstalled']}."
     )
-    if len(reviews) == 1:
-        result["review"] = reviews[0]
+    if post_install_warnings:
+        result["warnings"] = sorted(set(post_install_warnings))
+        result["message"] += " Дополнительные сведения сохранены не полностью."
+    if len(result["reviews"]) == 1:
+        result["review"] = result["reviews"][0]
     return result

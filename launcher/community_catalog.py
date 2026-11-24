@@ -9,6 +9,7 @@ import threading
 import time
 import unicodedata
 from http.client import HTTPException
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -16,6 +17,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from . import build_archive, e4steam, lifecycle, version_ids
 from .pack_hub import CATEGORIES
 from .store import LOADERS, input_profile
+from .staging import owned_directory, prune_abandoned
+from .transfers import TransferNetworkError
 from .version import VERSION
 
 ORIGIN = "https://blockharbor-community-catalog.ded8timon.chatgpt.site"
@@ -260,10 +263,11 @@ class CommunityCatalog:
     JOBS = {"communityInstall", "communityPublish", "communityUnpublish"}
     ACTIONS = READ_ACTIONS | JOBS
 
-    def __init__(self, store, api=None, mirror=None):
+    def __init__(self, store, api=None, mirror=None, *, transfers=None):
         self.store = store
         self.api = api or CatalogAPI()
         self.mirror = mirror if mirror is not None else GitHubMirror()
+        self.transfers = transfers
         self._notification_lock = threading.Lock()
         self._notification_thread = None
         self._notification_next = 0
@@ -319,6 +323,9 @@ class CommunityCatalog:
             with lifecycle.guard():
                 self._notification_thread = threading.Thread(target=run, daemon=True, name="bh-publication-notifications")
                 self._notification_thread.start()
+
+    def recover_staging(self):
+        return prune_abandoned(self.store.root, "community-download-")
 
     def sync_notifications(self, notify):
         """Save before ACK: process/network crashes cannot lose an owner event."""
@@ -613,6 +620,55 @@ class CommunityCatalog:
             raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
         if not allow_without_steam and not e4steam.support(listing["minecraft"], listing["loader"]):
             raise ValueError("Подтверди установку этой сборки без встроенной игры через Steam.")
+        result = (self._install_transferred(listing, from_mirror, status) if self.transfers is not None
+                  else self._install_streamed(listing, from_mirror, status))
+        if allow_without_steam:
+            e4steam.acknowledge_notice(self.store, result["id"], listing["minecraft"], listing["loader"])
+        return result
+
+    def _install_transferred(self, listing, from_mirror, status):
+        """Use the launcher's verified, resumable queue for public archive bytes."""
+        if _expired(listing):
+            raise CatalogError(404, "Срок публикации истёк. Попроси автора опубликовать сборку снова.")
+        public_id, size = listing["id"], listing["size"]
+        if shutil.disk_usage(self.store.root).free < size + 16 * 1024**2:
+            raise ValueError("Недостаточно места на диске для архива сборки.")
+        with owned_directory(self.store.root, "community-download-") as folder:
+            destination = Path(folder) / (public_id + ".zip")
+            def receive(mirror):
+                # Never put a publisher token in transfer history or URLs.
+                # Archives are public; only owner actions need Authorization.
+                if mirror:
+                    url = GitHubMirror.archive_url(public_id)
+                    hosts = {"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+                else:
+                    url = self.api.origin + "/v1/builds/" + public_id + "/archive"
+                    hosts = {urlsplit(self.api.origin).hostname}
+                return self.transfers.download(url, destination, title="Сборка «" + listing["name"] + "»",
+                    hashes={"sha256": listing["sha256"]}, size=size, max_size=MAX_ARCHIVE,
+                    hosts=hosts, category="community", status=status, resume=True)
+
+            try:
+                receive(from_mirror)
+            except TransferNetworkError as error:
+                if from_mirror or error.status_code is not None and error.status_code not in FALLBACK_HTTP:
+                    raise
+                if _expired(listing):
+                    raise CatalogError(404, "Срок публикации истёк во время загрузки. Попроси автора опубликовать сборку снова.") from error
+                backup = self.mirror.listing(public_id)
+                if any(backup.get(field) != listing[field] for field in ("id", "size", "sha256")) or _expired(backup):
+                    raise ValueError("Резервный архив не совпадает с записью основного каталога.") from error
+                status("Основной сервер недоступен. Скачиваем проверенную копию из резервного каталога…")
+                receive(True)
+            # Once all bytes are locally verified, import is a local operation.
+            # Expiration on the server must not revoke an already downloaded copy.
+            status("Проверяем и устанавливаем сборку…")
+            with destination.open("rb") as stream:
+                return build_archive.import_build(self.store, stream, catalog_listing=listing, max_bytes=MAX_ARCHIVE)
+
+    def _install_streamed(self, listing, from_mirror, status):
+        """Compatibility transport for standalone consumers without a manager."""
+        public_id = listing["id"]
         size = listing["size"]
         if shutil.disk_usage(self.store.root).free < size:
             raise ValueError("Недостаточно места на диске для архива сборки.")
@@ -646,8 +702,6 @@ class CommunityCatalog:
                     raise ValueError("Размер или контрольная сумма скачанной сборки не совпали.")
             status("Проверяем и устанавливаем сборку…")
             result = build_archive.import_build(self.store, stream, catalog_listing=listing, max_bytes=MAX_ARCHIVE)
-        if allow_without_steam:
-            e4steam.acknowledge_notice(self.store, result["id"], listing["minecraft"], listing["loader"])
         return result
 
     def handle(self, action, params, status=lambda msg: None):

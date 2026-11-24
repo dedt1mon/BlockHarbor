@@ -468,10 +468,32 @@ async function handle(request,env) {
     requireThat(row.state==='ready' && row.created>now()-PUBLIC_TTL,404,'Срок публикации истёк или сборка недоступна.');
     if(method==='GET' && !build[2]) return json(publicBuild(row));
     if(method==='GET' && build[2]) {
-      const file=await env.BUCKET.get(key(row));
+      // A strong content validator lets a client safely resume the same
+      // immutable snapshot. Expiry is checked above for every range request.
+      const etag='"sha256-'+row.sha256+'"';
+      let range;
+      const requested=request.headers.get('Range'), validator=request.headers.get('If-Range');
+      if(requested && (!validator || validator===etag)) {
+        const match=/^bytes=(\d+)-(\d*)$/.exec(requested);
+        const start=match ? Number(match[1]) : NaN;
+        const end=match && match[2] ? Math.min(Number(match[2]),row.size-1) : row.size-1;
+        if(!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<0 || start>=row.size || end<start) {
+          return json({error:'Недопустимый диапазон архива.'},416,{'Content-Range':'bytes */'+row.size,ETag:etag});
+        }
+        range={offset:start,length:end-start+1};
+      }
+      const file=await env.BUCKET.get(key(row),range ? {range} : undefined);
       requireThat(file,503,'Архив временно недоступен.');
-      return new Response(file.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(file.size),
-        'X-Content-Type-Options':'nosniff','Content-Disposition':`attachment; filename="${row.id}.zip"`,'Cache-Control':'no-store'}});
+      if(file.size!==row.size) {
+        await file.body.cancel();
+        throw new RequestError(503,'Размер архива в хранилище не совпадает с публикацией.');
+      }
+      const headers={'Content-Type':'application/octet-stream','Content-Length':String(range ? range.length : file.size),
+        'X-Content-Type-Options':'nosniff','Content-Disposition':`attachment; filename="${row.id}.zip"`,'Cache-Control':'no-store'};
+      headers.ETag=etag;
+      headers['Accept-Ranges']='bytes';
+      if(range) headers['Content-Range']=`bytes ${range.offset}-${range.offset+range.length-1}/${row.size}`;
+      return new Response(file.body,{status:range ? 206 : 200,headers});
     }
   }
   throw new RequestError(404,'Адрес каталога не найден.');

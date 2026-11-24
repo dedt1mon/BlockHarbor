@@ -30,6 +30,7 @@ from .io_errors import storage_message
 
 ATTEMPTS = 3
 SOCKET_TIMEOUT = 25
+MAX_RECEIVE_SECONDS = 20 * 60
 MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 _LIB_LOCK = threading.RLock()
@@ -87,6 +88,24 @@ class DownloadError(RuntimeError):
 
 class _Incomplete(ValueError):
     pass
+
+
+def processor_diagnostic(error):
+    """Classify captured Java failures without exposing command lines or URLs."""
+    messages = []
+    for value in (getattr(error, "stdout", None), getattr(error, "stderr", None)):
+        if isinstance(value, bytes):
+            value = value[-65536:].decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            messages.append(value[-65536:].lower())
+    detail = "\n".join(messages)
+    if any(marker in detail for marker in ("sslhandshakeexception", "pkix path", "certificate_unknown")):
+        return "Java не смогла проверить сертификат сервера. Проверь системное время и доверенные сертификаты сети или прокси."
+    if any(marker in detail for marker in ("unknownhostexception", "connectexception", "sockettimeoutexception", "unable to download", "failed to download")):
+        return "Java не смогла скачать файлы. Проверь подключение, DNS и настройки прокси, затем повтори подготовку."
+    if any(marker in detail for marker in ("outofmemoryerror", "could not reserve enough space", "insufficient memory")):
+        return "Java не хватило памяти. Закрой лишние приложения и повтори подготовку."
+    return "Подготовка загрузчика остановлена. Уже скачанные файлы сохранены; повтори установку."
 
 
 def cleanup_interrupted_downloads(cache):
@@ -149,7 +168,7 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
     timeout = 5 if quick_catalog else (45 if _neo_path(url) else SOCKET_TIMEOUT)
-    deadline = time.monotonic() + (8 if quick_catalog else 20 * 60)
+    deadline = time.monotonic() + (8 if quick_catalog else MAX_RECEIVE_SECONDS)
     with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=timeout)) as response:
         try:
             length = int(response.headers.get("Content-Length", "0"))
@@ -158,8 +177,7 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         if length < 0 or length > limit:
             raise _Incomplete("Размер загрузки превышает допустимый.")
         count = 0
-        read_chunk = (getattr(response, "read1", response.read)
-                      if quick_catalog or _neo_path(url) else response.read)
+        read_chunk = getattr(response, "read1", response.read)
         while block := read_chunk(256 * 1024):
             lifecycle.check()
             count += len(block)
@@ -175,9 +193,10 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
 def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=None):
     """Independent HTTPS transport for Maven; keep cancellation and TLS verification."""
     import requests
+    from urllib3 import exceptions as urllib3_errors
 
     lifecycle.check()
-    deadline = time.monotonic() + 20 * 60
+    deadline = time.monotonic() + MAX_RECEIVE_SECONDS
     # Requests uses the environment/system proxy configuration. Respect an
     # explicitly configured CA file; do not disable certificate verification.
     try:
@@ -200,7 +219,10 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
                 if length < 0 or length > limit:
                     raise _Incomplete("Размер загрузки превышает допустимый.")
                 count = 0
-                for block in response.iter_content(chunk_size=64 * 1024):
+                # iter_content fills its requested chunk: a peer trickling one
+                # byte can postpone the deadline check for hours. read1 checks
+                # between socket reads instead of waiting for 64 KiB to fill.
+                while block := response.raw.read1(64 * 1024, decode_content=True):
                     lifecycle.check()
                     count += len(block)
                     if count > limit or time.monotonic() > deadline:
@@ -210,13 +232,13 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
                 if length and count != length:
                     raise _Incomplete("Передача файла прервана.")
                 return dict(response.headers), response.url
-    except requests.exceptions.SSLError:
+    except (requests.exceptions.SSLError, urllib3_errors.SSLError):
         lifecycle.check()
         raise URLError(ssl.SSLCertVerificationError("TLS verification failed")) from None
-    except requests.exceptions.Timeout:
+    except (requests.exceptions.Timeout, urllib3_errors.TimeoutError):
         lifecycle.check()
         raise TimeoutError("Maven transfer timed out") from None
-    except requests.exceptions.RequestException:
+    except (requests.exceptions.RequestException, urllib3_errors.HTTPError):
         lifecycle.check()
         raise ConnectionError("Maven transfer failed") from None
 
@@ -581,16 +603,76 @@ def _replace(module, name, value):
 
 
 class _Processors:
-    def __init__(self, *, check_default=False):
+    def __init__(self, *, check_default=False, downloader=None, cache=None):
         self.check_default = check_default
+        self.downloader = downloader
+        self.cache = Path(cache).resolve() if cache is not None else None
 
     def __getattr__(self, name):
         return getattr(subprocess, name)
+
+    def _download_mappings(self, command):
+        """Perform the publishers' raw download task with our verified transport.
+
+        Java URLConnection does not inherit Python/environment proxy settings.
+        Both InstallerTools implementations use this task solely to copy the
+        official client mappings when no transformation flags are present. All
+        other tasks/arguments still run in the original Java processor.
+        """
+        from .version_ids import valid
+
+        if self.downloader is None or self.cache is None or len(command) != 12:
+            return False
+        if command[1] != "-cp" or command[3] not in {
+            "net.minecraftforge.installertools.ConsoleTool",
+            "net.neoforged.installertools.ConsoleTool",
+        }:
+            return False
+        pairs = list(zip(command[4::2], command[5::2]))
+        options = dict(pairs)
+        if (len(options) != 4 or set(options) != {"--task", "--version", "--side", "--output"}
+                or options["--task"] != "DOWNLOAD_MOJMAPS" or options["--side"] != "client"):
+            return False
+        version = options["--version"]
+        if not valid(version):
+            raise DownloadError("Установщик указал некорректную версию для mappings.")
+        root = self.cache
+        output = Path(options["--output"])
+        allowed = root / "libraries" / "net" / "minecraft" / "client" / version
+        if (not output.is_absolute() or not output.resolve().is_relative_to(allowed.resolve())
+                or not output.resolve().is_relative_to(root)
+                or output.resolve() == allowed.resolve()):
+            raise DownloadError("Установщик указал путь mappings вне каталога игры.")
+        for ancestor in (output, *output.parents):
+            if ancestor.is_symlink() or getattr(ancestor, "is_junction", lambda: False)():
+                raise DownloadError("Папка mappings перенаправлена.")
+            if ancestor.resolve() == root:
+                break
+        manifest = root / "versions" / version / (version + ".json")
+        if (manifest.is_symlink() or not manifest.resolve().is_relative_to(root)
+                or not manifest.is_file() or manifest.stat().st_size > MAX_METADATA):
+            raise DownloadError("Не найден проверяемый манифест для mappings Minecraft.")
+        metadata = json.loads(manifest.read_bytes())
+        mapping = metadata.get("downloads", {}).get("client_mappings", {})
+        address, digest = mapping.get("url"), mapping.get("sha1")
+        parsed = urlsplit(address) if isinstance(address, str) else None
+        if (metadata.get("id") != version or parsed is None or parsed.scheme != "https"
+                or parsed.netloc not in {"piston-data.mojang.com", "launcher.mojang.com"}
+                or not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{40}", digest)
+                or type(mapping.get("size")) is not int or not 0 < mapping["size"] <= MAX_DOWNLOAD):
+            raise DownloadError("Манифест Minecraft не содержит проверяемых официальных mappings.")
+        self.downloader.progress(f"Подготовка mappings Minecraft {version}…")
+        self.downloader(address, output, sha1=digest.lower(), minecraft_directory=root)
+        lifecycle.check()
+        return True
 
     def run(self, command, **kwargs):
         if isinstance(command, (tuple, list)) and command and Path(
             str(command[0])
         ).name.lower() in ("java", "java.exe"):
+            if self._download_mappings(command):
+                empty = "" if kwargs.get("text") or kwargs.get("universal_newlines") else b""
+                return subprocess.CompletedProcess(command, 0, empty, empty)
             command = [command[0], "-Djava.net.useSystemProxies=true", *command[1:]]
         kwargs.setdefault("timeout", 900)
         check = kwargs.pop("check", self.check_default)
@@ -603,7 +685,7 @@ class _Processors:
 
 
 @contextmanager
-def environment(progress):
+def environment(progress, *, cache=None):
     """Limit customization to pinned installer modules, restoring every alias afterward."""
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import ExitStack
@@ -629,18 +711,19 @@ def environment(progress):
     try:
         lifecycle.check()
         with ExitStack() as stack:
-            yield from _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names)
+            yield from _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names, cache)
     finally:
         _LIB_LOCK.release()
 
 
-def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names):
+def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, names, cache):
     modules = [
         importlib.import_module("minecraft_launcher_lib." + name) for name in names
     ]
     original = _helper.download_file
     downloader = Download(progress)
     stack.callback(downloader.close)
+    native_extraction = threading.Lock()
     network = SimpleNamespace(
         get=metadata_response, session=requests.Session, Session=requests.Session
     )
@@ -652,10 +735,18 @@ def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, 
         def guarded(*args, **kwargs):
             # install_libraries deliberately swallows a first download failure;
             # cancellation must not fall through to extraction of a cached JAR.
-            lifecycle.check()
-            result = original(*args, **kwargs)
-            lifecycle.check()
-            return result
+            while not native_extraction.acquire(timeout=0.1):
+                lifecycle.check()
+            try:
+                lifecycle.check()
+                # Native JARs share META-INF and sometimes library filenames.
+                # zipfile.extract's exists/makedirs pair races between workers;
+                # serialize extraction while leaving downloads parallel.
+                result = original(*args, **kwargs)
+                lifecycle.check()
+                return result
+            finally:
+                native_extraction.release()
         return guarded
 
     for module in modules:
@@ -672,7 +763,8 @@ def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, 
             # adapter to the pinned preparation modules; do not patch the global
             # subprocess module or game/Prism/Steam launch functions.
             strict = module.__name__.endswith(("._forge", "._neoforge", ".forge"))
-            stack.enter_context(_replace(module, "subprocess", _Processors(check_default=strict)))
+            stack.enter_context(_replace(module, "subprocess", _Processors(
+                check_default=strict, downloader=downloader if strict else None, cache=cache)))
     yield
     lifecycle.check()
 
@@ -734,19 +826,21 @@ def _java_major(path, stamp):
 
 def legacy_system_java():
     """Only probe the user's PATH, never an executable from imported metadata."""
+    from .modfiles import file_stamp
+
     path = shutil.which("java")
     if not path:
         return None
     try:
-        stat = Path(path).stat()
+        stamp = file_stamp(Path(path))
     except OSError:
         return None
-    major = _java_major(path, (stat.st_size, stat.st_mtime_ns))
+    major = _java_major(path, stamp)
     return path if major is not None and 6 <= major <= 8 else None
 
 
 def runtime_problem(cache, component, java):
-    """Verify changed Java files; reuse a size/mtime index on an unchanged launch."""
+    """Verify changed Java files; reuse a full file-stamp index on an unchanged launch."""
     from .modfiles import file_hash, file_stamp
 
     root = cache / "runtime" / component
@@ -808,10 +902,10 @@ def runtime_problem(cache, component, java):
 
 
 @contextmanager
-def job(status):
+def job(status, *, cache=None):
     progress = Progress(status)
     try:
-        with environment(progress):
+        with environment(progress, cache=cache):
             yield progress
     finally:
         progress.close()

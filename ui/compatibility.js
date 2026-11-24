@@ -140,6 +140,7 @@ function releaseCompatibility(dialog, detail, profile, category) {
       kind: category,
       project: project.id,
       version: version.id,
+      source: project.source || "all",
     });
     const active = () => request === current && dialog.open && area.isConnected;
     try {
@@ -243,6 +244,9 @@ async function confirmManualMod(file, target) {
 
 let shownCompatibilityReview = "";
 function showStagedReview(job) {
+  // Catalog jobs retain their explicit per-group review in BatchUI, even when
+  // the user has collapsed its dialog to continue navigating the launcher.
+  if (job.kind === "catalog-install" && window.BatchUI) return;
   const review = job.review;
   const dialog = $("#dialog");
   if (

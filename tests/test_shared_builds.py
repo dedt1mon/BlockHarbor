@@ -205,7 +205,7 @@ share.apply(plan['token'],mode='existing')
         unowned = self.store.root / "share-sync-12345678"
         active.mkdir()
         unowned.mkdir()
-        atomic_json(active / "owner.json", {"format": "BlockHarborShareStaging/1", "owner": process_identity(os.getpid())})
+        atomic_json(active / "owner.json", {"format": "BlockHarborStaging/1", "prefix": "share-sync-", "owner": process_identity(os.getpid())})
         (unowned / "personal.txt").write_text("keep")
         self.assertEqual(self.share.recover_staging(), 0)
         self.assertTrue(active.is_dir())

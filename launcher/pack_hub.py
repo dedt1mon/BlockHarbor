@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from . import build_archive, e4steam, lifecycle, modrinth
 from .modfiles import file_hash, file_stamp
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
+from .staging import create_directory, owned_directory, prune_abandoned
 
 INDEX = "modrinth.index.json"
 RECEIPT = ".blockharbor-pack.json"
@@ -277,6 +278,9 @@ class PackHub:
         self.previews = {}
         self.lock = threading.RLock()
 
+    def recover_staging(self):
+        return sum(prune_abandoned(self.staging, prefix) for prefix in ("fetch-", "preview-"))
+
     def search(self, p):
         query = p.get("q", "")
         if not isinstance(query, str) or len(query) > 180:
@@ -346,7 +350,7 @@ class PackHub:
         file = self._release_file(row)
         if not file:
             raise ValueError("У этого выпуска нет файла .mrpack.")
-        with tempfile.TemporaryDirectory(dir=self.staging, prefix="fetch-") as temp:
+        with owned_directory(self.staging, "fetch-") as temp:
             path = Path(temp) / "pack.mrpack"
             status("Загружаем описание и настройки модпака…")
             download_verified(file["url"], path, _hashes(file["hashes"]), file["size"], transfers=self.transfers, status=status, title=meta.get("title", "Модпак"))
@@ -367,7 +371,7 @@ class PackHub:
             self._expire()
             if len(self.previews) >= 4:
                 raise ValueError("Закрой предыдущие окна подготовки модпаков и повтори.")
-            directory = Path(tempfile.mkdtemp(dir=self.staging, prefix="preview-"))
+            directory = create_directory(self.staging, "preview-")
             target = directory / "pack.mrpack"
             try:
                 if hasattr(source, "read"):

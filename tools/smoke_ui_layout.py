@@ -41,6 +41,8 @@ FIXTURE = r"""
   <div class="gallery-grid"><figure class="gallery-card selected"><figcaption>Скриншот</figcaption></figure></div>
 </main>
 <script>
+window.addEventListener("load", async () => {
+await new Promise(resolve => requestAnimationFrame(resolve));
 const errors = [];
 const check = (value, message) => { if (!value) errors.push(message); };
 const q = s => document.querySelector(s);
@@ -56,9 +58,11 @@ for (const selector of fields) {
 }
 check(equal(rect("#primary").height, 44), "primary button height");
 check(equal(rect(".catalog-mark").height, rect(".catalog-mark").width), "catalog + button is square");
-const before=rect("#name"); q("#name").focus();
+const before=rect("#name"); q("#name").focus({preventScroll:true});
+await new Promise(resolve => setTimeout(resolve, 200));
 check(css("#name","outlineStyle")==="none", "duplicate outer input outline");
-check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable: focused="+document.activeElement?.id+", input="+css("#name","borderTopColor")+", idle="+css("#loader","borderTopColor")+", hover="+q("#name").matches(":hover"));
+check(q("#name").matches(":focus"), "input focus selector inactive: documentFocus="+document.hasFocus());
+check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable: focused="+document.activeElement?.id+", input="+css("#name","borderTopColor")+", idle="+css("#loader","borderTopColor")+", hover="+q("#name").matches(":hover")+", focus="+q("#name").matches(":focus")+", documentFocus="+document.hasFocus()+", shadow="+css("#name","boxShadow"));
 check(equal(before.width,rect("#name").width)&&equal(before.height,rect("#name").height),"field geometry changed on focus");
 q("#name").blur();
 check(css(".nav.sel","backgroundColor")===css(".tabs .on","backgroundColor"),"inconsistent selection fill");
@@ -73,6 +77,7 @@ for(const selector of [".field-group",".care-list",".pack-grid",".community-publ
 check(equal(rect(".community-publish-actions .btn").height,q(".community-publish-actions .btn:last-child").getBoundingClientRect().height),"unequal publish buttons");
 document.body.dataset.layoutResult=errors.length ? "FAIL" : "PASS";
 document.body.dataset.layoutErrors=errors.join("; ");
+}, {once:true});
 </script>
 """
 
@@ -95,7 +100,7 @@ def main():
                 [browser, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
                  "--disable-gpu", "--disable-background-networking", "--no-first-run",
                  "--force-device-scale-factor=1", "--user-data-dir=" + str(root / str(width)),
-                 f"--window-size={width},{height}", "--dump-dom", page.as_uri()],
+                 f"--window-size={width},{height}", "--virtual-time-budget=1500", "--dump-dom", page.as_uri()],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=45, check=True,
             )

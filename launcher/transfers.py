@@ -44,6 +44,14 @@ class TransferDeadline(TimeoutError):
     pass
 
 
+class TransferNetworkError(ValueError):
+    """Exhausted transport/HTTP failure, distinct from integrity and local storage."""
+
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def allowed_url(url, hosts):
     if not isinstance(url, str) or len(url) > 8192 or any(ord(c) < 32 for c in url):
         raise ValueError("Недопустимый адрес загрузки.")
@@ -187,14 +195,18 @@ class TransferManager:
         if not path.is_absolute():
             path = self.root / path
         path = Path(os.path.abspath(path))
-        if not path.resolve().is_relative_to(self.root) or path == self.root:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.root) or resolved == self.root:
             raise ValueError("Файл загрузки должен находиться в данных BlockHarbor.")
-        check = path
-        while check != self.root:
-            if check.is_symlink():
+        # Windows 8.3 aliases such as RUNNER~1 resolve inside the long root but
+        # never become lexically equal to it. Path.parents is finite; comparing
+        # canonical ancestors avoids an endless loop at C:\ (whose parent is C:\).
+        for check in (path, *path.parents):
+            if check.is_symlink() or getattr(check, "is_junction", lambda: False)():
                 raise ValueError("Папка или файл загрузки перенаправлены.")
-            check = check.parent
-        return path
+            if check.resolve() == self.root:
+                return resolved
+        raise ValueError("Не удалось подтвердить папку назначения загрузки.")
 
     def _load(self):
         try:
@@ -220,7 +232,7 @@ class TransferManager:
                         or type(config.get("max_size")) is not int or not 0 < config["max_size"] <= MAX_BYTES
                         or (config.get("size") is not None and (type(config["size"]) is not int or not 0 <= config["size"] <= config["max_size"]))):
                     continue
-                self._inside(config["destination"])
+                config["destination"] = str(self._inside(config["destination"]))
                 allowed_url(config["url"], config["hosts"])
                 _hashes(config["hashes"])
                 if row.get("state") in ACTIVE:
@@ -424,6 +436,18 @@ class TransferManager:
 
     def _run(self, task_id, status):
         thread = threading.current_thread()
+        parent_scope = lifecycle.current_scope()
+        def cancel_owned_transfer():
+            with self.lock:
+                flag = self.cancel_flags.get(task_id)
+                if flag is not None:
+                    flag.set()
+                opened = self.responses.get(task_id)
+            if opened is not None:
+                lifecycle.abort_response(opened)
+        remove_parent = (parent_scope.on_cancel(cancel_owned_transfer)
+                         if parent_scope is not None and parent_scope is not self.scope
+                         else lambda: None)
         with self.lock:
             self.runners.add(thread)
         try:
@@ -434,6 +458,7 @@ class TransferManager:
             self._persist()
             raise TransferCancelled(str(exc)) from None
         finally:
+            remove_parent()
             with self.lock:
                 self.runners.discard(thread)
 
@@ -465,7 +490,7 @@ class TransferManager:
                     code = exc.code
                     exc.close()
                     if code not in {408, 429, 500, 502, 503, 504} or attempt == 3:
-                        raise ValueError(f"Источник вернул HTTP {code}. Повтори загрузку позже.") from None
+                        raise TransferNetworkError(f"Источник вернул HTTP {code}. Повтори загрузку позже.", status_code=code) from None
                 except (OSError, URLError, TimeoutError, HTTPException) as exc:
                     self._check_cancel(task_id)
                     local = storage_message(exc)
@@ -477,7 +502,7 @@ class TransferManager:
                     if isinstance(exc, TransferDeadline):
                         raise ValueError("Превышено время загрузки. Уже скачанная часть сохранена; повтори операцию после восстановления подключения.") from exc
                     if attempt == 3:
-                        raise ValueError("Связь с источником прервалась. Проверь подключение и повтори загрузку.") from exc
+                        raise TransferNetworkError("Связь с источником прервалась. Проверь подключение и повтори загрузку.") from exc
                 self._update(task_id, message="Связь прервалась. Повторяем подключение…", rate=0)
                 if self.cancel_flags[task_id].wait(attempt):
                     self._check_cancel(task_id)

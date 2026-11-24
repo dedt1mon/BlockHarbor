@@ -21,6 +21,7 @@
   let snapshot = null;
   let titles = new Map();
   let submitting = false;
+  let cancelling = "";
   const name = item => titles.get(item.project) || item.title || item.project;
   const selection = item => ({project: item.project, kind: item.kind || "mods", version: item.version || null, source: item.source || "all"});
 
@@ -98,8 +99,9 @@
       row.querySelector(".batch-item-title").textContent = name(item);
       row.querySelector(".batch-item-status").textContent = labels[item.status] || "Подготовка…";
       const error = row.querySelector(".batch-item-error");
-      error.textContent = item.error || "";
-      error.hidden = !item.error;
+      error.textContent = item.error || item.warning || "";
+      error.hidden = !error.textContent;
+      error.classList.toggle("is-warning", !item.error && Boolean(item.warning));
       const retry = row.querySelector("[data-batch-retry]");
       retry.hidden = Boolean(snapshot.busy) || !retryable.has(item.status);
       retry.disabled = submitting;
@@ -109,7 +111,7 @@
     const reviewsKey = JSON.stringify(snapshot.reviews);
     if (reviews.dataset.items !== reviewsKey) {
       reviews.dataset.items = reviewsKey;
-      reviews.innerHTML = snapshot.reviews.map((review, index) => `<section class="batch-review"><h3>Подтверждение совместимости</h3><p>${(review.request?.items || []).map(item => esc(name(item))).join(", ")}</p><ul>${(review.warnings || []).map(warning => `<li>${esc(typeof warning === "string" ? warning : warning.message || warning.title || warning.code || "Совместимость требует проверки")}</li>`).join("")}</ul><button class="btn" type="button" data-batch-review="${index}">Установить с предупреждением</button></section>`).join("");
+      reviews.innerHTML = snapshot.reviews.map((review, index) => `<section class="batch-review"><h3>Подтверждение совместимости</h3><p>${(review.request?.items || (review.request?.project ? [review.request] : [])).map(item => esc(name(item))).join(", ")}</p><ul>${(review.warnings || []).map(warning => `<li>${esc(typeof warning === "string" ? warning : warning.message || warning.title || warning.code || "Совместимость требует проверки")}</li>`).join("")}</ul><button class="btn" type="button" data-batch-review="${index}">Установить с предупреждением</button></section>`).join("");
     }
     for (const button of reviews.querySelectorAll("button")) button.disabled = Boolean(snapshot.busy) || submitting;
     const retry = host.querySelector("[data-batch-retry-failed]");
@@ -117,7 +119,7 @@
     retry.disabled = submitting;
     const cancel = host.querySelector("[data-batch-cancel]");
     cancel.hidden = !snapshot.busy || !snapshot.cancellable;
-    cancel.disabled = submitting || Boolean(snapshot.cancelRequested);
+    cancel.disabled = submitting || Boolean(snapshot.cancelRequested) || cancelling === snapshot.id;
     host.querySelector("[data-batch-hide]").textContent = snapshot.busy ? "Свернуть" : "Закрыть";
   }
 
@@ -152,9 +154,15 @@
       const review = snapshot.reviews[Number(button.dataset.batchReview)];
       if (review?.request && review.token) await retry(review.request, review.token);
     } else if (button.hasAttribute("data-batch-cancel") && snapshot.cancellable) {
-      button.disabled = true;
-      try { await act("cancelCatalogInstall", {job: snapshot.id}); await tick(); }
-      catch (error) { notice(error.message, true); button.disabled = false; }
+      const id = snapshot.id;
+      cancelling = id;
+      update();
+      try {
+        const result = await act("cancelCatalogInstall", {job: id});
+        if (snapshot.id === id && result.cancelRequested) snapshot.cancelRequested = true;
+        await tick();
+      } catch (error) { notice(error.message, true); }
+      finally { cancelling = ""; update(); }
     }
   });
   window.BatchUI = {start, observe, open, labels, summary, rememberTitles(items) { titles = new Map(items.slice(0, 32).map(item => [item.project, item.title])); }};

@@ -134,6 +134,9 @@ def run_case(store, loader, version, args):
         logs = folder / "logs"
         if logs.is_dir():
             shutil.copytree(logs, output / "game-logs", dirs_exist_ok=True)
+        crashes = folder / "crash-reports"
+        if crashes.is_dir():
+            shutil.copytree(crashes, output / "crash-reports", dirs_exist_ok=True)
         store.move_profile(pid)
         store.purge_profile(pid)
         result["deletion"] = "passed" if not folder.exists() else "failed"

@@ -108,6 +108,7 @@ jobs:
           python tools/smoke_windows_release.py --setup artifacts/BlockHarbor-audit-Setup.exe --portable artifacts/portable/BlockHarbor.exe --version $version
           if ($LASTEXITCODE -ne 0) { throw 'Windows setup and runtime smoke failed' }
       - name: Chromium UI scenarios on Windows
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $browser = 'C:\Program Files\Google\Chrome\Application\chrome.exe'

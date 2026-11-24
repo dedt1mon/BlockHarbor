@@ -13,9 +13,53 @@ from functools import lru_cache
 from . import lifecycle
 
 
+@lru_cache(maxsize=1)
+def _windows_file_api():
+    import ctypes
+    import msvcrt
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_int64) for name in
+                    ("CreationTime", "LastAccessTime", "LastWriteTime", "ChangeTime")] + [
+                        ("FileAttributes", ctypes.c_uint32)]
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
+    query.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    query.restype = ctypes.c_int
+    return ctypes, msvcrt, FileBasicInfo, query
+
+
+def _content_stamp(file):
+    """Safe slower fallback for filesystems without a change-time query."""
+    digest = hashlib.sha256()
+    with file.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            lifecycle.check()
+            digest.update(block)
+    return "sha256:" + digest.hexdigest()
+
+
+def _windows_change_token(file):
+    # CPython 3.12/3.13 st_ctime on Windows is still creation time. Query the
+    # actual metadata ChangeTime rather than accepting a stale hash cache after
+    # a same-size edit whose mtime was restored by an archive/copy tool.
+    try:
+        ctypes, msvcrt, basic, query = _windows_file_api()
+        with file.open("rb") as stream:
+            information = basic()
+            if query(msvcrt.get_osfhandle(stream.fileno()), 0, ctypes.byref(information), ctypes.sizeof(information)) and information.ChangeTime > 0:
+                return information.ChangeTime
+    except (OSError, ImportError, AttributeError):
+        pass
+    # A content fingerprint is real evidence, not a guessed replacement time.
+    # Keeping it stable also preserves before/after file-change guards.
+    return _content_stamp(file)
+
+
 def file_stamp(file):
     st = file.stat()
-    return st.st_size, st.st_mtime_ns, st.st_ctime_ns
+    change = _windows_change_token(file) if os.name == "nt" else st.st_ctime_ns
+    return st.st_size, st.st_mtime_ns, change
 
 
 @lru_cache(maxsize=1024)

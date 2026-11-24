@@ -579,7 +579,7 @@ def _install(
                         task = " (" + str(exc.cmd[index]) + ")"
                 raise RuntimeError(
                     f"Установщик {loader} завершился с кодом {exc.returncode}{task}. "
-                    "Проверь доступ Java к интернету и снова нажми «Играть»."
+                    + preparation.processor_diagnostic(exc)
                 ) from None
             if not _manifest_path(cache, installed).is_file():
                 raise RuntimeError(
@@ -645,7 +645,7 @@ def install(
     lifecycle.check()
     loader = _check(version, loader)
     cache = Path(cache).resolve()
-    with _install_lock(cache), preparation.job(status) as progress:
+    with _install_lock(cache), preparation.job(status, cache=cache) as progress:
         return _install(
             version, loader, cache, Path(instance).resolve(), progress, official=False
         )
@@ -758,7 +758,7 @@ def official_prepare(
             status(f"Установка готова: {label}")
             return label
         _check_official_closed()
-        with preparation.job(status) as progress:
+        with preparation.job(status, cache=cache) as progress:
             installed = _install(
                 version, loader, cache, instance, progress, official=True
             )

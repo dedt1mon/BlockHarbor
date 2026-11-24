@@ -137,8 +137,8 @@ function registry(t) {
   const env = {DB:new D1Fixture(), BUCKET:new R2Fixture(),
     RATE_SALT:'integration-test-only-long-random-test-salt-2026'};
   t.after(() => env.DB.db.close());
-  const call = (method, path, body, token, {ip='203.0.113.10'}={}) => {
-    const headers = {'CF-Connecting-IP':ip};
+  const call = (method, path, body, token, {ip='203.0.113.10', headers:extraHeaders={}}={}) => {
+    const headers = {'CF-Connecting-IP':ip,...extraHeaders};
     if (body) headers['Content-Length'] = String(body.length);
     if (token) headers.Authorization = 'Bearer '+token;
     return worker.fetch(new Request('https://catalog.test/v1/'+path,{method, body, headers}),env);
@@ -577,4 +577,34 @@ test('scheduled cleanup has a bounded per-invocation budget and drains the remai
   assert.equal(api.env.BUCKET.objects.size,0);
   assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM builds').get().n,0);
   assert.equal(api.env.DB.db.prepare('SELECT COUNT(*) AS n FROM publication_events').get().n,150);
+});
+
+test('public archives resume with an immutable strong validator and every range obeys expiry',async t => {
+  const api=registry(t), upload=await api.open(metadata(small));
+  await upload.put(1,small);
+  const listing=await (await upload.finish()).json();
+  const first=await api.call('GET','builds/'+listing.id+'/archive');
+  const validator=first.headers.get('ETag');
+  assert.equal(validator,'"sha256-'+sha(small)+'"');
+  assert.equal(first.headers.get('Accept-Ranges'),'bytes');
+  const offset=31;
+  const range=await api.call('GET','builds/'+listing.id+'/archive',undefined,undefined,
+    {headers:{Range:`bytes=${offset}-`,'If-Range':validator}});
+  assert.equal(range.status,206);
+  assert.equal(range.headers.get('ETag'),validator);
+  assert.equal(range.headers.get('Content-Range'),`bytes ${offset}-${small.length-1}/${small.length}`);
+  assert.equal(Number(range.headers.get('Content-Length')),small.length-offset);
+  assert.deepEqual(Buffer.from(await range.arrayBuffer()),small.subarray(offset));
+  const changed=await api.call('GET','builds/'+listing.id+'/archive',undefined,undefined,
+    {headers:{Range:`bytes=${offset}-`,'If-Range':'"wrong"'}});
+  assert.equal(changed.status,200);
+  assert.equal(sha(new Uint8Array(await changed.arrayBuffer())),sha(small));
+  for(const value of [`bytes=${small.length}-`,'bytes=5-2','bytes=0-5,10-15','bytes=-30']) {
+    const invalid=await api.call('GET','builds/'+listing.id+'/archive',undefined,undefined,{headers:{Range:value}});
+    assert.equal(invalid.status,416);
+    assert.equal(invalid.headers.get('Content-Range'),'bytes */'+small.length);
+  }
+  api.env.DB.db.exec("UPDATE builds SET created=0");
+  assert.equal((await api.call('GET','builds/'+listing.id+'/archive',undefined,undefined,
+    {headers:{Range:`bytes=${offset}-`,'If-Range':validator}})).status,404);
 });

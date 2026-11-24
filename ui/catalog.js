@@ -340,8 +340,8 @@ function openModrinth(profile, category) {
         : '<p class="empty">У проекта нет доступных файлов для этой версии игры и загрузчика.</p>');
     loadIcons(detail);
     const select = detail.querySelector("select");
-    if (select && releases.some((v) => v.id === selection.get(item.id)))
-      select.value = selection.get(item.id);
+    const preferred = selection.get(item.id) || item.recommendedVersion;
+    if (select && releases.some((v) => v.id === preferred)) select.value = preferred;
     updateVersion();
     browse.hidden = true;
     detail.hidden = false;
@@ -416,10 +416,15 @@ function openModrinth(profile, category) {
         }
       }
       area.innerHTML = compatibilitySummary(result);
-      checkedItems = result.items;
-      checkedToken = result.reviewToken || "";
-      install.disabled = result.blocked || !checkedItems?.length;
-      install.textContent = result.blocked ? "Установка недоступна" : checkedToken ? "Установить с предупреждением" : checkedItems?.length < items.length ? "Установить доступные (" + checkedItems.length + ")" : "Установить выбранное";
+      const available = Array.isArray(result.items) ? result.items : [];
+      const normalized = new Map(available.map(item => [item.project, item]));
+      // Keep every selected object observable in the job, including a failed
+      // preview. The installer rechecks each independent group safely.
+      checkedItems = items.map(item => ({...item, ...(normalized.get(item.project) || {})}));
+      const partial = available.length < items.length;
+      checkedToken = partial ? "" : result.reviewToken || "";
+      install.disabled = result.blocked || !available.length;
+      install.textContent = result.blocked ? "Установка недоступна" : checkedToken ? "Установить с предупреждением" : partial ? "Установить доступные (" + available.length + ")" : "Установить выбранное";
     } catch (error) {
       if (!active()) return;
       area.innerHTML = `<p class="compat-error">${esc(error.message)}</p><button class="linkbtn" type="button" data-cart-retry>Повторить проверку</button>`;
@@ -511,6 +516,7 @@ function openModrinth(profile, category) {
           kind: category,
           project: project.id,
           version: detail.querySelector("#catalogVersion").value,
+          source: project.source || source.value || "all",
           acknowledgement: el.dataset.acknowledgement || "",
         });
       } catch (error) {

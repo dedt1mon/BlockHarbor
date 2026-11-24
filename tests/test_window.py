@@ -40,7 +40,7 @@ class DesktopWindowTests(unittest.TestCase):
             with (
                 patch.object(window.sys, "platform", "win32"),
                 patch.object(
-                    window, "browser_executable", return_value=Path(temp) / "edge.exe"
+                    window, "browser_executables", return_value=[Path(temp) / "chrome.exe"]
                 ),
                 patch.object(window, "NativeFrame", return_value=api),
                 patch.object(window.subprocess, "Popen") as spawn,
@@ -48,7 +48,7 @@ class DesktopWindowTests(unittest.TestCase):
                 host.show("http://127.0.0.1:7501/#test-token")
                 args = spawn.call_args.args[0]
                 self.assertIn(
-                    "--user-data-dir=" + str(Path(temp).resolve() / "window-profile"),
+                    "--user-data-dir=" + str(window.host_profile(host.profile, Path(temp) / "chrome.exe")),
                     args,
                 )
                 self.assertIn(
@@ -68,12 +68,74 @@ class DesktopWindowTests(unittest.TestCase):
                 host.show("http://127.0.0.1:7501/#test-token")
                 self.assertEqual(spawn.call_count, 1)
 
+    def test_browser_discovery_prefers_non_edge_and_keeps_edge_optional(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = [root / relative for relative in window.BROWSER_PATHS]
+            for item in paths:
+                item.parent.mkdir(parents=True, exist_ok=True)
+                item.touch()
+            with patch.dict(window.os.environ, {
+                "ProgramW6432": temp, "ProgramFiles": temp,
+                "ProgramFiles(x86)": temp, "LOCALAPPDATA": temp,
+            }, clear=True):
+                self.assertEqual(list(window.browser_executables()), paths)
+                self.assertEqual(window.browser_executable(), paths[0])
+                paths[-1].unlink()
+                self.assertEqual(list(window.browser_executables()), paths[:-1])
+                for item in paths[:-1]:
+                    item.unlink()
+                self.assertEqual(list(window.browser_executables()), [])
+                self.assertIsNone(window.browser_executable())
+
+    def test_browser_fallback_uses_separate_profile_and_no_default_tab(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = window.DesktopWindow(temp)
+            chrome = Path(temp) / "chrome.exe"
+            brave = Path(temp) / "brave.exe"
+            native = Mock()
+            with (
+                patch.object(window.sys, "platform", "win32"),
+                patch.object(window, "browser_executables", return_value=[chrome, brave]),
+                patch.object(window, "NativeFrame", return_value=native),
+                patch.object(window.subprocess, "Popen", side_effect=[OSError("failed browser"), Mock()]) as spawn,
+                patch.object(window.lifecycle, "own_process", return_value=lambda: None),
+                patch.object(window.webbrowser, "open") as fallback,
+            ):
+                host.show("http://127.0.0.1:80/#token")
+                self.assertEqual(spawn.call_count, 2)
+                first, second = (call.args[0] for call in spawn.call_args_list)
+                self.assertEqual(first[0], str(chrome))
+                self.assertEqual(second[0], str(brave))
+                self.assertNotEqual(window.host_profile(host.profile, chrome), window.host_profile(host.profile, brave))
+                self.assertIn("--user-data-dir=" + str(window.host_profile(host.profile, brave)), second)
+                self.assertIs(host.native, native)
+                fallback.assert_not_called()
+
+    def test_firefox_dedicated_window_without_edge(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = window.DesktopWindow(temp)
+            firefox = Path(temp) / "firefox.exe"
+            with (
+                patch.object(window.sys, "platform", "win32"),
+                patch.object(window, "browser_executables", return_value=[firefox]),
+                patch.object(window, "NativeFrame"),
+                patch.object(window.subprocess, "Popen") as spawn,
+                patch.object(window.lifecycle, "own_process", return_value=lambda: None),
+            ):
+                host.show("http://127.0.0.1:81/#token")
+                args = spawn.call_args.args[0]
+                self.assertIn("-no-remote", args)
+                self.assertIn("-new-window", args)
+                self.assertIn(str(host.profile.with_name("firefox-" + host.profile.name)), args)
+                self.assertNotIn("--app", args)
+
     def test_default_browser_fallback_never_receives_native_bounds_request(self):
         with tempfile.TemporaryDirectory() as temp:
             host = window.DesktopWindow(temp)
             with (
                 patch.object(window.sys, "platform", "win32"),
-                patch.object(window, "browser_executable", return_value=None),
+                patch.object(window, "browser_executables", return_value=[]),
                 patch.object(window.webbrowser, "open", return_value=True) as browser,
             ):
                 host.show("http://127.0.0.1:90/#token")
@@ -92,8 +154,8 @@ class DesktopWindowTests(unittest.TestCase):
                     patch.object(window.sys, "platform", "win32"),
                     patch.object(
                         window,
-                        "browser_executable",
-                        return_value=Path(temp) / "edge.exe",
+                        "browser_executables",
+                        return_value=[Path(temp) / "msedge.exe"],
                     ),
                     patch.object(
                         window,

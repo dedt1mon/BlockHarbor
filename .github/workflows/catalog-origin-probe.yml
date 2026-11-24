@@ -15,21 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Probe public catalog with no credentials
+      - name: Read-only public API compatibility smoke
         shell: bash
         run: |
           python3 - <<'PY'
           import urllib.request, urllib.error, json
-          targets = [
-              "https://blockharbor-community-catalog.ded8timon.chatgpt.site/v1/builds",
-              "https://github.com/dedt1mon/BlockHarbor/releases/latest",
-          ]
-          for url in targets:
-              print("URL", url, flush=True)
+          root = "https://blockharbor-community-catalog.ded8timon.chatgpt.site"
+          urls = {
+              "origin": root + "/",
+              "policy": root + "/v1/capabilities",
+              "catalog": root + "/v1/builds",
+              "mirror": "https://github.com/dedt1mon/BlockHarbor/releases/download/community-mirror-index/index.json",
+          }
+          for label, url in urls.items():
               try:
-                  req = urllib.request.Request(url, headers={"User-Agent": "BlockHarbor/2.6.3", "Accept": "application/json"})
-                  with urllib.request.urlopen(req, timeout=20) as response:
-                      print("OK", response.status, "type", response.headers.get("Content-Type"), "sample", response.read(400).decode("utf-8", "replace"), flush=True)
+                  req = urllib.request.Request(url, headers={"User-Agent": "BlockHarbor/2.6.6", "Accept": "application/json"})
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      data = json.loads(response.read(8*1024*1024))
+                      if label == "policy":
+                          print(label, response.status, "retention=", data.get("publicRetentionSeconds"), "limits=", data.get("publishLimits"), flush=True)
+                      elif label in ("catalog", "mirror"):
+                          print(label, response.status, "total=", data.get("total"), flush=True)
+                      else:
+                          print(label, response.status, "retention=", data.get("publicRetentionSeconds"), flush=True)
+              except urllib.error.HTTPError as exc:
+                  print(label, "HTTP", exc.code, flush=True)
               except Exception as exc:
-                  print("FAILED", type(exc).__name__, str(exc), flush=True)
+                  print(label, "unavailable:", type(exc).__name__, flush=True)
           PY

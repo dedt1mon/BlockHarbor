@@ -7,6 +7,7 @@ python tools/build_installer.py --launcher ../BlockHarbor-Windows-x64/BlockHarbo
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import os
 import re
@@ -45,6 +46,19 @@ def nsis_literal(text, *, runtime=False):
     if runtime:
         value = value.replace("$", "$$")
     return value.replace('"', '$\\"')
+
+
+def stage_unicode_script(source, target):
+    """NSIS Unicode output alone does not define the input source code page.
+
+    Stage an explicit UTF-8 BOM for every build, independent of checkout locale,
+    Git's BOM handling, and the active Windows ANSI code page.
+    """
+    original = source.read_text(encoding="utf-8-sig")
+    if "\ufffd" in original:
+        raise ValueError("Installer source contains a Unicode replacement character")
+    target.write_bytes(codecs.BOM_UTF8 + original.encode("utf-8"))
+    return target
 
 
 def build_cleanup(go, output):
@@ -90,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--version", default="2.6.5")
+    parser.add_argument("--version", default="2.6.6")
     parser.add_argument("--makensis", default="makensis", help="NSIS 3.13+ compiler")
     parser.add_argument("--go", default="go", help="Go 1.25+ compiler for the safe data cleanup helper")
     parser.add_argument(
@@ -133,10 +147,14 @@ def main():
             "APP_SIZE": (size + cleanup.stat().st_size + 1023) // 1024 + 256,
         }
         option = "/" if os.name == "nt" else "-"
+        script = stage_unicode_script(
+            TOOLS / "installer_windows.nsi", Path(temp) / "installer_windows.nsi"
+        )
         subprocess.run(
             [
                 args.makensis,
                 option + "V3",
+                option + "INPUTCHARSET", "UTF8",
                 *(
                     option
                     + "D"
@@ -145,7 +163,7 @@ def main():
                     + nsis_literal(value, runtime=key == "PROJECT_URL")
                     for key, value in defines.items()
                 ),
-                str(TOOLS / "installer_windows.nsi"),
+                str(script),
             ],
             check=True,
             cwd=TOOLS,

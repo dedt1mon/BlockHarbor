@@ -148,7 +148,7 @@ class RegisteredFrameLifecycleTests(unittest.TestCase):
     def test_default_browser_window_stays_visible_and_no_new_tab_opens_on_exit(self):
         self.host.native = None
         with (
-            patch.object(window, "browser_executable", return_value=None),
+            patch.object(window, "browser_executables", return_value=[]),
             patch.object(window.webbrowser, "open", return_value=True) as open_tab,
         ):
             self.host.show(self.host.url)

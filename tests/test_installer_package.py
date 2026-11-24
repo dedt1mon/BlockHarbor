@@ -112,6 +112,21 @@ class InstallerPackageTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "Windows"):
                         builder.build_cleanup("go", output)
 
+    def test_nsis_source_is_explicit_utf8_bom_even_on_non_russian_windows(self):
+        source_text = 'Unicode true\nName "Установка BlockHarbor"\n'
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source.nsi"
+            target = Path(temp) / "compiled.nsi"
+            for encoding in ("utf-8", "utf-8-sig"):
+                with self.subTest(encoding=encoding):
+                    source.write_bytes(source_text.encode(encoding))
+                    self.assertEqual(builder.stage_unicode_script(source, target), target)
+                    self.assertEqual(target.read_bytes(), b"\xef\xbb\xbf" + source_text.encode("utf-8"))
+                    self.assertEqual(target.read_text(encoding="utf-8-sig"), source_text)
+            source.write_bytes(b"\xff")
+            with self.assertRaises(UnicodeDecodeError):
+                builder.stage_unicode_script(source, target)
+
     def test_setup_build_embeds_the_verified_helper(self):
         with tempfile.TemporaryDirectory() as tmp:
             launcher = Path(tmp) / "BlockHarbor.exe"
@@ -124,6 +139,11 @@ class InstallerPackageTests(unittest.TestCase):
                 if command[1] == "build":
                     target = Path(command[command.index("-o") + 1])
                 else:
+                    self.assertIn("UTF8", command)
+                    self.assertTrue(any(arg.endswith("INPUTCHARSET") for arg in command))
+                    source = Path(command[-1])
+                    self.assertTrue(source.read_bytes().startswith(b"\xef\xbb\xbf"))
+                    self.assertIn("Установка BlockHarbor", source.read_text(encoding="utf-8-sig"))
                     definitions = dict(arg[2:].split("=", 1) for arg in command if arg.startswith(("-D", "/D")))
                     helper = Path(definitions["CLEANUP_EXE"])
                     self.assertEqual(helper.read_bytes(), self.native_binary())

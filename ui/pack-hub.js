@@ -253,8 +253,9 @@
   function showPublish(id) {
     const profile = state.profiles.find(p => p.id === id);
     if (!profile) return;
-    const previous = publicationCache.get(id)?.publications;
-    const knownPublished = Boolean(previous?.length);
+    const previous = (publicationCache.get(id)?.publications || []).filter(row =>
+      !row.expiresAt || row.expiresAt * 1000 > Date.now());
+    const knownPublished = previous.length > 0;
     modal("Поделиться сборкой", `<form class="community-publish ${knownPublished ? "is-published" : "is-checking"}" data-pack-publish="${esc(id)}">
       <label>Название в каталоге<input class="field" name="name" value="${esc(profile.name)}" required maxlength="48"></label>
       <div class="field-group"><label>Версия Minecraft<input class="field" readonly value="${esc(profile.version)}"></label>
@@ -286,8 +287,9 @@
 
   function showPublicationBan(details) {
     const seconds = Math.max(0, Math.min(5 * 3600, Number(details?.retryAfterSeconds) || 5 * 3600));
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.ceil((seconds % 3600) / 60);
+    const totalMinutes = Math.ceil(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
     const remaining = hours + " ч " + String(minutes).padStart(2, "0") + " мин";
     const until = Number(details?.blockedUntil);
     const date = Number.isSafeInteger(until) && until > Date.now() / 1000 &&

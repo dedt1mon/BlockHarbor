@@ -421,3 +421,14 @@ test('capabilities endpoint advertises effective one-hour and anti-spam constrai
   // Policy discovery is read-only and cannot consume any publisher quotas.
   assert.equal(api.env.DB.db.prepare('SELECT count(*) AS n FROM publisher_rate').get().n,0);
 });
+
+test('capabilities do not report an unconfigured publisher as operational',async t => {
+  const api=registry(t);
+  api.env.RATE_SALT='';
+  assert.equal((await api.call('GET','capabilities')).status,503);
+  assert.equal((await api.call('GET','builds')).status,200);
+  api.env.RATE_SALT='integration-test-only-long-random-test-salt-2026';
+  api.env.DB.db.exec('DROP TABLE publisher_rate');
+  assert.equal((await api.call('GET','capabilities')).status,503);
+  assert.equal((await api.call('GET','builds')).status,200);
+});

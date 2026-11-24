@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import secrets
 import subprocess
@@ -49,23 +50,56 @@ def window_bounds(rect, work, dpi, *, opening=False, maximized=False):
     )
 
 
-def browser_executable():
+# Separate browser profiles keep BlockHarbor windows away from a user's
+# ordinary tabs, account cookies and sessions. Edge is a last resort only.
+BROWSER_PATHS = (
+    "Google/Chrome/Application/chrome.exe",
+    "BraveSoftware/Brave-Browser/Application/brave.exe",
+    "Chromium/Application/chrome.exe",
+    "Vivaldi/Application/vivaldi.exe",
+    "Mozilla Firefox/firefox.exe",
+    "Microsoft/Edge/Application/msedge.exe",
+)
+
+
+def browser_executables():
     directories = [
         os.getenv(key)
-        for key in ("ProgramFiles(x86)", "ProgramW6432", "ProgramFiles", "LOCALAPPDATA")
+        for key in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")
     ]
-    for name in (
-        "Microsoft/Edge/Application/msedge.exe",
-        "Google/Chrome/Application/chrome.exe",
-        "BraveSoftware/Brave-Browser/Application/brave.exe",
-        "Mozilla Firefox/firefox.exe",
-    ):
+    seen = set()
+    for name in BROWSER_PATHS:
         for folder in directories:
-            if folder:
-                exe = Path(folder) / name
-                if exe.is_file():
-                    return exe
-    return None
+            if not folder:
+                continue
+            exe = Path(folder) / name
+            try:
+                if not exe.is_file():
+                    continue
+                canonical = str(exe.resolve()).casefold()
+            except (OSError, RuntimeError):
+                continue
+            if canonical not in seen:
+                seen.add(canonical)
+                yield exe
+
+
+def browser_executable():
+    """Retain a simple preferred-host query for integrations and diagnostics."""
+    return next(browser_executables(), None)
+
+
+def host_profile(base, executable):
+    """Never open one Chromium product's profile with another product."""
+    name = executable.name.lower()
+    if name == "msedge.exe":
+        return base  # Preserve existing isolated Edge installations.
+    if name == "firefox.exe":
+        return base.with_name("firefox-" + base.name)
+    fingerprint = hashlib.sha256(
+        str(executable.resolve()).casefold().encode("utf-8")
+    ).hexdigest()[:12]
+    return base.with_name(executable.stem.lower() + "-" + fingerprint + "-" + base.name)
 
 
 def _private_profile(path):
@@ -173,7 +207,7 @@ class NativeFrame:
             return False
         suffix = title[len(caption) :].replace("\u200b", "").replace("\xa0", " ")
         return suffix.startswith((" - ", " — ", " – ")) and suffix.rstrip().endswith(
-            ("Google Chrome", "Microsoft Edge", "Chromium", "Brave", "Mozilla Firefox")
+            ("Google Chrome", "Microsoft Edge", "Chromium", "Brave", "Vivaldi", "Mozilla Firefox")
         )
 
     def register(self, marker):
@@ -460,15 +494,15 @@ class DesktopWindow:
                 return
             if self.native and self.native.hwnd and self.native.alive():
                 return  # A title/navigation transition is not a second app host.
-            exe = browser_executable() if sys.platform == "win32" else None
-            if exe:
+            candidates = browser_executables() if sys.platform == "win32" else ()
+            for exe in candidates:
                 try:
                     native = NativeFrame()
                     marker = secrets.token_hex(12)
                     base, fragment = url.split("#", 1)
                     address = base + "?window=" + marker + "#" + fragment
+                    profile = _private_profile(host_profile(self.profile, exe))
                     if exe.name.lower() == "firefox.exe":
-                        profile = _private_profile(self.profile.with_name("firefox-" + self.profile.name))
                         command = [
                             str(exe),
                             "-no-remote",
@@ -478,10 +512,9 @@ class DesktopWindow:
                             address,
                         ]
                     else:
-                        _private_profile(self.profile)
                         command = [
                             str(exe),
-                            "--user-data-dir=" + str(self.profile),
+                            "--user-data-dir=" + str(profile),
                             "--app=" + address,
                             f"--window-size={WIDTH},{HEIGHT}",
                             "--no-first-run",
@@ -508,7 +541,7 @@ class DesktopWindow:
                     return
         if not webbrowser.open(url):
             raise RuntimeError(
-                "Не удалось открыть окно. Установи Microsoft Edge или выбери браузер по умолчанию."
+                "Не удалось открыть окно. Выбери рабочий браузер по умолчанию или установи Chrome, Brave, Chromium, Vivaldi или Firefox."
             )
 
     def adjust(self, marker):

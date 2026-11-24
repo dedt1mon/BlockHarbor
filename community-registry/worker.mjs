@@ -380,7 +380,15 @@ async function handle(request,env) {
     releases:'https://github.com/dedt1mon/BlockHarbor/releases',
     api:'/v1/builds', ...capabilities(),
   });
-  if(path==='/v1/capabilities' && method==='GET') return json(capabilities());
+  if(path==='/v1/capabilities' && method==='GET') {
+    // Advertise support only if the migration and server secret are present.
+    // Merely uploading this source must not make an unconfigured backend
+    // appear ready in the launcher.
+    requireThat(typeof env.RATE_SALT==='string' && env.RATE_SALT.length>=32 &&
+      env.DB && env.BUCKET,503,'Сервис публикации ещё не настроен.');
+    await env.DB.prepare('SELECT subject FROM publisher_rate LIMIT 1').first();
+    return json(capabilities());
+  }
   if(path==='/v1/builds' && method==='GET') return search(env,url.searchParams);
   if(path==='/v1/uploads' && method==='POST') return begin(request,env);
   const upload=/^\/v1\/uploads\/([a-f0-9]{32})\/(?:parts\/(\d{1,3})|(complete))$/.exec(path);

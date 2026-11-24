@@ -41,6 +41,10 @@ jobs:
         shell: bash
         run: |
           for file in ui/*.js; do node --check "$file"; done
+      - name: Window lifecycle and community API contracts
+        run: |
+          node tests/window-lifecycle.cjs
+          node --test community-registry/worker.test.mjs
 
   release:
     needs: tests
@@ -122,6 +126,18 @@ jobs:
             "$hash  $name"
           }
           [System.IO.File]::WriteAllLines((Join-Path $release "SHA256SUMS.txt"), $sums, [System.Text.UTF8Encoding]::new($false))
+
+      - name: Verify compiled Russian metadata and actual Windows setup
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:RUNNER_TEMP "blockharbor-release"
+          $setup = Join-Path $release "BlockHarbor-Setup-$env:RELEASE_VERSION.exe"
+          $portable = Join-Path $release "BlockHarbor.exe"
+          $description = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($setup).FileDescription
+          if ($description -cne "Установщик BlockHarbor") { throw "Installer Russian version resource mismatch: $description" }
+          Write-Host "PASS: compiled Cyrillic FileDescription"
+          python tools/smoke_windows_release.py --setup $setup --portable $portable --version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Windows install and packaged runtime smoke test failed" }
 
       - name: Publish stable GitHub Release
         shell: pwsh

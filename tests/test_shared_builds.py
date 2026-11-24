@@ -151,13 +151,9 @@ class SharedBuildsTests(unittest.TestCase):
         def download(url, target, hashes, size, **kwargs):
             target.write_bytes(new if hashes["sha512"] == rows[0]["hashes"]["sha512"] else second)
 
-        original_replace = os.replace
-        def replace(source, destination):
-            if Path(destination) == self.folder / "mods/second.jar" and "new" in Path(source).parts:
-                raise OSError("busy")
-            return original_replace(source, destination)
-
-        with patch.object(shared, "download_verified", side_effect=download), patch("launcher.build_care.os.replace", side_effect=replace), self.assertRaises(OSError):
+        # The first existing file is replaced; publication of the second, new
+        # file then fails. The durable transaction must roll back the first too.
+        with patch.object(shared, "download_verified", side_effect=download), patch("launcher.build_care.publish_new", side_effect=OSError("busy")), self.assertRaises(OSError):
             self.share.apply(plan["token"], mode="existing")
         self.assertEqual((self.folder / "mods/demo.jar").read_bytes(), old)
         self.assertFalse((self.folder / "mods/second.jar").exists())
@@ -199,6 +195,38 @@ share.apply(plan['token'],mode='existing')
         self.assertEqual((self.folder / "mods/demo.jar").read_bytes(), old)
         self.assertFalse((self.folder / "mods/second.jar").exists())
         self.assertFalse(list((self.store.root / "recovery").glob("transaction-*")))
+        reopened = shared.SharedBuilds(Store(self.store.root))
+        self.assertEqual(reopened.recover_staging(), 1)
+        self.assertFalse(list(self.store.root.glob("share-sync-*")))
+
+    def test_staging_recovery_preserves_active_and_unowned_folders(self):
+        from launcher.sessions import atomic_json, process_identity
+        active = self.store.root / "share-sync-abcdefgh"
+        unowned = self.store.root / "share-sync-12345678"
+        active.mkdir()
+        unowned.mkdir()
+        atomic_json(active / "owner.json", {"format": "BlockHarborShareStaging/1", "owner": process_identity(os.getpid())})
+        (unowned / "personal.txt").write_text("keep")
+        self.assertEqual(self.share.recover_staging(), 0)
+        self.assertTrue(active.is_dir())
+        self.assertEqual((unowned / "personal.txt").read_text(), "keep")
+
+    def test_manual_file_created_before_commit_is_not_overwritten(self):
+        old, new, second = jar("demo", "1"), jar("demo", "2"), jar("second", "1")
+        (self.folder / "mods/demo.jar").write_bytes(old)
+        rows = [entry("mods/demo.jar", new, ["demo"]), entry("mods/second.jar", second, ["second"])]
+        plan = self.share.compare(self.pid, descriptor(rows))
+        transaction = self.share.commit_changes
+        def racing_commit(pid, prepared, sections, **kwargs):
+            (self.folder / "mods/second.jar").write_bytes(b"manual file")
+            return transaction(pid, prepared, sections, **kwargs)
+        self.share.commit_changes = racing_commit
+        def download(url, target, hashes, size, **kwargs):
+            target.write_bytes(new if hashes["sha512"] == rows[0]["hashes"]["sha512"] else second)
+        with patch.object(shared, "download_verified", side_effect=download), self.assertRaises(ValueError):
+            self.share.apply(plan["token"], mode="existing")
+        self.assertEqual((self.folder / "mods/demo.jar").read_bytes(), old)
+        self.assertEqual((self.folder / "mods/second.jar").read_bytes(), b"manual file")
 
     def test_invalid_codes_paths_hashes_and_decompression_bomb(self):
         bomb = "bhshare:" + base64.urlsafe_b64encode(zlib.compress(b"x" * (shared.MAX_DESCRIPTOR + 1))).decode().rstrip("=")

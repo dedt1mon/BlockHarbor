@@ -493,6 +493,7 @@ def _install(
     status: Status,
     official: bool,
 ) -> str:
+    preparation.cleanup_interrupted_downloads(cache)
     previous = _record(instance)
     same = previous.get("version") == version and previous.get("loader") == loader
     pin = previous.get("loader_version") if same else None

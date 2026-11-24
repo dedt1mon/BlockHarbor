@@ -27,6 +27,7 @@ from launcher import (
     build_archive,
     cards,
     catalog_batch,
+    catalog_search,
     distances,
     e4steam,
     friends,
@@ -188,6 +189,7 @@ class App:
         else:
             self.care._recover()
             self.initial_recovery = True
+        self.sharing.recover_staging()
 
     def _signal_close(self, reason):
         with self.lifecycle_lock:
@@ -1596,7 +1598,7 @@ class Handler(BaseHTTPRequestHandler):
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 store = self.app.store
                 if u.path.endswith("/search"):
-                    result = modrinth.search(
+                    result = catalog_search.search(
                         store.profile(q["id"]),
                         q["kind"],
                         q.get("q", ""),

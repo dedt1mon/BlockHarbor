@@ -35,7 +35,7 @@ window.BuildCareUI = (() => {
       <span class="installed-icon" aria-hidden="true" data-image="${text(row.icon || "")}">${ic(kinds[category]?.[1] || "cube")}</span>
       <button type="button" class="care-title" data-care-detail="${text(row.name)}"><strong>${text(row.title || row.name)}</strong><span>${text(row.description || row.filename || row.name)}</span></button>
       <span class="care-version">${text(row.version || "Локальный файл")}${row.pinned ? '<small title="Пропускается при обновлении">Версия закреплена</small>' : ""}</span>
-      ${row.managed ? '<span class="pill">Встроено</span>' : `<label class="care-switch" title="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}"><input type="checkbox" aria-label="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}" data-care-toggle="${text(row.name)}" ${enabled ? "checked" : ""}/><span aria-hidden="true"></span><b class="sr-only">${enabled ? "Включён" : "Отключён"}</b></label>`}
+      ${row.managed ? '<span class="pill">Встроено</span>' : `<label class="care-switch" title="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}"><input type="checkbox" role="switch" aria-label="${enabled ? "Отключить" : "Включить"} ${text(row.title || row.name)}" data-care-toggle="${text(row.name)}" ${enabled ? "checked" : ""}/><span aria-hidden="true"></span><b class="sr-only">${enabled ? "Включён" : "Отключён"}</b></label>`}
       <span class="care-size">${fmt(row.size)}</span>
     </div>`;
   }

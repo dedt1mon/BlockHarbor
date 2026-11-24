@@ -24,6 +24,7 @@
   --space-3: 12px;
   --space-4: 16px;
   --scrollbar-thumb: #59695d;
+  --checkbox-size: 17px;
   --switch-width: 40px;
   --switch-height: 24px;
   --switch-thumb: 16px;
@@ -108,6 +109,11 @@ a.btn {
 }
 :where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--lime);
+}
+:where(input[type="checkbox"]:not([role="switch"]), input[type="radio"]) {
+  width: var(--checkbox-size);
+  height: var(--checkbox-size);
+  flex-shrink: 0;
 }
 aside {
   min-height: 0;
@@ -795,7 +801,7 @@ label > .field {
   display: block;
   margin-top: 6px;
 }
-.field:hover:not(:disabled):not([readonly]) {
+.field:hover:not(:focus):not(:disabled):not([readonly]) {
   border-color: var(--control-hover);
 }
 .field:focus,

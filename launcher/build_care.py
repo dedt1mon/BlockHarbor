@@ -641,6 +641,7 @@ class BuildCare:
     def _commit_transaction(self, pid, prepared, sections, new_profile=None, pins=None, settings=None, *, no_replace=()):
         root = self._writable_root(pid)
         require_idle_files(root)
+        no_replace = frozenset(no_replace)
         if len(sections) > MAX_TRANSACTION_TARGETS:
             raise ValueError("Слишком много файлов в одной транзакции.")
         for name in no_replace:
@@ -657,6 +658,8 @@ class BuildCare:
         if settings is not None:
             journal["oldSettings"] = {k: self.store.get(k + ":" + pid, None) for k in PROFILE_SETTINGS}
         try:
+            if len(json.dumps(journal, ensure_ascii=False).encode("utf-8")) > MAX_JOURNAL - 128:
+                raise ValueError("Журнал изменений слишком большой. Уменьши число файлов в операции.")
             os.replace(prepared, work / "new")
             (work / "old").mkdir()
             _atomic_json(work / "journal.json", journal)

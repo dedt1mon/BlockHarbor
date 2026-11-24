@@ -160,6 +160,37 @@ class PublicationReceiptTests(unittest.TestCase):
         self.assertEqual(restarted.sync_notifications(self.experience.notify), 1)
         self.assertTrue(self.store.folder(pid).exists())
 
+    def test_pre_retention_owner_token_survives_server_migration_and_public_404(self):
+        pid = self.store.create("Старая публикация", "1.20.1", "fabric")
+        legacy = {key: value for key, value in self.listing.items() if key != "expiresAt"}
+        with self.store.connection() as db:
+            db.execute("DELETE FROM community_receipts")
+            db.execute("INSERT INTO community_uploads VALUES(?,?,?,?,?,?)",
+                       (self.api.origin, pid, "legacy", "a" * 32, "b" * 64, json.dumps(legacy)))
+        original = self.api.json
+        def migrated(method, path, **kwargs):
+            if path.startswith("builds/"):
+                raise CatalogError(404, "Срок публикации истёк")
+            return original(method, path, **kwargs)
+        self.api.json = migrated
+        restarted = CommunityCatalog(Store(self.store.root), self.api)
+        self.assertEqual(restarted.publications(pid)["publications"], [])
+        self.assertEqual(restarted.sync_notifications(self.experience.notify), 1)
+        self.assertEqual(self.experience.notification_unread(), 1)
+
+    def test_ack_retires_upload_record_so_restart_cannot_requeue_it(self):
+        pid = self.store.create("Завершённая публикация", "1.20.1", "fabric")
+        with self.store.connection() as db:
+            db.execute("INSERT INTO community_uploads VALUES(?,?,?,?,?,?)",
+                       (self.api.origin, pid, "old", "a" * 32, "b" * 64, json.dumps(self.listing)))
+        self.assertEqual(self.community.sync_notifications(self.experience.notify), 1)
+        restarted = CommunityCatalog(Store(self.store.root), self.api)
+        self.assertEqual(restarted.sync_notifications(self.experience.notify), 0)
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM community_receipts").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM community_uploads").fetchone()[0], 0)
+        self.assertTrue(self.store.folder(pid).exists())
+
 
 class CatalogRetryTests(unittest.TestCase):
     def test_safe_json_retry_is_bounded_and_reservations_are_not_repeated(self):

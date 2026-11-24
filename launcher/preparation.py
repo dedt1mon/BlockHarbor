@@ -36,6 +36,7 @@ _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
 _HEADERS = {"User-Agent": "BlockHarbor/2.6.8", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
+_POOLED_MOJANG = {"resources.download.minecraft.net", "piston-data.mojang.com", "launcher.mojang.com"}
 _NEO_ORIGIN = "https://maven.neoforged.net/releases/"
 # These repositories are candidates, not authorities for file hashes. Only an
 # exact digest from the original metadata can authorize a fallback artifact.
@@ -86,6 +87,23 @@ class DownloadError(RuntimeError):
 
 class _Incomplete(ValueError):
     pass
+
+
+def cleanup_interrupted_downloads(cache):
+    """Remove our abandoned scratch files while the caller owns the install lock."""
+    root = Path(cache).resolve()
+    removed = 0
+    for path in root.rglob(".blockharbor-*"):
+        lifecycle.check()
+        if (re.fullmatch(r"\.blockharbor-(?:download|java)-[a-z0-9_]{8}", path.name)
+                and not path.is_symlink() and path.is_file()
+                and path.resolve().is_relative_to(root)):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass  # A locked abandoned file must not block recovery itself.
+    return removed
 
 
 def _retry(error):
@@ -163,7 +181,7 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
     # Requests uses the environment/system proxy configuration. Respect an
     # explicitly configured CA file; do not disable certificate verification.
     try:
-        with requests.Session() if session is None else nullcontext(session) as session:
+        with (requests.Session() if session is None else nullcontext(session)) as session:
             if os.environ.get("SSL_CERT_FILE") and not (
                 os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
             ):
@@ -374,7 +392,7 @@ class Download:
             session.close()
 
     def _receive_asset(self, url, output, limit, notify):
-        """Keep one verified HTTPS pool per worker for Mojang's small assets.
+        """Keep one verified HTTPS pool per worker for Mojang assets and Java.
 
         A fresh TLS connection for each of several thousand asset objects made
         preparation needlessly slow on high-latency networks. Sessions are not
@@ -397,7 +415,15 @@ class Download:
                 session = requests.Session()
                 session.mount("https://", SystemRootsAdapter(pool_connections=2, pool_maxsize=2))
                 self._sessions[thread] = session
-        return _receive_requests(url, output, limit, notify, session=session)
+        try:
+            return _receive_requests(url, output, limit, notify, session=session)
+        except HTTPError as error:
+            if error.code not in {301, 302, 303, 307, 308}:
+                raise
+            # Preserve the existing redirect-capable transport for a publisher
+            # endpoint which no longer directly serves its checksum-pinned file.
+            error.close()
+            return _receive(url, output, limit, notify)
 
     def __call__(
         self,
@@ -459,7 +485,7 @@ class Download:
                     packed = Path(out.name)
                     receive = _receive_requests if alternate else _receive
                     if (not alternate and sha1 and urlsplit(source_url).scheme == "https"
-                            and urlsplit(source_url).hostname == "resources.download.minecraft.net"):
+                            and urlsplit(source_url).hostname in _POOLED_MOJANG):
                         receive = self._receive_asset
                     receive(
                         source_url,

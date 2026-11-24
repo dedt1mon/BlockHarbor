@@ -129,8 +129,10 @@
   }
 
   function searchCatalog() {
-    community.page = null;
-    catalog.page = null;
+    // Retain the previous cards while both sources refresh. Clearing their
+    // heights first makes the second source jump underneath the pointer.
+    community.needsSearch = true;
+    catalog.needsSearch = true;
     updateResults();
     document.querySelector(".pack-results")?.scrollTo(0, 0);
     searchCommunity();
@@ -238,15 +240,25 @@
 
   async function readPublicationCapabilities(form) {
     const status = form.querySelector(".community-policy-status");
+    const retry = form.querySelector("[data-pack-policy-retry]");
+    form.dataset.policyVerified = "false";
+    form.querySelector('[type="submit"]').disabled = true;
+    if (retry) retry.disabled = true;
     try {
       const policy = await feature("communityCapabilities");
       if (!form.isConnected || !status) return;
       status.textContent = policy?.message || "Не удалось подтвердить правила публикации на сервере.";
       status.dataset.mode = policy?.enabled === true ? "verified" : "unverified";
+      form.dataset.policyVerified = String(policy?.enabled === true);
+      form.querySelector('[type="submit"]').disabled = policy?.enabled !== true || form.getAttribute("aria-busy") === "true";
+      if (retry) retry.hidden = policy?.enabled === true;
     } catch (error) {
       if (!form.isConnected || !status) return;
       status.textContent = "Невозможно проверить сервер. Часовое удаление и антиспам не подтверждены.";
       status.dataset.mode = "unverified";
+      if (retry) retry.hidden = false;
+    } finally {
+      if (retry?.isConnected) retry.disabled = false;
     }
   }
 
@@ -263,14 +275,15 @@
       <label>Категория<select class="field" name="category" aria-label="Категория" required><option value="">Выбери категорию</option>${Object.entries(categories).map(([value, label]) => option(value, label, "")).join("")}</select></label>
       <label class="community-config-toggle"><input type="checkbox" name="includeConfigs" aria-describedby="communityConfigHelp"> Включить настройки модов</label>
       <p class="note" id="communityConfigHelp" hidden>В архив войдут подходящие файлы из config и defaultconfigs. Перед публикацией проверь их содержимое на личные данные.</p>
-      <p class="note community-publish-description">Максимальный размер нового ZIP — 256 МиБ. После обновления сервера сборки хранятся 1 час, одновременно разрешены 3 активные публикации, а после 10 попыток за 10 минут новые публикации блокируются на 5 часов. Пока сервер не подтвердил эти правила, автоматическое удаление не гарантируется. Миры, журналы и данные учётных записей не публикуются.</p>
+      <p class="note community-publish-description">Максимальный размер ZIP — 256 МиБ. Новая публикация доступна 60 минут, одновременно разрешены 3 активные публикации, а после 10 попыток за 10 минут новые публикации блокируются на 5 часов. Публикация станет доступна после подтверждения этих правил сервером. Миры, журналы и данные учётных записей не публикуются.</p>
       <p role="status" class="community-policy-status">Проверяем, действуют ли новые ограничения на сервере…</p>
+      <button type="button" class="linkbtn" data-pack-policy-retry hidden>Повторить проверку сервера</button>
       <p role="status" class="community-publication-status">${knownPublished ? "Статус: опубликовано." : "Проверяем статус публикации…"}</p>
       <p role="status" class="community-feedback"></p>
       <div class="community-receipts">${knownPublished ? publicationRows(previous) : ""}</div>
       <div class="dialog-actions community-publish-actions" role="group" aria-label="Действия публикации">
         ${button('data-act="close"', "Закрыть")}
-        <button class="btn main" type="submit">${ic("share")}Опубликовать</button>
+        <button class="btn main" type="submit" disabled>${ic("share")}Опубликовать</button>
       </div>
     </form>`);
     const form = document.querySelector("[data-pack-publish]");
@@ -282,6 +295,7 @@
   function setPublicationBusy(form, busy, message) {
     form.setAttribute("aria-busy", String(busy));
     for (const control of form.querySelectorAll('input[name], select, [type="submit"], [data-pack-withdraw], [data-pack-withdraw-confirm], [data-pack-keep]')) control.disabled = busy;
+    form.querySelector('[type="submit"]').disabled = busy || form.dataset.policyVerified !== "true";
     form.querySelector(".community-feedback").textContent = message;
   }
 
@@ -487,7 +501,7 @@
     const form = event.target;
     if (form.matches("[data-pack-publish]")) {
       event.preventDefault();
-      if (form.classList.contains("is-checking") || form.classList.contains("is-published")) return;
+      if (form.classList.contains("is-checking") || form.classList.contains("is-published") || form.dataset.policyVerified !== "true") return;
       const data = new FormData(form);
       const name = data.get("name").trim();
       if (!name) {form.elements.name.focus(); return notice("Введи название сборки.", true);}
@@ -507,7 +521,7 @@
     if (filter) {
       catalog[filter] = event.target.value;
       catalog.q = document.querySelector("[data-pack-search] input")?.value || catalog.q;
-      search(0);
+      searchCatalog();
     }
     const project = event.target.dataset.packVersion;
     if (project) choices.set(project, event.target.value);
@@ -535,6 +549,7 @@
       }
       if (d.packWithdrawConfirm) return await publicationAction(target.closest("form"), "communityUnpublish", {build: d.packWithdrawConfirm});
       if ("packPublicationRetry" in d) return await readPublications(target.closest("form"));
+      if ("packPolicyRetry" in d) return await readPublicationCapabilities(target.closest("form"));
       if (d.packCommunity) return showCommunityBuild(d.packCommunity);
       if (d.packCommunityInstall) {
         const item = community.page?.hits.find(hit => hit.id === d.packCommunityInstall);

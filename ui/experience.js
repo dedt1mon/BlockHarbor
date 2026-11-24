@@ -42,7 +42,15 @@
     modal("История уведомлений", '<section class="notification-panel"><p role="status">Загружаем уведомления…</p></section>');
     const host = document.querySelector(".notification-panel");
     const current = () => request === notificationRequest && host.isConnected && $("#dialog").open;
-    const data = await query("experienceNotifications");
+    let data;
+    try { data = await query("experienceNotifications"); }
+    catch (error) {
+      if (current()) {
+        host.innerHTML = `<p class="notification-read-error" role="alert">${esc(error.message)}</p><button class="btn" type="button" data-notifications-retry>${ic("refresh")}Повторить</button>`;
+        host.querySelector("[data-notifications-retry]").onclick = () => notifications().catch(e => notice(e.message, true));
+      }
+      return;
+    }
     if (!current()) return;
     const items = data.items || [];
     host.innerHTML = `<div class="notification-history" aria-label="Уведомления">${items.length ? items.map(n => `<article class="notification-item ${esc(n.level)}${n.read ? "" : " unread"}"><div class="notification-heading"><time datetime="${new Date(n.created * 1000).toISOString()}">${date(n.created)}</time>${n.read ? "" : '<span class="notification-new">Новое</span>'}</div><p>${esc(n.message)}</p></article>`).join("") : '<p class="note">История пока пуста.</p>'}</div><div class="dialog-actions"><button class="btn" type="button" data-notifications-refresh hidden>${ic("refresh")}Показать новые</button>${expButton("clearNotifications", "Очистить историю", "trash", items.length ? "" : "disabled")}</div><p class="notification-read-error" role="status" hidden></p>`;

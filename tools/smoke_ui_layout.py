@@ -58,7 +58,7 @@ check(equal(rect("#primary").height, 44), "primary button height");
 check(equal(rect(".catalog-mark").height, rect(".catalog-mark").width), "catalog + button is square");
 const before=rect("#name"); q("#name").focus();
 check(css("#name","outlineStyle")==="none", "duplicate outer input outline");
-check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable");
+check(css("#name","borderTopColor")!==css("#loader","borderTopColor"), "input focus not distinguishable: focused="+document.activeElement?.id+", input="+css("#name","borderTopColor")+", idle="+css("#loader","borderTopColor")+", hover="+q("#name").matches(":hover"));
 check(equal(before.width,rect("#name").width)&&equal(before.height,rect("#name").height),"field geometry changed on focus");
 q("#name").blur();
 check(css(".nav.sel","backgroundColor")===css(".tabs .on","backgroundColor"),"inconsistent selection fill");

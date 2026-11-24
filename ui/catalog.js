@@ -205,7 +205,9 @@ function openModrinth(profile, category) {
       </button></li>`,
         )
         .join("") ||
-      '<li class="empty">Совместимых дополнений не найдено. Измени запрос или фильтры.</li>';
+      (data.totalIsEstimate && data.offset + data.limit < data.total
+        ? '<li class="empty">На этой странице нет дополнений с подтверждённой совместимостью. Проверь следующую страницу или измени фильтры.</li>'
+        : '<li class="empty">Дополнений с подтверждённой совместимостью не найдено. Измени запрос или фильтры.</li>');
     loadIcons(list);
     return { query, data, preset, list, scroll: 0 };
   }
@@ -223,9 +225,9 @@ function openModrinth(profile, category) {
     pager
       .querySelector("[data-page=next]")
       .setAttribute("aria-disabled", String(cursor + limit >= total));
-    const range = hits.length
-      ? `${number.format(offset + 1)}–${number.format(offset + hits.length)} из ${number.format(total)}`
-      : "";
+    const range = page.data.totalIsEstimate
+      ? `Проверенных: ${number.format(hits.length)} · страница ${number.format(Math.floor(offset / limit) + 1)}`
+      : hits.length ? `${number.format(offset + 1)}–${number.format(offset + hits.length)} из ${number.format(total)}` : "";
     const count = pager.querySelector("span");
     if (count.textContent !== range) count.textContent = range;
   }
@@ -361,7 +363,7 @@ function openModrinth(profile, category) {
       return;
     }
     const chosenSource = item.source || "all";
-    cart.set(item.id, {project: item.id, kind: category, version, source: chosenSource, title: item.title});
+    cart.set(item.id, {project: item.id, kind: category, version: version || item.recommendedVersion || null, source: chosenSource, title: item.title});
   }
   function leaveCart() {
     cartRequest?.abort();

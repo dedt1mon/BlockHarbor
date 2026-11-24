@@ -27,6 +27,7 @@ from pathlib import Path
 from . import build_archive, e4steam, lifecycle, modrinth, room_bridge, steam_network
 from .modfiles import file_hash, file_stamp, mod_info, read_descriptor
 from .pack_hub import _hashes, _path, _size, _unique_name, _url, _validate_paths, download_verified
+from .sessions import atomic_json, process_alive, process_identity, read_record
 from .store import KINDS, clean_filename, input_profile, require_idle_files, verify_pack
 
 MAX_DESCRIPTOR = 4 * 1024**2
@@ -188,6 +189,23 @@ class SharedBuilds:
         self.commit_changes = commit_changes
         self.plans = {}
         self.lock = threading.RLock()
+
+    def recover_staging(self):
+        """Remove only our abandoned downloads after the caller recovers journals."""
+        removed = 0
+        for directory in self.store.root.glob("share-sync-*"):
+            if (not re.fullmatch(r"share-sync-[a-z0-9_]{8}", directory.name)
+                    or not directory.is_dir() or build_archive._reparse(directory.lstat())):
+                continue
+            marker = read_record(directory / "owner.json")
+            owner = marker.get("owner")
+            if (marker.get("format") != "BlockHarborShareStaging/1" or not isinstance(owner, dict)
+                    or type(owner.get("pid")) is not int or not isinstance(owner.get("birth"), str)
+                    or process_alive(owner)):
+                continue
+            shutil.rmtree(directory)
+            removed += 1
+        return removed
 
     def _inventory(self, pid):
         inventory = modrinth._inventory(self.store, pid)
@@ -367,8 +385,8 @@ class SharedBuilds:
         if needed + 64 * 1024**2 > shutil.disk_usage(self.store.root).free:
             raise ValueError("Недостаточно места для подготовки общей сборки.")
         temp = Path(tempfile.mkdtemp(dir=self.store.root, prefix="share-sync-"))
-        cleanup = True
         try:
+            atomic_json(temp / "owner.json", {"format": "BlockHarborShareStaging/1", "owner": process_identity(os.getpid())})
             staged = {}
             for number, row in enumerate(wanted, 1):
                 status(f"Сверяем сборку друга: {number}/{len(wanted)} · {row['title']}")
@@ -432,20 +450,22 @@ class SharedBuilds:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, destination)
                 sections = removed | set(staged)
+                no_replace = set(staged) - removed
                 if descriptor["loaderVersion"]:
                     (prepared / build_archive.STAMP).write_text(json.dumps(pin_data), encoding="utf-8")
                     sections.add(build_archive.STAMP)
+                    if not os.path.lexists(old_stamp):
+                        no_replace.add(build_archive.STAMP)
                 # Reuse the launcher's durable journal. Its prepared marker is
                 # saved before the first rename, and startup recovers an abrupt
                 # process exit just as it recovers interrupted mod updates.
-                self.commit_changes(pid, prepared, sorted(sections))
+                self.commit_changes(pid, prepared, sorted(sections), no_replace=sorted(no_replace))
                 new_id, name = pid, profile["name"]
             with self.lock:
                 self.plans.pop(token, None)
             return {"id": new_id, "name": name, "invite": descriptor.get("invite")}
         finally:
-            if cleanup:
-                shutil.rmtree(temp, ignore_errors=True)
+            shutil.rmtree(temp, ignore_errors=True)
 
     def room_state(self, pid):
         profile = self.store.profile(pid)

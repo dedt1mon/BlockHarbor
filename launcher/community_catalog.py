@@ -290,9 +290,14 @@ class CommunityCatalog:
                 self._remember_receipt(db, listing, row["token"])
 
     def _remember_receipt(self, db, listing, token):
-        expiry = listing.get("expiresAt")
-        if type(expiry) is int and expiry > 0:
-            db.execute("INSERT OR IGNORE INTO community_receipts(origin,public_id,token,name,expires) VALUES(?,?,?,?,?)",
+        # Pre-retention listings have no expiry. Keep their owner credentials
+        # too: after a server migration their public row may already be gone,
+        # while its authenticated expiry receipt is still waiting for delivery.
+        expiry = listing.get("expiresAt", 0)
+        if type(expiry) is int and expiry >= 0:
+            db.execute("""INSERT INTO community_receipts(origin,public_id,token,name,expires) VALUES(?,?,?,?,?)
+                ON CONFLICT(origin,public_id) DO UPDATE SET expires=CASE
+                WHEN community_receipts.expires=0 THEN excluded.expires ELSE community_receipts.expires END""",
                        (self.api.origin, listing["id"], token, listing["name"], expiry))
 
     def tick_notifications(self, notify):
@@ -337,8 +342,10 @@ class CommunityCatalog:
                     event = events[0]
                     if (not isinstance(event, dict) or event.get("type") != "publicationExpired"
                             or event.get("id") != "publication-expired:" + public_id or event.get("build") != public_id
-                            or event.get("created") != row["expires"] or type(event.get("removedAt")) is not int
-                            or not row["expires"] <= event["removedAt"] <= moment + 300):
+                            or type(event.get("created")) is not int or event["created"] <= 0
+                            or row["expires"] > 0 and event["created"] != row["expires"]
+                            or type(event.get("removedAt")) is not int
+                            or not event["created"] <= event["removedAt"] <= moment + 300):
                         raise ValueError("Каталог вернул неверное уведомление об удалении.")
                     event_key = "community:" + hashlib.sha256(self.api.origin.encode()).hexdigest()[:16] + ":" + event["id"]
                     notify(f"Срок действия ссылки на сборку «{row['name']}» истёк. Сборка автоматически удалена с сервера.",
@@ -354,6 +361,7 @@ class CommunityCatalog:
                         raise
                 with self.store.connection() as db:
                     db.execute("DELETE FROM community_receipts WHERE origin=? AND public_id=?", (self.api.origin, public_id))
+                    db.execute("DELETE FROM community_uploads WHERE origin=? AND json_extract(listing,'$.id')=?", (self.api.origin, public_id))
                 delivered += 1
             except lifecycle.OperationCancelled:
                 raise
@@ -408,18 +416,18 @@ class CommunityCatalog:
         except CatalogError as exc:
             if exc.code == 404:
                 return {"enabled": False, "mode": "legacy",
-                        "message": "Сервер каталога пока не поддерживает автоудаление и антиспам. Публикация может храниться дольше 1 часа."}
+                        "message": "Новые публикации недоступны: сервер ещё не подтверждает срок 60 минут и защиту от спама. Существующие сборки можно скачивать и снимать с публикации."}
             return {"enabled": False, "mode": "unknown",
-                    "message": "Не удалось подтвердить ограничения сервера. Перед публикацией проверь подключение."}
+                    "message": "Новые публикации временно недоступны: не удалось подтвердить ограничения сервера. Проверь подключение и повтори проверку."}
         limits = data.get("publishLimits")
         if (data.get("publicRetentionSeconds") != 3600 or not isinstance(limits, dict)
                 or limits.get("maxArchiveBytes") != MAX_PUBLIC_UPLOAD
                 or limits.get("maxActive") != 3 or limits.get("windowSeconds") != 600
                 or limits.get("maxAttempts") != 10 or limits.get("banSeconds") != 18000):
             return {"enabled": False, "mode": "unsupported",
-                    "message": "Версия сервера не подтверждает часовую очистку и защиту от спама."}
+                    "message": "Новые публикации недоступны: эта версия сервера не подтверждает срок 60 минут и защиту от спама."}
         return {"enabled": True, "mode": "retention",
-                "message": "Подтверждено сервером: 1 час хранения, 256 МиБ и защита от спама.",
+                "message": "Подтверждено сервером: ссылка действует 60 минут, архив до 256 МиБ. После истечения срока сервер автоматически очищает хранилище.",
                 "publicRetentionSeconds": 3600, "publishLimits": limits}
 
     def _reconcile_legacy(self, pid, item):

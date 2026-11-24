@@ -872,7 +872,7 @@ def _descriptor_dependencies(profile, missing):
 
 def manual_check(store, pid, kind, name, path):
     name = clean_filename(name)
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     if kind not in KINDS or Path(name).suffix.lower() != KINDS[kind]:
         raise CatalogError("Выбери файл соответствующей категории.")
     verify_pack(path, kind, profile["loader"])
@@ -887,7 +887,7 @@ def manual_check(store, pid, kind, name, path):
 
 
 def manual_plan(store, pid, name, path):
-    profile = store.profile(pid)
+    profile = compatibility.installation_profile(store, pid)
     local = manual_check(store, pid, "mods", name, path)
     _require_no_conflicts(local)
     missing = [row for row in local["required"] if not row["installed"]]

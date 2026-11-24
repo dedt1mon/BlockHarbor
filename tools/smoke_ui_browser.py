@@ -30,8 +30,10 @@ class FixtureAPI:
     def __init__(self):
         self.errors = []
         self.actions = []
+        self.requests = []
         self.reads = []
         self.racing_notification = True
+        self.publication_enabled = True
         self.notifications = [{"id": 1, "created": 1770000000, "message": "Срок действия ссылки на сборку истёк. Сборка автоматически удалена с сервера", "level": "info", "read": False}]
         self.job = {"id": "", "busy": False, "ok": True, "message": "", "gameRunning": False, "localGameRunning": False, "runningProfiles": [], "gameExit": None, "launcherCount": 1}
         self.profile = {"id": "profile-a", "name": LONG_NAME, "version": "1.20.1", "loader": "fabric", "favorite": False, "description": "Описание " * 18}
@@ -68,7 +70,11 @@ class FixtureAPI:
         if action == "communityPublication":
             return {"publications": []}
         if action == "communityCapabilities":
-            return {"enabled": True, "message": "Сервер хранит публикацию 60 минут"}
+            return {"enabled": self.publication_enabled, "message": "Сервер хранит публикацию 60 минут" if self.publication_enabled else "Новые публикации недоступны: сервер ещё не подтвердил правила"}
+        if action == "packSearch":
+            return {"hits": [{"id": "pack-" + str(i), "title": "Большая сборка " + str(i), "description": "Описание " * 40, "author": "Автор", "downloads": 1000, "icon": ""} for i in range(8)], "total": 8, "limit": 20, "offset": 0}
+        if action == "communitySearch":
+            return {"source": "primary", "hits": [{"id": "BH-0123456789A" + str(i), "name": LONG_NAME, "minecraft": "1.20.1", "loader": "fabric", "category": "adventure", "size": 1024, "expiresAt": 9999999999} for i in range(4)], "total": 4, "limit": 20, "offset": 0}
         if action == "updateState":
             return {"current": "audit", "channel": "stable", "autoEnabled": False, "available": False, "windows": True, "checkedAt": 1770000000, "transfers": {"tasks": []}, "trust": "Проверка контрольной суммы"}
         raise AssertionError("Unexpected feature: " + action)
@@ -112,6 +118,7 @@ class FixtureAPI:
         url = urlsplit(request.url)
         path = url.path
         query = parse_qs(url.query)
+        self.requests.append({"path": path, "query": query})
         first = lambda key, default="": query.get(key, [default])[0]
         try:
             if url.netloc != "blockharbor.test":
@@ -140,8 +147,8 @@ class FixtureAPI:
                     result = {"sort": {"relevance": "По релевантности", "downloads": "По загрузкам"}, "groups": [], "dependencies": False}
                 elif path == "/api/catalog/search":
                     source = first("source", "community")
-                    hits = [{"id": "mod-" + str(i), "title": "Совместимое дополнение " + str(i), "description": "Очень длинное описание " * 20, "source": source, "sourceTitle": "Источник", "author": "Автор", "downloads": 100 + i} for i in range(12)]
-                    result = {"hits": [*hits, hits[0]], "offset": 0, "limit": 20, "total": 12}
+                    hits = [{"id": "mod-" + str(i), "title": "Совместимое дополнение " + str(i), "description": "Очень длинное описание " * 20, "source": source, "sourceTitle": "Источник", "author": "Автор", "downloads": 100 + i, "recommendedVersion": "stable-1", "compatibility": "release-metadata"} for i in range(12)]
+                    result = {"hits": [*hits, hits[0]], "offset": 0, "limit": 20, "total": 40, "totalIsEstimate": True, "verified": True}
                 elif path == "/api/catalog/check":
                     data = request.post_data_json
                     items = [{**item, "version": item.get("version") or "stable-1"} for item in data["items"]]
@@ -204,11 +211,24 @@ def production_views(page, api, output, label):
     page.evaluate("navigate('builds')")
     settle(page)
     page.screenshot(path=str(output / (label + "-builds.png")))
+    page.locator("[data-pack-share]").first.click()
+    settle(page)
+    geometry(page, True)
+    assert page.locator('.community-publish [type="submit"]').is_enabled()
+    page.locator("#dialogClose").click()
+    page.evaluate("PackHubUI.openCatalog()")
+    settle(page)
+    geometry(page, True)
+    assert page.locator(".pack-card").count() == 12
+    assert page.locator(".pack-results").evaluate("el => el.clientHeight >= 24"), "Pack filters collapsed the results viewport"
+    page.locator("#dialogClose").click()
     page.evaluate("openModrinth(active(), 'mods')")
     page.wait_for_selector(".catalog-choice")
     settle(page)
     geometry(page, True)
     assert page.locator(".catalog-choice").count() == 12, "Duplicate catalog cards"
+    assert "Проверенных: 12" in page.locator(".catalog-pager").inner_text()
+    assert page.locator(".catalog-results").evaluate("el => el.clientHeight >= 24"), "Catalog controls collapsed the results viewport"
     page.screenshot(path=str(output / (label + "-catalog.png")))
     page.locator("#dialogClose").click()
     page.evaluate("modal('Большой список', '<div class=stack>' + Array.from({length:100},(_,i)=>'<p>Очень длинное название файла '+i+' '+ 'дополнение'.repeat(20)+'</p>').join('') + '</div>')")
@@ -228,7 +248,7 @@ def production_views(page, api, output, label):
     assert page.evaluate("document.querySelector('.batch-items').scrollHeight > document.querySelector('.batch-items').clientHeight"), "Large batch must scroll"
     page.screenshot(path=str(output / (label + "-batch.png")))
     page.locator("[data-batch-hide]").click()
-    return 12
+    return 14
 
 
 def interaction_flows(page, api):
@@ -253,6 +273,26 @@ def interaction_flows(page, api):
     settle(page)
     assert page.locator(".notification-dot").is_visible(), "New event failed to restore indicator"
 
+    page.evaluate("navigate('builds')")
+    api.publication_enabled = False
+    page.locator("[data-pack-share]").first.click()
+    settle(page)
+    assert page.locator('.community-publish [type="submit"]').is_disabled(), "Unverified retention allowed publishing"
+    api.publication_enabled = True
+    page.locator("[data-pack-policy-retry]").click()
+    settle(page)
+    assert page.locator('.community-publish [type="submit"]').is_enabled()
+    page.locator("#dialogClose").click()
+    page.evaluate("PackHubUI.openCatalog()")
+    settle(page)
+    previous_requests = len(api.requests)
+    page.locator('[data-pack-filter="loader"]').select_option("quilt")
+    settle(page)
+    calls = [entry for entry in api.requests[previous_requests:] if entry["path"] == "/api/feature"]
+    for action in ("packSearch", "communitySearch"):
+        assert any(entry["query"].get("action") == [action] and entry["query"].get("loader") == ["quilt"] for entry in calls), action + " did not receive filter"
+    page.locator("#dialogClose").click()
+
     api.job.update(busy=False, ok=True)
     page.evaluate("tick(true)")
     page.evaluate("openModrinth(active(), 'mods')")
@@ -268,6 +308,7 @@ def interaction_flows(page, api):
     assert page.locator(".batch-item").count() == 3
     install = [item for item in api.actions if item["action"] == "installModrinth"][-1]
     assert all(item["source"] == "github" for item in install["items"]), "Source lost from selection"
+    assert all(item["version"] == "stable-1" for item in install["items"]), "Verified recommended version was not selected"
     for status in ("checking", "dependencies", "downloading", "installing"):
         api.job["items"][0]["status"] = status
         page.evaluate("tick(true)")
@@ -300,7 +341,7 @@ def interaction_flows(page, api):
     page.locator("[data-batch-review]").click()
     settle(page)
     assert api.actions[-1]["acknowledgement"] == "explicit-review-token"
-    return 14
+    return 16
 
 
 def main():

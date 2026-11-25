@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -125,11 +126,19 @@ def test_runtime(installed, root, version):
         # Exercise the reported failing download with the interpreter, libraries
         # and production downloader extracted by this exact release EXE. The
         # live smoke owns a separate temporary cache and never starts Minecraft.
-        app_cache = local / "BlockHarbor" / "app"
+        with installed.open("rb") as source:
+            source.seek(-56, os.SEEK_END)
+            payload_size, payload_hash, magic = struct.unpack("<Q32s16s", source.read(56))
+        assert magic == b"BlockHarborPKG18" and 0 < payload_size < installed.stat().st_size - 56
+        # provision() scopes the current pointer by payload digest, so another
+        # installed release cannot supply the interpreter for this smoke.
+        app_cache = local / "BlockHarbor" / "app" / ("2.0-" + payload_hash.hex()[:16])
         generation = (app_cache / "current").read_text(encoding="utf-8")
         assert re.fullmatch(r"files-[A-Za-z0-9_-]+", generation), generation
         packaged = (app_cache / generation).resolve()
         assert packaged.is_relative_to(app_cache.resolve())
+        receipt = json.loads((packaged / ".installed.json").read_text(encoding="utf-8"))
+        assert receipt["Package"] == payload_hash.hex()
         subprocess.run([
             str(packaged / "runtime" / "python.exe"), "-B", "-X", "utf8",
             str(packaged / "tools" / "smoke_neoforge_download.py"),

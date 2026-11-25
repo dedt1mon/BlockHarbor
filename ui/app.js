@@ -1674,7 +1674,10 @@ document.addEventListener("click", async (e) => {
       if (!build) return;
       return await withBuildRequest(build.id, async () => {
         const progressId = "build-export:" + build.id;
-        window.DownloadProgressUI?.begin(progressId, "Подготовка ZIP", "Собираем файлы «" + build.name + "»…");
+        const preparationMessage = build.loader === "neoforge"
+          ? "Готовим файлы NeoForge и ZIP «" + build.name + "»…"
+          : "Собираем файлы «" + build.name + "»…";
+        window.DownloadProgressUI?.begin(progressId, "Подготовка ZIP", preparationMessage);
         try {
           const result = await api("/api/build-export", {
             method: "POST",
@@ -1687,7 +1690,11 @@ document.addEventListener("click", async (e) => {
           document.body.append(link);
           link.click();
           link.remove();
-          notice("ZIP готов. Скачивание началось.");
+          notice(result.loaderFiles
+            ? "ZIP готов: добавлены проверенные файлы NeoForge. Скачивание началось."
+            : build.loader === "neoforge"
+              ? "ZIP готов. Сохранённых файлов NeoForge в нём нет: они будут загружены при первом запуске."
+              : "ZIP готов. Скачивание началось.");
         } finally { window.DownloadProgressUI?.end(progressId); }
       });
     }

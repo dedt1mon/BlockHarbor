@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -151,6 +152,36 @@ def test_runtime(installed, root, version):
         assert fallback["injectedPrimaryTimeouts"] >= 2 and replay["networkDeniedAttempts"] == 0
         print("PASS: NeoForge installer SHA-256 " + primary["verified"]["sha256"])
         print("PASS: actual release payload downloads NeoForge 21.1.267, verifies fallback and reuses its cache offline")
+        # The original failure can also occur after installer.jar has arrived.
+        # Prepare the actual loader with the exact shipped interpreter, force a
+        # Maven outage, then transfer its real ZIP to another isolated store.
+        smoke_root = root / "neoforge-install"
+        reports = Path.cwd() / "artifacts" / "windows-release-smoke"
+        reports.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run([
+                str(packaged / "runtime" / "python.exe"), "-B", "-X", "utf8",
+                str(packaged / "tools" / "smoke_neoforge_install.py"),
+                "--root", str(smoke_root), "--timeout", "1500",
+            ], check=True, timeout=1530, cwd=packaged, env=environment)
+        finally:
+            if (smoke_root / "report.json").is_file():
+                shutil.copy2(smoke_root / "report.json", reports / "report.json")
+            # Keep small diagnostics even on failure, never upload the game
+            # cache or downloaded third-party binaries as a workflow artifact.
+            for run in smoke_root.glob("run-*"):
+                target = reports / run.name
+                target.mkdir(exist_ok=True)
+                for name in ("cold.json", "transfer.json", "replay.json", "cold.log", "transfer.log", "replay.log"):
+                    source = run / name
+                    if source.is_file() and source.stat().st_size <= 16 * 1024**2:
+                        shutil.copy2(source, target / name)
+        full_report = json.loads((smoke_root / "report.json").read_bytes())
+        assert full_report["ok"] and len(full_report["phases"]) == 3
+        assert all(row["ok"] for row in full_report["phases"])
+        assert full_report["phases"][1]["networkDeniedAttempts"] == 0
+        assert full_report["phases"][2]["networkDeniedAttempts"] == 0
+        print("PASS: actual release installs NeoForge with primary Maven unavailable, transfers verified inputs in ZIP and replays offline")
     finally:
         if process.poll() is None:
             # This is our isolated CI test process tree only.

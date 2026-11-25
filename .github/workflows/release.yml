@@ -141,7 +141,7 @@ jobs:
           }
           [System.IO.File]::WriteAllLines((Join-Path $release "SHA256SUMS.txt"), $sums, [System.Text.UTF8Encoding]::new($false))
 
-      - name: Verify Windows setup and NeoForge downloads from the exact packaged runtime
+      - name: Verify Windows setup, full NeoForge installation and ZIP recovery from the exact packaged runtime
         shell: pwsh
         run: |
           $release = Join-Path $env:RUNNER_TEMP "blockharbor-release"
@@ -152,6 +152,15 @@ jobs:
           Write-Host "PASS: compiled Cyrillic FileDescription"
           python tools/smoke_windows_release.py --setup $setup --portable $portable --version $env:RELEASE_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Windows install and packaged runtime smoke test failed" }
+
+      - name: Save NeoForge installation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-neoforge-installation
+          path: artifacts/windows-release-smoke
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Publish GitHub Release
         shell: pwsh

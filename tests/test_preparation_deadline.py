@@ -37,12 +37,19 @@ class PreparationDeadlineTests(unittest.TestCase):
     def test_installer_does_not_reset_total_budget_on_transport_or_mirror_switch(self):
         url = preparation._NEO_ORIGIN + "net/neoforged/neoforge/21.1.267/neoforge-21.1.267-installer.jar"
         clock = [0.0]
+        attempts = []
 
         def timeout(url, output, limit, notify=lambda *_: None, *, deadline):
-            self.assertEqual(deadline, 5)
+            self.assertGreater(deadline, clock[0])
+            self.assertLessEqual(deadline, 5)
+            attempts.append((url, clock[0], deadline))
             output.write(b"partial")
-            clock[0] = 5
+            clock[0] = deadline
             raise TimeoutError()
+
+        def wait(seconds):
+            self.assertGreaterEqual(seconds, 0)
+            clock[0] += seconds
 
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "installer.jar"
@@ -50,13 +57,17 @@ class PreparationDeadlineTests(unittest.TestCase):
             with (patch.object(preparation.time, "monotonic", side_effect=lambda: clock[0]),
                   patch.object(preparation, "INSTALLER_SECONDS", 5),
                   patch.object(preparation, "_receive", side_effect=timeout) as primary,
-                  patch.object(preparation, "_receive_requests") as alternate,
+                  patch.object(preparation, "_receive_requests", side_effect=timeout) as alternate,
+                  patch.object(preparation.lifecycle, "wait", side_effect=wait),
                   self.assertRaises(preparation.DownloadError) as error):
                 preparation.Download(preparation.Progress(lambda _: None))(url, target)
-            primary.assert_called_once()
-            alternate.assert_not_called()
+            self.assertEqual(primary.call_count, 2)
+            self.assertEqual(alternate.call_count, 2)
+            mirror = url.replace(preparation._NEO_ORIGIN, preparation._NEO_INSTALLER_MIRROR)
+            self.assertEqual([attempt[0] for attempt in attempts], [url, url, mirror, mirror])
+            self.assertEqual(clock[0], 5)
+            self.assertLess(attempts[0][2], 5)  # The first attempt cannot starve every fallback.
             self.assertIn("Общее время", str(error.exception))
-            self.assertNotIn("Резервная загрузка", str(error.exception))
             self.assertEqual(target.read_bytes(), b"previous")
             self.assertEqual(list(Path(directory).iterdir()), [target])
 
@@ -84,12 +95,14 @@ class PreparationDeadlineTests(unittest.TestCase):
             for receive in (preparation._receive, preparation._receive_requests):
                 with self.subTest(transport=receive.__name__):
                     output = io.BytesIO()
+                    started = time.monotonic()
                     with (patch.object(preparation, "MAX_RECEIVE_SECONDS", 0.04),
-                          self.assertRaises(preparation._Incomplete)):
+                          self.assertRaises((preparation._Incomplete, TimeoutError))):
                         receive(f"http://127.0.0.1:{server.server_port}/slow", output, 100)
                     # A full-chunk read would consume all 100 bytes before ever
                     # checking the budget. Both transports stop while partial.
                     self.assertLess(len(output.getvalue()), 50)
+                    self.assertLess(time.monotonic() - started, 0.75)
         finally:
             server.shutdown()
             server.server_close()

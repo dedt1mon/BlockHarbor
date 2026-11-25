@@ -1,5 +1,6 @@
 """Portable BlockHarbor ZIPs. All paths describe files inside one new instance."""
 
+import hashlib
 import hmac
 import json
 import os
@@ -13,7 +14,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
-from . import lifecycle, modfiles
+from . import lifecycle, loader_files, modfiles
 from .store import KINDS, MAX_ADDON, clean_filename, input_profile
 
 MANIFEST = "blockharbor.json"
@@ -219,7 +220,7 @@ def _reference_only_mod(path, parts, profile):
     )
 
 
-def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes=MAX_ZIP, include_configs=False):
+def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes=MAX_ZIP, include_configs=False, include_loader_files=False):
     lifecycle.check()
     profile = store.profile(pid)
     root = store._profile_directory(store.instances, pid)
@@ -243,6 +244,12 @@ def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes
     catalog = catalog_name is not None
     if catalog and worlds:
         raise ValueError("В публичную сборку нельзя включать миры.")
+    if catalog and include_loader_files:
+        raise ValueError("Сохранённые файлы загрузчика доступны только для личного ZIP сборки.")
+    bundle = loader_files.export_plan(store, profile, meta.get("loaderVersion")) if include_loader_files else None
+    if bundle:
+        meta["formatVersion"] = 2
+        meta["loaderFiles"] = True
     sections = list(KINDS)
     if not catalog or include_configs:
         sections.extend(("config", "defaultconfigs"))
@@ -319,6 +326,10 @@ def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes
                 found_markers.add(marker)
         if catalog and found_markers != folders:
             raise ValueError("Папки ресурс-паков или шейдеров изменились во время публикации.")
+        if bundle:
+            if len(seen) + len(bundle["files"]) + 2 > MAX_FILES or total + bundle["total"] > MAX_TOTAL:
+                raise ValueError("Сборка вместе с файлами NeoForge превышает лимиты ZIP.")
+            loader_files.write_bundle(z, bundle)
     if file.tell() > max_bytes:
         raise ValueError("Публичная сборка превышает лимит каталога по размеру." if catalog else "ZIP сборки превышает 8 ГБ.")
     file.seek(0)
@@ -344,7 +355,7 @@ def _directory_limit(file):
     file.seek(0)
 
 
-def _members(archive, worlds, *, catalog=False, configs=False):
+def _members(archive, worlds, *, catalog=False, configs=False, loader_bundle=False):
     paths = {}
     dirs = set()
     seen = set()
@@ -392,7 +403,8 @@ def _members(archive, worlds, *, catalog=False, configs=False):
         seen.add(key)
         if name == MANIFEST:
             continue
-        if not _allowed(parts, worlds, directory) or (catalog and not _catalog_path(parts, directory, folders, configs)):
+        permitted = _allowed(parts, worlds, directory) or loader_bundle and loader_files.allowed(parts, directory)
+        if not permitted or (catalog and not _catalog_path(parts, directory, folders, configs)):
             raise ValueError("В архиве есть путь вне состава сборки: " + norm[:140])
         if directory:
             continue
@@ -442,7 +454,7 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
                 not isinstance(meta, dict)
                 or meta.get("format") != "BlockHarbor"
                 or type(meta.get("formatVersion")) is not int
-                or meta["formatVersion"] != 1
+                or meta["formatVersion"] not in (1, 2)
             ):
                 raise ValueError("Неизвестный формат архива BlockHarbor.")
             name, version, loader = input_profile(
@@ -455,6 +467,11 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
             ):
                 raise ValueError("Описание публичной сборки расходится с её архивом.")
             pin = _pin(meta.get("loaderVersion"))
+            bundled = meta.get("loaderFiles") is True
+            if ("loaderFiles" in meta and type(meta["loaderFiles"]) is not bool
+                    or (meta["formatVersion"] == 2) != bundled
+                    or bundled and catalog_listing is not None):
+                raise ValueError("Неподдерживаемое описание сохранённых файлов загрузчика.")
             options = meta.get("packOptions", [])
             if (
                 not isinstance(options, list)
@@ -470,7 +487,9 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
                 )
             ):
                 raise ValueError("Неверные параметры ресурс-паков в манифесте.")
-            rows, size = _members(archive, meta.get("worlds") is True, catalog=catalog_listing is not None, configs=meta.get("publicConfigs") is True)
+            rows, size = _members(archive, meta.get("worlds") is True, catalog=catalog_listing is not None, configs=meta.get("publicConfigs") is True, loader_bundle=bundled)
+            if bundled:
+                loader_files.import_plan(archive, meta)
             if catalog_listing is not None:
                 if size > max_bytes:
                     raise ValueError("Распакованная сборка превышает лимит каталога по размеру.")
@@ -488,9 +507,11 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
             def unpack(folder):
                 for item, parts in rows:
                     lifecycle.check()
-                    target = folder.joinpath(*parts)
+                    target = (folder.joinpath(loader_files.STAGED, *parts[1:])
+                              if parts[0] == loader_files.SECTION else folder.joinpath(*parts))
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(item) as src, target.open("xb") as out:
+                        checksum = hashlib.sha256() if parts[0] == loader_files.SECTION and parts[1] == "objects" else None
                         if parts[0] in ("config", "defaultconfigs"):
                             data = src.read(MAX_CONFIG + 1)
                             if _private_config(parts, data):
@@ -501,9 +522,13 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
                         else:
                             while block := src.read(2**20):
                                 lifecycle.check()
+                                if checksum is not None:
+                                    checksum.update(block)
                                 out.write(block)
                         if out.tell() != item.file_size:
                             raise ValueError("Файл из архива извлечён не полностью.")
+                        if checksum is not None and checksum.hexdigest() != parts[2]:
+                            raise ValueError("Сохранённый файл NeoForge повреждён. Повтори выгрузку сборки.")
                 if pin:
                     (folder / STAMP).write_text(
                         json.dumps(

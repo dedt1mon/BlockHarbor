@@ -23,8 +23,8 @@ from http.client import HTTPException
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import lifecycle
 from .io_errors import storage_message
@@ -36,6 +36,9 @@ MAX_RECEIVE_SECONDS = 20 * 60
 MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
 INSTALLER_SECONDS = 5 * 60
+MAVEN_SECONDS = 3 * 60
+MAVEN_ATTEMPT_SECONDS = 60
+MAX_REDIRECTS = 5
 CHECKSUM_SECONDS = 60
 CHECKSUM_ATTEMPT_SECONDS = 20
 _LIB_LOCK = threading.RLock()
@@ -88,14 +91,12 @@ def _neo_routes(url, sha1=None):
     if isinstance(sha1, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha1):
         # Switch origin after two transport failures instead of making the
         # player repeatedly wait on the same CDN. Never trust mirror sidecars.
-        if _neo_installer_url(url):
-            # These installer coordinates are available on ForgeCDN. The
-            # generic Maven candidates do not reliably carry installer JARs.
-            # The official checksum, never the mirror, remains the authority.
-            mirror = _NEO_INSTALLER_MIRROR + relative
-            routes = routes[:2] + [(mirror, True), (mirror, False)]
-        else:
-            routes = routes[:2] + [(mirror + relative, True) for mirror in _NEO_MIRRORS]
+        # ForgeCDN carries installer coordinates and their dependency inputs.
+        # Generic Maven candidates do not reliably carry installer JARs.
+        mirror = _NEO_INSTALLER_MIRROR + relative
+        routes = routes[:2] + [(mirror, True), (mirror, False)]
+        if not _neo_installer_url(url):
+            routes += [(mirror + relative, True) for mirror in _NEO_MIRRORS]
     return routes
 
 
@@ -118,6 +119,186 @@ class DownloadError(RuntimeError):
 
 class _Incomplete(ValueError):
     pass
+
+
+class _RestartDownload(_Incomplete):
+    """An existing partial representation cannot safely be appended to."""
+
+
+def _redirect_target(url, location):
+    """Follow publisher CDNs, without allowing HTTPS downgrade or credentials."""
+    if (not isinstance(location, str) or not location or len(location) > 8192
+            or any(ord(c) < 32 for c in location) or "\\" in location):
+        raise _Incomplete("Сервер вернул неверное перенаправление.")
+    target = urljoin(url, location)
+    try:
+        parsed = urlsplit(target)
+        valid = (parsed.scheme in {"http", "https"} and parsed.hostname
+                 and parsed.username is None and parsed.password is None and not parsed.fragment
+                 and "\\" not in target and not any(ord(c) < 32 for c in target)
+                 and not (urlsplit(url).scheme == "https" and parsed.scheme != "https"))
+        parsed.port  # Reject malformed ports before either transport sees them.
+    except ValueError:
+        valid = False
+    if not valid:
+        raise _Incomplete("Небезопасное перенаправление загрузки отклонено.")
+    return target
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def urlopen(request, *, timeout):
+    """Keep urllib's system proxies/trust roots with our bounded redirect policy."""
+    opener = build_opener(_NoRedirect())
+    deadline = time.monotonic() + timeout
+    seen = {request.full_url}
+    for step in range(MAX_REDIRECTS + 1):
+        try:
+            return opener.open(request, timeout=min(timeout, _remaining(deadline)))
+        except HTTPError as error:
+            if error.code not in {301, 302, 303, 307, 308}:
+                raise
+            try:
+                target = _redirect_target(request.full_url, error.headers.get("Location"))
+            finally:
+                error.close()
+            if target in seen or step == MAX_REDIRECTS:
+                raise _Incomplete("Сервер повторяет перенаправления загрузки.") from None
+            seen.add(target)
+            request = Request(target, headers=dict(request.header_items()))
+    raise AssertionError("unreachable")
+
+
+def _read_timeout(response, deadline, maximum):
+    """Shorten the active socket timeout as a shared deadline approaches."""
+    remaining = min(maximum, _remaining(deadline))
+    for chain in (("fp", "raw", "_sock"), ("raw", "_fp", "fp", "raw", "_sock")):
+        current = response
+        for name in chain:
+            current = getattr(current, name, None)
+        if current is not None:
+            current.settimeout(remaining)
+            break
+
+
+def _transfer_headers(output):
+    return {**_HEADERS, **(output.request_headers() if isinstance(output, _PartialDownload) else {})}
+
+
+def _transfer_start(output, response, code, url, limit):
+    if isinstance(output, _PartialDownload):
+        return output.begin(code, response.headers, url, limit)
+    if code != 200:
+        raise HTTPError(url, code, "Unexpected download response", response.headers, None)
+    try:
+        length = int(response.headers.get("Content-Length", "0"))
+    except ValueError:
+        raise _Incomplete("Сервер вернул неверный размер файла.") from None
+    if length < 0 or length > limit:
+        raise _Incomplete("Размер загрузки превышает допустимый.")
+    return 0, length, length
+
+
+class _PartialDownload:
+    """A private, checksum-bound installer fragment; never an executable cache hit."""
+
+    def __init__(self, path, url, sha1):
+        self.path = path
+        self.record = path.with_suffix(".json")
+        self.url, self.sha1 = url, sha1
+        self.saved = {}
+        for item in (self.path, self.record):
+            if (item.is_symlink() or getattr(item, "is_junction", lambda: False)()
+                    or item.resolve() != item):
+                raise DownloadError("Частичная загрузка установщика перенаправлена. Проверь папку данных BlockHarbor.")
+        try:
+            if self.record.stat().st_size <= 4096:
+                record = json.loads(self.record.read_bytes())
+                if (isinstance(record, dict) and record.get("format") == 1
+                        and record.get("url") == url and record.get("sha1") == sha1
+                        and isinstance(record.get("total"), int) and not isinstance(record["total"], bool)
+                        and 0 < record["total"] <= MAX_DOWNLOAD
+                        and isinstance(record.get("validator"), str) and len(record["validator"]) <= 1024
+                        and not any(ord(c) < 32 for c in record["validator"])
+                        and record.get("validatorKind") in {"ETag", "Last-Modified"}
+                        and isinstance(record.get("source"), str)
+                        and self.path.is_file() and 0 < self.path.stat().st_size <= record["total"]):
+                    self.saved = record
+        except (OSError, ValueError, RecursionError):
+            pass
+        self.stream = self.path.open("r+b" if self.saved else "w+b")
+        self.stream.seek(0, os.SEEK_END)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.stream.close()
+
+    def write(self, data):
+        return self.stream.write(data)
+
+    def tell(self):
+        return self.stream.tell()
+
+    def request_headers(self):
+        start = self.stream.tell()
+        if not start or not self.saved:
+            return {}
+        result = {"Range": f"bytes={start}-"}
+        if self.saved.get("validator"):
+            result["If-Range"] = self.saved["validator"]
+        return result
+
+    def reset(self):
+        self.stream.seek(0)
+        self.stream.truncate()
+        self.saved = {}
+        self.record.unlink(missing_ok=True)
+
+    def begin(self, code, headers, source, limit):
+        start = self.stream.tell()
+        if headers.get("Content-Encoding", "identity").lower() not in {"", "identity"}:
+            raise _RestartDownload("Источник изменил кодирование файла; загрузка будет начата заново.")
+        try:
+            length = int(headers.get("Content-Length", "0"))
+        except ValueError:
+            raise _RestartDownload("Сервер вернул неверный размер файла.") from None
+        if length < 0 or length > limit:
+            raise _RestartDownload("Размер загрузки превышает допустимый.")
+        if code == 206:
+            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", headers.get("Content-Range", ""))
+            if (not start or not self.saved or not match or int(match[1]) != start
+                    or int(match[2]) < start or int(match[3]) <= int(match[2])):
+                raise _RestartDownload("Источник вернул неверный диапазон файла.")
+            total, expected = int(match[3]), int(match[2]) - start + 1
+            if total != self.saved["total"] or (length and length != expected):
+                raise _RestartDownload("Размер продолжаемой загрузки изменился.")
+            validator = headers.get(self.saved["validatorKind"])
+            if (self.saved.get("validator") and validator
+                    and self.saved.get("source") == source and validator != self.saved["validator"]):
+                raise _RestartDownload("Файл на сервере изменился; загрузка будет начата заново.")
+        elif code == 200:
+            self.reset()  # A server may ignore Range or reject If-Range with 200.
+            start, total, expected = 0, length, length
+        else:
+            if code == 416:
+                raise _RestartDownload("Сервер отклонил продолжение файла; загрузка будет начата заново.")
+            raise HTTPError(source, code, "Unexpected download response", headers, None)
+        if total < 0 or total > limit:
+            raise _RestartDownload("Размер загрузки превышает допустимый.")
+        validator, kind = headers.get("ETag", ""), "ETag"
+        if not validator or validator.startswith("W/"):
+            validator, kind = headers.get("Last-Modified", ""), "Last-Modified"
+        if len(validator) > 1024 or any(ord(c) < 32 for c in validator):
+            validator = ""
+        self.saved = {"format": 1, "url": self.url, "sha1": self.sha1, "source": source,
+                      "total": total, "validator": validator, "validatorKind": kind}
+        Download._remember_partial(self.record, self.saved)
+        return start, total, expected
 
 
 def _remaining(deadline):
@@ -205,32 +386,38 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False,
         raise ValueError("Адрес загрузки использует неподдерживаемый протокол.")
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
-    timeout = 5 if quick_catalog else (45 if _neo_path(url) else SOCKET_TIMEOUT)
+    timeout = 5 if quick_catalog else SOCKET_TIMEOUT
     local_deadline = time.monotonic() + (8 if quick_catalog else MAX_RECEIVE_SECONDS)
     deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
     timeout = min(timeout, _remaining(deadline))
-    with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=timeout)) as response:
-        try:
-            length = int(response.headers.get("Content-Length", "0"))
-        except ValueError:
-            raise _Incomplete("Сервер вернул неверный размер файла.") from None
-        if length < 0 or length > limit:
-            raise _Incomplete("Размер загрузки превышает допустимый.")
-        count = 0
+    try:
+        response = urlopen(Request(url, headers=_transfer_headers(output)), timeout=timeout)
+    except HTTPError as error:
+        if error.code == 416 and isinstance(output, _PartialDownload):
+            error.close()
+            raise _RestartDownload("Сервер отклонил продолжение файла; загрузка будет начата заново.") from None
+        raise
+    with lifecycle.response(response) as response:
+        start, length, expected = _transfer_start(output, response, getattr(response, "getcode", lambda: 200)() or 200, response.geturl(), limit)
+        count = start
         read_chunk = getattr(response, "read1", response.read)
         while True:
-            _remaining(deadline)
+            _read_timeout(response, deadline, timeout)
             block = read_chunk(256 * 1024)
             _remaining(deadline)
             if not block:
                 break
             count += len(block)
-            if count > limit:
+            if count > limit or (length and count > length):
                 raise _Incomplete("Загрузка превысила ограничение.")
             output.write(block)
             notify(count, length)
-        if length and count != length:
+        if expected and count - start != expected:
             raise _Incomplete("Передача файла прервана.")
+        if isinstance(output, _PartialDownload) and length and count != length:
+            # A valid 206 can cover less than the requested remainder. Keep it
+            # as an unfinished fragment, rather than hashing/deleting it.
+            raise _Incomplete("Получена часть диапазона файла. Продолжаем загрузку.")
         return dict(response.headers), response.geturl()
 
 
@@ -242,11 +429,7 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
     lifecycle.check()
     local_deadline = time.monotonic() + MAX_RECEIVE_SECONDS
     deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
-    remaining = _remaining(deadline)
-    # A shared installer deadline is not renewed when switching transports.
-    # urllib3 also deducts connection time from this request's read timeout.
     from urllib3.util import Timeout
-    timeout = Timeout(total=remaining, connect=min(12, remaining), read=min(45, remaining))
     # Requests uses the environment/system proxy configuration. Respect an
     # explicitly configured CA file; do not disable certificate verification.
     try:
@@ -255,37 +438,40 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
                 os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
             ):
                 session.verify = os.environ["SSL_CERT_FILE"]
-            with lifecycle.response(session.get(
-                url, headers=_HEADERS, timeout=timeout, stream=True,
-                allow_redirects=False,
-            )) as response:
-                if response.status_code != 200:
-                    raise HTTPError(url, response.status_code, "Maven HTTP error",
-                                    response.headers, None)
-                try:
-                    length = int(response.headers.get("Content-Length", "0"))
-                except ValueError:
-                    raise _Incomplete("Сервер вернул неверный размер файла.") from None
-                if length < 0 or length > limit:
-                    raise _Incomplete("Размер загрузки превышает допустимый.")
-                count = 0
-                # iter_content fills its requested chunk: a peer trickling one
-                # byte can postpone the deadline check for hours. read1 checks
-                # between socket reads instead of waiting for 64 KiB to fill.
-                while True:
-                    _remaining(deadline)
-                    block = response.raw.read1(64 * 1024, decode_content=True)
-                    _remaining(deadline)
-                    if not block:
-                        break
-                    count += len(block)
-                    if count > limit:
-                        raise _Incomplete("Загрузка превысила ограничение.")
-                    output.write(block)
-                    notify(count, length)
-                if length and count != length:
-                    raise _Incomplete("Передача файла прервана.")
-                return dict(response.headers), response.url
+            seen = {url}
+            for step in range(MAX_REDIRECTS + 1):
+                remaining = _remaining(deadline)
+                timeout = Timeout(total=remaining, connect=min(12, remaining), read=min(SOCKET_TIMEOUT, remaining))
+                with lifecycle.response(session.get(
+                    url, headers=_transfer_headers(output), timeout=timeout, stream=True,
+                    allow_redirects=False,
+                )) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        target = _redirect_target(url, response.headers.get("Location"))
+                        if target in seen or step == MAX_REDIRECTS:
+                            raise _Incomplete("Сервер повторяет перенаправления загрузки.")
+                        seen.add(target)
+                        url = target
+                        continue
+                    start, length, expected = _transfer_start(output, response, response.status_code, response.url, limit)
+                    count = start
+                    # Check after each socket read, including near the deadline.
+                    while True:
+                        _read_timeout(response, deadline, SOCKET_TIMEOUT)
+                        block = response.raw.read1(64 * 1024, decode_content=True)
+                        _remaining(deadline)
+                        if not block:
+                            break
+                        count += len(block)
+                        if count > limit or (length and count > length):
+                            raise _Incomplete("Загрузка превысила ограничение.")
+                        output.write(block)
+                        notify(count, length)
+                    if expected and count - start != expected:
+                        raise _Incomplete("Передача файла прервана.")
+                    if isinstance(output, _PartialDownload) and length and count != length:
+                        raise _Incomplete("Получена часть диапазона файла. Продолжаем загрузку.")
+                    return dict(response.headers), response.url
     except (requests.exceptions.SSLError, urllib3_errors.SSLError):
         lifecycle.check()
         raise URLError(ssl.SSLCertVerificationError("TLS verification failed")) from None
@@ -495,13 +681,14 @@ class Download:
         self.cache = Path(cache).resolve() if cache is not None else None
         self._sessions = {}
         self._sessions_lock = threading.Lock()
+        self._preferred_neo_source = None
 
     def _installer_cache(self, url):
         if self.cache is None:
             return None
         directory = self.cache / "installer-cache" / hashlib.sha256(url.encode()).hexdigest()
         paths = directory / "installer.jar", directory / "source.json"
-        for path in (directory.parent, directory, *paths):
+        for path in (directory.parent, directory, *paths, directory / "installer.part", directory / "installer.json"):
             if (path.is_symlink() or getattr(path, "is_junction", lambda: False)()
                     or path.resolve() != path):
                 raise DownloadError("Кэш установщиков перенаправлен. Проверь папку данных BlockHarbor.")
@@ -525,7 +712,11 @@ class Download:
 
     @staticmethod
     def _remember_installer_digest(record, url, digest):
-        data = json.dumps({"format": 1, "url": url, "sha1": digest}).encode()
+        Download._remember_partial(record, {"format": 1, "url": url, "sha1": digest})
+
+    @staticmethod
+    def _remember_partial(record, value):
+        data = json.dumps(value).encode()
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(dir=record.parent, prefix=".blockharbor-download-", delete=False) as out:
@@ -585,7 +776,7 @@ class Download:
                 self._remember_installer_digest(record, url, sha1)
             self.progress("Подготовка файлов NeoForge · проверяем сохранённый установщик…")
             if not _valid(cached, sha1):
-                self.fetch(url, cached, sha1, False, deadline=deadline)
+                self.fetch(url, cached, sha1, False, deadline=deadline, partial=cached.with_suffix(".part"))
             # The upstream provider creates and removes its own temp directory
             # on each attempt. Keep our verified source even if Java then fails.
             self._copy_installer(cached, path, sha1)
@@ -668,35 +859,62 @@ class Download:
         finally:
             _THREADS.release()
 
-    def fetch(self, url, path, sha1, compressed, *, deadline=None):
+    def fetch(self, url, path, sha1, compressed, *, deadline=None, partial=None):
         lifecycle.check()
         path.parent.mkdir(parents=True, exist_ok=True)
         relative = _neo_path(url)
         if relative is not None:
             url = _NEO_ORIGIN + relative
         routes = _neo_routes(url, sha1)
-        primary_error = None
-        used_fallback = False
+        if relative is not None:
+            deadline = deadline if deadline is not None else time.monotonic() + MAVEN_SECONDS
+            # Within this preparation only, reuse an independently verified CDN
+            # route. A cold PC must not wait for the same dead origin 100 times.
+            with self._sessions_lock:
+                preferred = self._preferred_neo_source
+            if sha1 and preferred:
+                routes.sort(key=lambda route: not route[0].startswith(preferred))
+        failures = []
         for attempt, (source_url, alternate) in enumerate(routes):
             packed = plain = None
+            resumable = None
             try:
                 if deadline is not None:
                     _remaining(deadline)
-                with tempfile.NamedTemporaryFile(
-                    dir=path.parent, prefix=".blockharbor-download-", delete=False
-                ) as out:
-                    packed = Path(out.name)
+                if partial is not None:
+                    resumable = _PartialDownload(partial, url, sha1)
+                    packed = partial
+                    # The final bytes can already be on disk after a cancelled
+                    # EOF/verification step; the checksum is still mandatory.
+                    if _valid(partial, sha1):
+                        resumable.stream.close()
+                        with lifecycle.guard():
+                            os.replace(partial, path)
+                        resumable.record.unlink(missing_ok=True)
+                        return True
+                    context = resumable
+                else:
+                    context = tempfile.NamedTemporaryFile(
+                        dir=path.parent, prefix=".blockharbor-download-", delete=False)
+                with context as out:
+                    if packed is None:
+                        packed = Path(out.name)
                     receive = _receive_requests if alternate else _receive
                     if (not alternate and sha1 and urlsplit(source_url).scheme == "https"
                             and urlsplit(source_url).hostname in _POOLED_MOJANG):
                         receive = self._receive_asset
-                    used_fallback |= source_url != url
+                    attempt_deadline = deadline
+                    if relative is not None and deadline is not None:
+                        # Reserve useful time for every route. A slow or stalled
+                        # origin cannot consume the mirror's entire budget.
+                        allowance = min(MAVEN_ATTEMPT_SECONDS, _remaining(deadline) / (len(routes) - attempt))
+                        attempt_deadline = min(deadline, time.monotonic() + allowance)
                     receive(
                         source_url,
                         out,
                         MAX_DOWNLOAD,
                         lambda n, total: self.progress.downloaded(path.name, n, total),
-                        **({"deadline": deadline} if deadline is not None else {}),
+                        **({"deadline": attempt_deadline} if attempt_deadline is not None else {}),
                     )
                 if deadline is not None:
                     _remaining(deadline)
@@ -715,6 +933,9 @@ class Download:
                                 raise _Incomplete("Файл Java слишком велик.")
                             output.write(block)
                 if not _valid(plain, sha1):
+                    if resumable is not None:
+                        packed.unlink(missing_ok=True)
+                        resumable.record.unlink(missing_ok=True)
                     raise _Incomplete("Контрольная сумма файла не совпала.")
                 if (
                     not sha1
@@ -726,6 +947,14 @@ class Download:
                     json.loads(plain.read_bytes())
                 with lifecycle.guard():
                     os.replace(plain, path)
+                if resumable is not None:
+                    resumable.record.unlink(missing_ok=True)
+                if relative is not None and sha1:
+                    with self._sessions_lock:
+                        if source_url.startswith(_NEO_INSTALLER_MIRROR):
+                            self._preferred_neo_source = _NEO_INSTALLER_MIRROR
+                        elif source_url.startswith(_NEO_ORIGIN):
+                            self._preferred_neo_source = _NEO_ORIGIN
                 return True
             except (
                 HTTPError,
@@ -738,13 +967,18 @@ class Download:
                 EOFError,
                 json.JSONDecodeError,
             ) as error:
-                if source_url == url:
-                    primary_error = error
-                # A checksum-pinned alternate origin may legitimately have
-                # the artifact even when the original CDN returns 403/404.
+                if isinstance(error, HTTPError):
+                    error.close()
+                if isinstance(error, _RestartDownload) and resumable is not None:
+                    partial.unlink(missing_ok=True)
+                    resumable.record.unlink(missing_ok=True)
+                failures.append((source_url, alternate, error))
+                # A verified artifact can use a different HTTPS transport even
+                # at the same URL; a mirror's redirect/status must not skip it.
                 verified_fallback = (
                     relative is not None
-                    and any(next_url != source_url for next_url, _ in routes[attempt + 1:])
+                    and sha1
+                    and bool(routes[attempt + 1:])
                     and not isinstance(
                         error.reason if isinstance(error, URLError) else error,
                         ssl.SSLCertVerificationError,
@@ -752,15 +986,37 @@ class Download:
                 )
                 exhausted = deadline is not None and time.monotonic() >= deadline
                 if (not _retry(error) and not verified_fallback) or attempt + 1 == len(routes) or exhausted:
-                    cause = primary_error if primary_error is not None else error
-                    message = _error(url, cause)
+                    message = _error(source_url, error)
+                    if relative is not None:
+                        name = urlsplit(url).path.rsplit("/", 1)[-1]
+                        message = f"Не удалось подготовить {name}. " + message
+                        details = []
+                        for failed_url, transport, failed_error in failures:
+                            host = urlsplit(failed_url).hostname or "сервер файлов"
+                            reason = failed_error.reason if isinstance(failed_error, URLError) else failed_error
+                            if isinstance(failed_error, HTTPError):
+                                detail = f"HTTP {failed_error.code}"
+                            elif isinstance(reason, ssl.SSLCertVerificationError):
+                                detail = "ошибка сертификата"
+                            elif isinstance(reason, TimeoutError):
+                                detail = "тайм-аут"
+                            elif isinstance(reason, socket.gaierror):
+                                detail = "ошибка DNS"
+                            elif isinstance(reason, _Incomplete):
+                                detail = str(reason).rstrip(".")
+                            else:
+                                detail = "соединение прервано"
+                            details.append(f"{host} ({'requests' if transport else 'urllib'}): {detail}")
+                        message += " Проверенные маршруты: " + "; ".join(details) + "."
+                        if partial is not None and partial.is_file() and partial.stat().st_size:
+                            message += " Полученная часть установщика сохранена для следующей попытки."
                     if exhausted:
-                        message += " Общее время загрузки установщика истекло."
-                    elif relative is not None and used_fallback:
+                        message += " Общее время подготовки файла истекло."
+                    elif relative is not None and any(failed_url != url for failed_url, _, _ in failures):
                         message += " Резервная загрузка также не завершена."
                     raise DownloadError(
-                        message, url=url,
-                        status_code=cause.code if isinstance(cause, HTTPError) else None,
+                        message, url=source_url,
+                        status_code=error.code if isinstance(error, HTTPError) else None,
                     ) from None
                 next_url, _ = routes[attempt + 1]
                 if next_url != source_url:
@@ -772,11 +1028,18 @@ class Download:
                         f"Повтор загрузки {path.name} · {attempt + 2} / {len(routes)}"
                     )
                 delay = 0.5 * (attempt + 1)
-                lifecycle.wait(min(delay, max(0, deadline - time.monotonic())) if deadline is not None else delay)
+                if deadline is not None:
+                    # Backoff must also leave useful time for every untried
+                    # route, including a nearly exhausted shared deadline.
+                    remaining = max(0, deadline - time.monotonic())
+                    delay = min(delay, remaining / (len(routes) - attempt) / 10)
+                lifecycle.wait(delay)
             finally:
-                if plain is not None:
+                if resumable is not None:
+                    resumable.stream.close()
+                if plain is not None and plain != partial:
                     plain.unlink(missing_ok=True)
-                if packed is not None and packed != plain:
+                if packed is not None and packed != plain and packed != partial:
                     packed.unlink(missing_ok=True)
         raise AssertionError("unreachable")
 
@@ -863,17 +1126,27 @@ class _Processors:
         return True
 
     def run(self, command, **kwargs):
+        prepared = nullcontext(command)
         if isinstance(command, (tuple, list)) and command and Path(
             str(command[0])
         ).name.lower() in ("java", "java.exe"):
             if self._download_mappings(command):
                 empty = "" if kwargs.get("text") or kwargs.get("universal_newlines") else b""
                 return subprocess.CompletedProcess(command, 0, empty, empty)
-            command = [command[0], "-Djava.net.useSystemProxies=true", *command[1:]]
+            if self.downloader is not None and self.cache is not None:
+                from .neoforge_install import adapt
+
+                prepared = adapt(command, downloader=self.downloader, cache=self.cache,
+                                 cwd=kwargs.get("cwd"))
         kwargs.setdefault("timeout", 900)
         check = kwargs.pop("check", self.check_default)
         try:
-            return lifecycle.run(command, check=check, **kwargs)
+            with prepared as command:
+                if isinstance(command, (tuple, list)) and command and Path(
+                    str(command[0])
+                ).name.lower() in ("java", "java.exe"):
+                    command = [command[0], "-Djava.net.useSystemProxies=true", *command[1:]]
+                return lifecycle.run(command, check=check, **kwargs)
         except subprocess.TimeoutExpired:
             raise DownloadError(
                 "Установщик загрузчика не завершился за 15 минут. Повтори подготовку."

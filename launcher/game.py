@@ -310,9 +310,77 @@ def _callback(status: Status) -> dict:
 def _prepare_files(version, cache, callbacks, status):
     import minecraft_launcher_lib as mc
 
+    # launcher-lib's install_minecraft_version consults the live Java catalog
+    # even when all files already exist. Verify the complete local recipe first
+    # so recovery and ZIP imports do not depend on that unrelated request.
+    cache = Path(cache).resolve()
+    try:
+        manifest = _manifest_path(cache, version)
+        if manifest.is_file() and manifest.stat().st_size <= preparation.MAX_METADATA:
+            metadata = json.loads(manifest.read_bytes())
+            base = metadata.get("inheritsFrom", version)
+            if base != version:
+                _reuse_inherited_client(cache, version, metadata)
+            if _missing_install_file(cache, base, version) is None:
+                status("Проверяем локальные файлы игры…")
+                return
+    except lifecycle.OperationCancelled:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError, mc.exceptions.VersionNotFound):
+        pass  # Missing/corrupt metadata follows the normal verified repair path.
     if isinstance(status, preparation.Progress):
         status.start()
     mc.install.install_minecraft_version(version, cache, callback=callbacks)
+
+
+def _reuse_inherited_client(cache, installed, metadata):
+    """Populate launcher-lib's client alias from its exact verified base JAR.
+
+    Loader profiles without their own client download use vanilla's client.
+    launcher-lib 8 otherwise fetches that same client again under the loader ID
+    and refreshes Java first. Preserve its expected layout without that network
+    dependency; custom client downloads and explicit JAR overrides stay intact.
+    """
+    if (not installed.startswith("neoforge-") or metadata.get("id") != installed
+            or metadata.get("jar") or metadata.get("downloads", {}).get("client")):
+        return
+    base = metadata.get("inheritsFrom")
+    if not isinstance(base, str) or base == installed:
+        return
+    source = _manifest_path(cache, base).with_suffix(".jar")
+    parent = _manifest_path(cache, base)
+    if not parent.is_file() or parent.stat().st_size > preparation.MAX_METADATA:
+        return
+    descriptor = json.loads(parent.read_bytes())
+    entry = descriptor.get("downloads", {}).get("client", {})
+    if (descriptor.get("id") != base or not isinstance(entry, dict)
+            or not isinstance(entry.get("sha1"), str)
+            or not re.fullmatch(r"[a-fA-F0-9]{40}", entry["sha1"])
+            or type(entry.get("size")) is not int or entry["size"] <= 0
+            or not _verified_install_file(source, entry)):
+        return
+    target = _manifest_path(cache, installed).with_suffix(".jar")
+    if _verified_install_file(target, entry):
+        return
+    if target.parent.resolve() != target.parent or not target.parent.is_relative_to(cache):
+        raise preparation.DownloadError("Папка клиентского файла загрузчика перенаправлена.")
+    temporary = None
+    try:
+        with source.open("rb") as src, tempfile.NamedTemporaryFile(
+                dir=target.parent, prefix=".blockharbor-download-", delete=False) as out:
+            temporary = Path(out.name)
+            while block := src.read(1024**2):
+                lifecycle.check()
+                out.write(block)
+                if out.tell() > entry["size"]:
+                    raise ValueError("Файл Minecraft изменился во время проверки.")
+        if not _verified_install_file(temporary, entry):
+            raise ValueError("Контрольная сумма сохранённого клиента Minecraft не совпала.")
+        with lifecycle.guard():
+            os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _legacy_java(cache, status, callbacks):
@@ -449,6 +517,13 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
         installed, cache, {"username": "Player", "uuid": "0" * 32, "token": "0"}
     )
     declared = dict(libraries)
+    if installed.startswith("neoforge-") and installed != base:
+        profile = json.loads(_manifest_path(cache, installed).read_bytes())
+        if (profile.get("id") == installed and profile.get("inheritsFrom") == base
+                and not profile.get("jar") and not profile.get("downloads", {}).get("client")):
+            # This alias contains the exact vanilla bytes, not a processor
+            # output. A nonempty but corrupt alias must not count as ready.
+            declared[_manifest_path(cache, installed).with_suffix(".jar").resolve()] = metadata.get("downloads", {}).get("client", {})
     required = [path for path, _entry in libraries]
     for flag in ("-cp", "-classpath", "--class-path", "-p", "--module-path"):
         if flag not in args:
@@ -612,6 +687,12 @@ def _install(
         pin = _version_id(pin)
         installed = _version_id(provider.get_installed_version(version, pin))
         if not pinned_ready:
+            # ZIPs can carry publisher-verified installer inputs. Recheck their
+            # authority locally before seeding the shared download cache; never
+            # import a prepared profile, executable Java, or a success receipt.
+            from . import loader_files
+
+            loader_files.apply(instance, cache, version, loader, pin, status)
             # An interrupted/failed vendor run must never inherit a previous
             # success receipt merely because it left a profile JSON behind.
             receipt = _loader_receipt_path(cache, installed)

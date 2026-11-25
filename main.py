@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1736,8 +1737,9 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(length))
                 pid, worlds = data["id"], data.get("worlds") is True
                 archive = tempfile.TemporaryFile(dir=self.app.store.root)
+                loader_file_count = 0
                 try:
-                    with self.app.lock, self.app.coordinator.operation():
+                    with lifecycle.bind(self.app.scope), self.app.lock, self.app.coordinator.operation():
                         if self.app.job_snapshot()["busy"]:
                             raise ValueError("Дождись завершения текущей операции.")
                         if worlds:
@@ -1751,14 +1753,32 @@ class Handler(BaseHTTPRequestHandler):
                             self.app.require_profile_idle(pid)
                             name = self.app.packs.export_pack(pid, archive)
                         else:
-                            name = build_archive.export_build(self.app.store, pid, archive, worlds)
+                            from launcher import game, loader_files
+
+                            include_loader = data.get("loaderFiles", True) is not False
+                            profile = self.app.store.profile(pid)
+                            if include_loader and profile["loader"] == "neoforge":
+                                with game._install_lock(self.app.store.root / "game-cache"):
+                                    loader_files.prepare_export(self.app.store, pid)
+                                    name = build_archive.export_build(
+                                        self.app.store, pid, archive, worlds, include_loader_files=True,
+                                    )
+                            else:
+                                name = build_archive.export_build(self.app.store, pid, archive, worlds)
+                            with zipfile.ZipFile(archive) as prepared:
+                                manifest = json.loads(prepared.read(build_archive.MANIFEST))
+                                if manifest.get("loaderFiles") is True:
+                                    inputs = json.loads(prepared.read(loader_files.SECTION + "/" + loader_files.MANIFEST))
+                                    loader_file_count = 1 + len(inputs["libraries"])
+                            archive.seek(0)
                         ticket, cookie = self.app.downloads.issue(archive, name)
                 except BaseException:
                     archive.close()
                     raise
                 url = "/api/build-download/" + ticket
                 response = json.dumps(
-                    {"download": url, "name": name}, ensure_ascii=False
+                    {"download": url, "name": name, "loaderFiles": loader_file_count > 0,
+                     "loaderFileCount": loader_file_count}, ensure_ascii=False
                 ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

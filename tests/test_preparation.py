@@ -125,11 +125,11 @@ class PreparationTests(unittest.TestCase):
         primary = Mock(side_effect=TimeoutError("CDN timed out"))
         seen = []
 
-        def fallback(url, output, limit, notify=lambda *_: None):
+        def fallback(url, output, limit, notify=lambda *_: None, *, deadline=None):
             seen.append(url)
             if url == original:
                 raise ConnectionError("alternate transport failed")
-            if "creeperhost" in url:
+            if "creeperhost" in url or "forgecdn" in url:
                 output.write(b"wrong bytes")
             else:
                 self.assertEqual(target.read_bytes(), b"old valid bytes must not be replaced by bad mirror")
@@ -141,6 +141,7 @@ class PreparationTests(unittest.TestCase):
             self.assertTrue(preparation.Download(self.progress)(original, target, sha1=self.sha))
         self.assertEqual(seen, [
             original,
+            "https://neoforged.forgecdn.net/releases/net/neoforged/neoform/1/neoform-1.zip",
             "https://maven.creeperhost.net/net/neoforged/neoform/1/neoform-1.zip",
             "https://mirrors.nju.edu.cn/bmclapi/net/neoforged/neoform/1/neoform-1.zip",
         ])
@@ -190,7 +191,7 @@ class PreparationTests(unittest.TestCase):
         original = "https://maven.neoforged.net/releases/net/neoforged/bus/1/bus-1.jar"
         self.file.write_bytes(b"original")
 
-        def wrong(url, output, limit, notify=lambda *_: None):
+        def wrong(url, output, limit, notify=lambda *_: None, *, deadline=None):
             output.write(b"wrong")
 
         with (patch.object(preparation, "_receive", side_effect=TimeoutError),
@@ -198,7 +199,7 @@ class PreparationTests(unittest.TestCase):
               patch.object(lifecycle, "wait"),
               self.assertRaises(preparation.DownloadError)):
             preparation.Download(self.progress)(original, self.file, sha1=self.sha)
-        self.assertEqual(fallback.call_count, 4)
+        self.assertEqual(fallback.call_count, 5)
         self.assertEqual(self.file.read_bytes(), b"original")
         self.assertEqual(list(self.root.iterdir()), [self.file])
 

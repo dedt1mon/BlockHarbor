@@ -170,6 +170,9 @@ test("Minecraft download stages show real text without claiming the game session
     "Проверяем локальные файлы игры…",
     "Подготовка файлов NeoForge · проверяем контрольную сумму…",
     "Подготовка файлов NeoForge · проверяем сохранённый установщик…",
+    "Подготовка файлов NeoForge · используем проверенные файлы из сборки…",
+    "Подготовка зависимостей NeoForge · 14 / 70",
+    "Настраиваем NeoForge · все файлы подготовлены, устанавливаем локально…",
     "Повтор загрузки neoforge-installer.jar · 2 / 6",
     "Резервный источник neoforged.forgecdn.net · neoforge-installer.jar",
   ]) {

@@ -141,7 +141,7 @@ jobs:
           }
           [System.IO.File]::WriteAllLines((Join-Path $release "SHA256SUMS.txt"), $sums, [System.Text.UTF8Encoding]::new($false))
 
-      - name: Verify compiled Russian metadata and actual Windows setup
+      - name: Verify Windows setup, packaged runtime and real NeoForge downloads
         shell: pwsh
         run: |
           $release = Join-Path $env:RUNNER_TEMP "blockharbor-release"

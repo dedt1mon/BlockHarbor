@@ -166,6 +166,20 @@ test("Minecraft download stages show real text without claiming the game session
   assert.equal(h.panel.hidden, false);
   assert.equal(h.fields.progress.value, undefined, "An unstructured message must not produce a guessed percentage");
   assert.match(h.fields["[data-download-message]"].textContent, /10.0 МБ \/ 30.0 МБ/);
+  for (const message of [
+    "Проверяем локальные файлы игры…",
+    "Подготовка файлов NeoForge · проверяем контрольную сумму…",
+    "Подготовка файлов NeoForge · проверяем сохранённый установщик…",
+    "Повтор загрузки neoforge-installer.jar · 2 / 6",
+    "Резервный источник neoforged.forgecdn.net · neoforge-installer.jar",
+  ]) {
+    h.ui.observe(snapshot({action: "play", busy: true, message}));
+    assert.equal(h.panel.hidden, false, message);
+    assert.equal(h.fields["[data-download-message]"].textContent, message);
+    assert.equal(h.fields.progress.value, undefined, "Recovery must not invent a percentage");
+    h.ui.observe(snapshot({action: "saveProfile", busy: true, message}));
+    assert.equal(h.panel.hidden, true, "Only game preparation belongs in the download panel");
+  }
   h.ui.observe(snapshot({action: "play", busy: true, message: "Готовим гардероб в игре: QuickSkin…"}));
   assert.equal(h.panel.hidden, false);
   assert.equal(h.fields.progress.value, undefined);

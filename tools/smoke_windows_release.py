@@ -122,6 +122,26 @@ def test_runtime(installed, root, version):
         for script in ("app.js", "window.js", "pack-hub.js", "updates.js", "build-care.js"):
             assert len(call(script, auth=False, raw=True)) > 100, script
         print("PASS: packaged runtime with isolated system PATH, local API, Russian profile, feature reads, static UI, authentication")
+        # Exercise the reported failing download with the interpreter, libraries
+        # and production downloader extracted by this exact release EXE. The
+        # live smoke owns a separate temporary cache and never starts Minecraft.
+        app_cache = local / "BlockHarbor" / "app"
+        generation = (app_cache / "current").read_text(encoding="utf-8")
+        assert re.fullmatch(r"files-[A-Za-z0-9_-]+", generation), generation
+        packaged = (app_cache / generation).resolve()
+        assert packaged.is_relative_to(app_cache.resolve())
+        subprocess.run([
+            str(packaged / "runtime" / "python.exe"), "-B", "-X", "utf8",
+            str(packaged / "tools" / "smoke_neoforge_download.py"),
+            "--root", str(root / "neoforge-download"), "--timeout", "180",
+        ], check=True, timeout=210, cwd=packaged, env=environment)
+        download_report = json.loads((root / "neoforge-download" / "report.json").read_text(encoding="utf-8"))
+        assert download_report["ok"] and len(download_report["phases"]) == 3
+        primary, fallback, replay = download_report["phases"]
+        assert primary["verified"] == fallback["verified"] == replay["verified"]
+        assert fallback["injectedPrimaryTimeouts"] >= 2 and replay["networkDeniedAttempts"] == 0
+        print("PASS: NeoForge installer SHA-256 " + primary["verified"]["sha256"])
+        print("PASS: actual release payload downloads NeoForge 21.1.267, verifies fallback and reuses its cache offline")
     finally:
         if process.poll() is None:
             # This is our isolated CI test process tree only.

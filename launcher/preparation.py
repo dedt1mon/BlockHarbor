@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import json
 import lzma
 import os
@@ -34,12 +35,23 @@ SOCKET_TIMEOUT = 25
 MAX_RECEIVE_SECONDS = 20 * 60
 MAX_DOWNLOAD = 2 * 1024**3
 MAX_METADATA = 32 * 1024**2
+INSTALLER_SECONDS = 5 * 60
+CHECKSUM_SECONDS = 60
+CHECKSUM_ATTEMPT_SECONDS = 20
 _LIB_LOCK = threading.RLock()
 _THREADS = threading.BoundedSemaphore(6)
 _HEADERS = {"User-Agent": f"BlockHarbor/{VERSION}", "Accept-Encoding": "identity"}
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 _POOLED_MOJANG = {"resources.download.minecraft.net", "piston-data.mojang.com", "launcher.mojang.com"}
 _NEO_ORIGIN = "https://maven.neoforged.net/releases/"
+_NEO_INSTALLER_MIRROR = "https://neoforged.forgecdn.net/releases/"
+# Reviewed against the official Maven sidecar and installer on 2026-11-26.
+# This exact release remains recoverable on a clean PC during an origin outage;
+# a checksum served by a fallback host is never accepted as its authority.
+_NEO_INSTALLER_SHA1 = {
+    "net/neoforged/neoforge/21.1.267/neoforge-21.1.267-installer.jar":
+        "4565232f0bf231d0edfe512b949664dc5ff88fd8",
+}
 # These repositories are candidates, not authorities for file hashes. Only an
 # exact digest from the original metadata can authorize a fallback artifact.
 _NEO_MIRRORS = (
@@ -76,8 +88,25 @@ def _neo_routes(url, sha1=None):
     if isinstance(sha1, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha1):
         # Switch origin after two transport failures instead of making the
         # player repeatedly wait on the same CDN. Never trust mirror sidecars.
-        routes = routes[:2] + [(mirror + relative, True) for mirror in _NEO_MIRRORS]
+        if _neo_installer_url(url):
+            # These installer coordinates are available on ForgeCDN. The
+            # generic Maven candidates do not reliably carry installer JARs.
+            # The official checksum, never the mirror, remains the authority.
+            mirror = _NEO_INSTALLER_MIRROR + relative
+            routes = routes[:2] + [(mirror, True), (mirror, False)]
+        else:
+            routes = routes[:2] + [(mirror + relative, True) for mirror in _NEO_MIRRORS]
     return routes
+
+
+def _neo_installer_url(url):
+    relative = _neo_path(url)
+    parts = relative.split("/") if relative else []
+    if (len(parts) == 5 and parts[:2] == ["net", "neoforged"]
+            and parts[2] in {"neoforge", "forge"} and len(parts[3]) <= 150
+            and parts[4] == f"{parts[2]}-{parts[3]}-installer.jar"):
+        return _NEO_ORIGIN + relative
+    return None
 
 
 class DownloadError(RuntimeError):
@@ -89,6 +118,14 @@ class DownloadError(RuntimeError):
 
 class _Incomplete(ValueError):
     pass
+
+
+def _remaining(deadline):
+    lifecycle.check()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _Incomplete("Загрузка превысила ограничение по времени.")
+    return remaining
 
 
 def processor_diagnostic(error):
@@ -162,14 +199,16 @@ def _error(url, error):
     return f"Загрузка с {host} не завершена. Проверь подключение и снова нажми «Играть». Скачанные файлы сохраняются."
 
 
-def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False):
+def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False, deadline=None):
     lifecycle.check()
     if urlsplit(url).scheme not in ("https", "http"):
         raise ValueError("Адрес загрузки использует неподдерживаемый протокол.")
     # urlopen preserves environment proxies and the Windows Internet Settings
     # proxy, along with system trust roots and explicit SSL_CERT_FILE settings.
     timeout = 5 if quick_catalog else (45 if _neo_path(url) else SOCKET_TIMEOUT)
-    deadline = time.monotonic() + (8 if quick_catalog else MAX_RECEIVE_SECONDS)
+    local_deadline = time.monotonic() + (8 if quick_catalog else MAX_RECEIVE_SECONDS)
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+    timeout = min(timeout, _remaining(deadline))
     with lifecycle.response(urlopen(Request(url, headers=_HEADERS), timeout=timeout)) as response:
         try:
             length = int(response.headers.get("Content-Length", "0"))
@@ -179,10 +218,14 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
             raise _Incomplete("Размер загрузки превышает допустимый.")
         count = 0
         read_chunk = getattr(response, "read1", response.read)
-        while block := read_chunk(256 * 1024):
-            lifecycle.check()
+        while True:
+            _remaining(deadline)
+            block = read_chunk(256 * 1024)
+            _remaining(deadline)
+            if not block:
+                break
             count += len(block)
-            if count > limit or time.monotonic() > deadline:
+            if count > limit:
                 raise _Incomplete("Загрузка превысила ограничение.")
             output.write(block)
             notify(count, length)
@@ -191,13 +234,19 @@ def _receive(url, output, limit, notify=lambda *_: None, *, quick_catalog=False)
         return dict(response.headers), response.geturl()
 
 
-def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=None):
+def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=None, deadline=None):
     """Independent HTTPS transport for Maven; keep cancellation and TLS verification."""
     import requests
     from urllib3 import exceptions as urllib3_errors
 
     lifecycle.check()
-    deadline = time.monotonic() + MAX_RECEIVE_SECONDS
+    local_deadline = time.monotonic() + MAX_RECEIVE_SECONDS
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+    remaining = _remaining(deadline)
+    # A shared installer deadline is not renewed when switching transports.
+    # urllib3 also deducts connection time from this request's read timeout.
+    from urllib3.util import Timeout
+    timeout = Timeout(total=remaining, connect=min(12, remaining), read=min(45, remaining))
     # Requests uses the environment/system proxy configuration. Respect an
     # explicitly configured CA file; do not disable certificate verification.
     try:
@@ -207,7 +256,7 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
             ):
                 session.verify = os.environ["SSL_CERT_FILE"]
             with lifecycle.response(session.get(
-                url, headers=_HEADERS, timeout=(12, 45), stream=True,
+                url, headers=_HEADERS, timeout=timeout, stream=True,
                 allow_redirects=False,
             )) as response:
                 if response.status_code != 200:
@@ -223,10 +272,14 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
                 # iter_content fills its requested chunk: a peer trickling one
                 # byte can postpone the deadline check for hours. read1 checks
                 # between socket reads instead of waiting for 64 KiB to fill.
-                while block := response.raw.read1(64 * 1024, decode_content=True):
-                    lifecycle.check()
+                while True:
+                    _remaining(deadline)
+                    block = response.raw.read1(64 * 1024, decode_content=True)
+                    _remaining(deadline)
+                    if not block:
+                        break
                     count += len(block)
-                    if count > limit or time.monotonic() > deadline:
+                    if count > limit:
                         raise _Incomplete("Загрузка превысила ограничение.")
                     output.write(block)
                     notify(count, length)
@@ -242,6 +295,40 @@ def _receive_requests(url, output, limit, notify=lambda *_: None, *, session=Non
     except (requests.exceptions.RequestException, urllib3_errors.HTTPError):
         lifecycle.check()
         raise ConnectionError("Maven transfer failed") from None
+
+
+def _installer_checksum(url, *, deadline):
+    """Resolve only the exact official sidecar, with finite transport retries."""
+    canonical = _neo_installer_url(url)
+    if canonical is None:
+        raise ValueError("Некорректный адрес установщика NeoForge.")
+    url = canonical + ".sha1"
+    deadline = min(deadline, time.monotonic() + CHECKSUM_SECONDS)
+    receivers = (_receive, _receive_requests, _receive)
+    for attempt, receive in enumerate(receivers):
+        try:
+            _remaining(deadline)
+            output = io.BytesIO()
+            _, effective = receive(url, output, 1024,
+                                   deadline=min(deadline, time.monotonic() + CHECKSUM_ATTEMPT_SECONDS))
+            _remaining(deadline)
+            # urllib follows redirects. A mirror sidecar must not become an
+            # authority merely because the original endpoint redirected to it.
+            if effective != url:
+                raise _Incomplete("Сервер перенаправил контрольную сумму установщика.")
+            try:
+                digest = output.getvalue().decode("ascii").strip()
+            except UnicodeError:
+                digest = ""
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", digest):
+                raise _Incomplete("Сервер вернул неверную контрольную сумму установщика.")
+            return digest.lower()
+        except (HTTPError, URLError, HTTPException, TimeoutError, ConnectionError, _Incomplete) as error:
+            if not _retry(error) or attempt + 1 == len(receivers) or time.monotonic() >= deadline:
+                raise DownloadError(_error(url, error), url=url,
+                                    status_code=error.code if isinstance(error, HTTPError) else None) from None
+            lifecycle.wait(min(0.5 * (attempt + 1), max(0, deadline - time.monotonic())))
+    raise AssertionError("unreachable")
 
 
 def metadata_response(url, *, quick_catalog=False, **_kwargs):
@@ -403,10 +490,107 @@ class Progress:
 
 
 class Download:
-    def __init__(self, progress):
+    def __init__(self, progress, *, cache=None):
         self.progress = progress
+        self.cache = Path(cache).resolve() if cache is not None else None
         self._sessions = {}
         self._sessions_lock = threading.Lock()
+
+    def _installer_cache(self, url):
+        if self.cache is None:
+            return None
+        directory = self.cache / "installer-cache" / hashlib.sha256(url.encode()).hexdigest()
+        paths = directory / "installer.jar", directory / "source.json"
+        for path in (directory.parent, directory, *paths):
+            if (path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+                    or path.resolve() != path):
+                raise DownloadError("Кэш установщиков перенаправлен. Проверь папку данных BlockHarbor.")
+        directory.mkdir(parents=True, exist_ok=True)
+        return paths
+
+    @staticmethod
+    def _cached_installer_digest(record, url):
+        try:
+            with record.open("rb") as source:
+                raw = source.read(4097)
+            if len(raw) > 4096:
+                return None
+            data = json.loads(raw)
+            if (isinstance(data, dict) and data.get("format") == 1 and data.get("url") == url
+                    and isinstance(data.get("sha1"), str) and re.fullmatch(r"[a-f0-9]{40}", data["sha1"])):
+                return data["sha1"]
+        except (OSError, ValueError, RecursionError):
+            pass
+        return None
+
+    @staticmethod
+    def _remember_installer_digest(record, url, digest):
+        data = json.dumps({"format": 1, "url": url, "sha1": digest}).encode()
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=record.parent, prefix=".blockharbor-download-", delete=False) as out:
+                temporary = Path(out.name)
+                out.write(data)
+            with lifecycle.guard():
+                os.replace(temporary, record)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _copy_installer(source, target, digest):
+        """Verify the actual copied bytes before exposing a new vendor temp file."""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with source.open("rb") as src, tempfile.NamedTemporaryFile(
+                    dir=target.parent, prefix=".blockharbor-download-", delete=False) as out:
+                temporary = Path(out.name)
+                checksum, count = hashlib.sha1(), 0
+                while block := src.read(1024 * 1024):
+                    lifecycle.check()
+                    count += len(block)
+                    if count > MAX_DOWNLOAD:
+                        raise DownloadError("Сохранённый установщик превышает допустимый размер.")
+                    checksum.update(block)
+                    out.write(block)
+            if checksum.hexdigest() != digest:
+                raise DownloadError("Сохранённый установщик изменился во время проверки. Повтори подготовку.")
+            with lifecycle.guard():
+                os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def _fetch_installer(self, url, path, sha1, *, overwrite=False):
+        deadline = time.monotonic() + INSTALLER_SECONDS
+        paths = self._installer_cache(url)
+        cached_digest = self._cached_installer_digest(paths[1], url) if paths else None
+        if sha1 is not None and not (isinstance(sha1, str) and re.fullmatch(r"[a-fA-F0-9]{40}", sha1)):
+            raise ValueError("Некорректная контрольная сумма установщика.")
+        sha1 = sha1.lower() if sha1 else _NEO_INSTALLER_SHA1.get(_neo_path(url)) or cached_digest
+        if not sha1:
+            self.progress("Подготовка файлов NeoForge · проверяем контрольную сумму…")
+            try:
+                sha1 = _installer_checksum(url, deadline=deadline)
+            except DownloadError:
+                # Preserve the previous primary-only behavior for releases
+                # without a trusted digest. Never mirror or cache such bytes.
+                pass
+        if not overwrite and _valid(path, sha1):
+            return False
+        if paths and sha1:
+            cached, record = paths
+            if cached_digest != sha1:
+                self._remember_installer_digest(record, url, sha1)
+            self.progress("Подготовка файлов NeoForge · проверяем сохранённый установщик…")
+            if not _valid(cached, sha1):
+                self.fetch(url, cached, sha1, False, deadline=deadline)
+            # The upstream provider creates and removes its own temp directory
+            # on each attempt. Keep our verified source even if Java then fails.
+            self._copy_installer(cached, path, sha1)
+            return True
+        return self.fetch(url, path, sha1, False, deadline=deadline)
 
     def close(self):
         with self._sessions_lock:
@@ -465,13 +649,16 @@ class Download:
             root = Path(minecraft_directory).resolve()
             if not path.resolve().is_relative_to(root):
                 raise ValueError("Файл игры находится вне каталога установки.")
-        if not overwrite and _valid(path, sha1):
+        installer = _neo_installer_url(url) if not lzma_compressed else None
+        if not installer and not overwrite and _valid(path, sha1):
             return False
         self.progress.start()
         while not _THREADS.acquire(timeout=0.1):
             lifecycle.check()
         try:
             lifecycle.check()
+            if installer:
+                return self._fetch_installer(installer, path, sha1, overwrite=overwrite)
             return self.fetch(url, path, sha1, lzma_compressed)
         except OSError as error:
             message = storage_message(error)
@@ -481,27 +668,20 @@ class Download:
         finally:
             _THREADS.release()
 
-    def fetch(self, url, path, sha1, compressed):
+    def fetch(self, url, path, sha1, compressed, *, deadline=None):
         lifecycle.check()
         path.parent.mkdir(parents=True, exist_ok=True)
         relative = _neo_path(url)
         if relative is not None:
             url = _NEO_ORIGIN + relative
-            # launcher-lib may omit the checksum for the initial installer.
-            # Try its official sidecar so mirror fallback is safe even there.
-            if not sha1 and relative.startswith(("net/neoforged/neoforge/",
-                                                   "net/neoforged/forge/")) and relative.endswith("-installer.jar"):
-                try:
-                    candidate = metadata_response(url + ".sha1", quick_catalog=True).text.strip()
-                    if re.fullmatch(r"[0-9a-fA-F]{40}", candidate):
-                        sha1 = candidate.lower()
-                except DownloadError:
-                    pass
         routes = _neo_routes(url, sha1)
         primary_error = None
+        used_fallback = False
         for attempt, (source_url, alternate) in enumerate(routes):
             packed = plain = None
             try:
+                if deadline is not None:
+                    _remaining(deadline)
                 with tempfile.NamedTemporaryFile(
                     dir=path.parent, prefix=".blockharbor-download-", delete=False
                 ) as out:
@@ -510,12 +690,16 @@ class Download:
                     if (not alternate and sha1 and urlsplit(source_url).scheme == "https"
                             and urlsplit(source_url).hostname in _POOLED_MOJANG):
                         receive = self._receive_asset
+                    used_fallback |= source_url != url
                     receive(
                         source_url,
                         out,
                         MAX_DOWNLOAD,
                         lambda n, total: self.progress.downloaded(path.name, n, total),
+                        **({"deadline": deadline} if deadline is not None else {}),
                     )
+                if deadline is not None:
+                    _remaining(deadline)
                 plain = packed
                 if compressed:
                     with (
@@ -566,10 +750,13 @@ class Download:
                         ssl.SSLCertVerificationError,
                     )
                 )
-                if (not _retry(error) and not verified_fallback) or attempt + 1 == len(routes):
+                exhausted = deadline is not None and time.monotonic() >= deadline
+                if (not _retry(error) and not verified_fallback) or attempt + 1 == len(routes) or exhausted:
                     cause = primary_error if primary_error is not None else error
                     message = _error(url, cause)
-                    if relative is not None and len(routes) > ATTEMPTS:
+                    if exhausted:
+                        message += " Общее время загрузки установщика истекло."
+                    elif relative is not None and used_fallback:
                         message += " Резервная загрузка также не завершена."
                     raise DownloadError(
                         message, url=url,
@@ -584,7 +771,8 @@ class Download:
                     self.progress(
                         f"Повтор загрузки {path.name} · {attempt + 2} / {len(routes)}"
                     )
-                lifecycle.wait(0.5 * (attempt + 1))
+                delay = 0.5 * (attempt + 1)
+                lifecycle.wait(min(delay, max(0, deadline - time.monotonic())) if deadline is not None else delay)
             finally:
                 if plain is not None:
                     plain.unlink(missing_ok=True)
@@ -729,7 +917,7 @@ def _environment_locked(progress, stack, ThreadPoolExecutor, requests, _helper, 
         importlib.import_module("minecraft_launcher_lib." + name) for name in names
     ]
     original = _helper.download_file
-    downloader = Download(progress)
+    downloader = Download(progress, cache=cache)
     stack.callback(downloader.close)
     native_extraction = threading.Lock()
     network = SimpleNamespace(

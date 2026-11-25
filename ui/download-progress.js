@@ -28,7 +28,7 @@
     if (job.kind === "catalog-install" || installActions.has(actionFor(job))) return true;
     // The game downloader reports its real stage and byte/file counts in this
     // message. Do not turn the complete play/login/game session into progress.
-    return preparationActions.has(actionFor(job)) && /^(Скачиваем |Загружаем |Повторяем загрузку |Устанавливаем Java |Восстанавливаем недостающий файл |Подготовка файлов Minecraft и Java|Подготовка mappings Minecraft|Готовим гардероб в игре:|Библиотеки(?:[ ·…]|$)|Ресурсы игры(?:[ ·…]|$)|Установка Java(?:[ ·…]|$)|Настраиваем (?:загрузчик|Fabric|Quilt))/.test(job.message || "");
+    return preparationActions.has(actionFor(job)) && /^(Скачиваем |Загружаем |Повторяем загрузку |Повтор загрузки |Резервный источник |Устанавливаем Java |Восстанавливаем недостающий файл |Проверяем локальные файлы игры|Подготовка файлов (?:Minecraft и Java|NeoForge)|Подготовка mappings Minecraft|Готовим гардероб в игре:|Библиотеки(?:[ ·…]|$)|Ресурсы игры(?:[ ·…]|$)|Установка Java(?:[ ·…]|$)|Настраиваем (?:загрузчик|Fabric|Quilt))/.test(job.message || "");
   }
   function tasksFor(job) {
     const content = (job?.contentTransfers?.tasks || []).filter(task => contentCategories.has(task.category));

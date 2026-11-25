@@ -39,6 +39,7 @@ STORE_FAMILY = "Microsoft.4297127D64EC6_8wekyb3d8bbwe"
 STORE_PROFILES = "launcher_profiles_microsoft_store.json"
 CLASSIC_PROFILES = "launcher_profiles.json"
 STAMP = ".blockharbor-install.json"
+LOADER_RECEIPT = ".blockharbor-loader-ready.json"
 Status = Callable[[str], None]
 
 
@@ -486,6 +487,66 @@ def _missing_install_file(cache: Path, base: str, installed: str) -> str | None:
     return None
 
 
+def _loader_receipt_path(cache: Path, installed: str) -> Path:
+    return _manifest_path(cache, installed).with_name(LOADER_RECEIPT)
+
+
+def _loader_recipe(cache: Path, version: str, loader: str, pin: str, installed: str) -> dict | None:
+    """Bind a locally completed installer to its exact, unchanged manifests."""
+    manifests = {}
+    for identifier in (version, installed):
+        path = _manifest_path(cache, identifier)
+        if (path.is_symlink() or not path.resolve().is_relative_to(cache.resolve())
+                or path.stat().st_size > preparation.MAX_METADATA):
+            return None
+        with path.open("rb") as source:
+            raw = source.read(preparation.MAX_METADATA + 1)
+        if len(raw) > preparation.MAX_METADATA:
+            return None
+        metadata = json.loads(raw)
+        if not isinstance(metadata, dict) or metadata.get("id") != identifier:
+            return None
+        if identifier == installed and (
+            metadata.get("inheritsFrom") != version or not metadata.get("mainClass")
+        ):
+            return None
+        manifests[identifier] = hashlib.sha256(raw).hexdigest()
+    return {"format": 1, "version": version, "loader": loader, "loader_version": pin,
+            "id": installed, "cache": str(cache), "manifests": manifests}
+
+
+def _completed_loader(cache: Path, version: str, loader: str, pin: str, installed: str) -> bool:
+    # ZIP import only supplies the pin. It cannot supply this cache-side receipt,
+    # nor use paths from it to choose an executable or a different game profile.
+    path = _loader_receipt_path(cache, installed)
+    try:
+        if (path.is_symlink() or not path.resolve().is_relative_to(cache.resolve())
+                or path.stat().st_size > 65536):
+            return False
+        with path.open("rb") as source:
+            raw = source.read(65537)
+        if len(raw) > 65536:
+            return False
+        saved = json.loads(raw)
+        recipe = _loader_recipe(cache, version, loader, pin, installed)
+        return recipe is not None and saved == recipe
+    except (OSError, ValueError, RecursionError):
+        return False
+
+
+def _remember_completed_loader(cache: Path, version: str, loader: str, pin: str, installed: str) -> None:
+    try:
+        recipe = _loader_recipe(cache, version, loader, pin, installed)
+        if recipe is not None:
+            _atomic_json(_loader_receipt_path(cache, installed), recipe)
+    except lifecycle.OperationCancelled:
+        raise
+    except (OSError, ValueError, RecursionError):
+        # This is a reuse optimization. A read-only cache must not stop an
+        # otherwise verified installation from launching in its own instance.
+        pass
+
+
 def _install(
     version: str,
     loader: str,
@@ -500,6 +561,7 @@ def _install(
     pin = previous.get("loader_version") if same else None
     callbacks = _callback(status)
     installed = version
+    shared_verified = False
     status(f"Подготовка Minecraft {version} · {loader}")
     if loader == "vanilla" and official:
         if (
@@ -523,6 +585,15 @@ def _install(
             and previous.get("id") == pinned_id and pinned_id
             and _manifest_path(cache, pinned_id).is_file()
         )
+        if not pinned_ready and pinned_id and _completed_loader(cache, version, loader, pin, pinned_id):
+            status("Проверяем локальные файлы игры…")
+            try:
+                shared_verified = _missing_install_file(cache, version, pinned_id) is None
+            except lifecycle.OperationCancelled:
+                raise
+            except (OSError, ValueError, KeyError, mc.exceptions.VersionNotFound):
+                shared_verified = False
+            pinned_ready = shared_verified
         if not pinned_ready:
             loader_catalog.require_supported(cache, version, loader)
         # Early installers in 2.4.x lost embedded libraries or native
@@ -541,6 +612,12 @@ def _install(
         pin = _version_id(pin)
         installed = _version_id(provider.get_installed_version(version, pin))
         if not pinned_ready:
+            # An interrupted/failed vendor run must never inherit a previous
+            # success receipt merely because it left a profile JSON behind.
+            receipt = _loader_receipt_path(cache, installed)
+            if not receipt.parent.resolve().is_relative_to(cache.resolve()):
+                raise ValueError("Папка установки загрузчика находится вне кэша Minecraft.")
+            receipt.unlink(missing_ok=True)
             # Vanilla metadata specifies the Java generation required by this game.
             _prepare_files(version, cache, callbacks, status)
             metadata = json.loads(
@@ -597,8 +674,9 @@ def _install(
                 legacy_forge.client_jar(cache, version, installed)
         if loader in META or (loader == "forge" and (version in legacy_forge.VERSIONS or version == "1.7.10-pre4")):
             _repair_loader_files(cache, installed, status)
+            shared_verified = False
         try:
-            ready = _missing_install_file(cache, version, installed) is None
+            ready = shared_verified or _missing_install_file(cache, version, installed) is None
         except lifecycle.OperationCancelled:
             raise
         except (OSError, ValueError, KeyError, mc.exceptions.VersionNotFound):
@@ -625,6 +703,8 @@ def _install(
         )
         if not metadata.get("javaVersion"):
             java_override = _legacy_java(cache, status, callbacks)
+        if loader in ("forge", "neoforge"):
+            _remember_completed_loader(cache, version, loader, pin, installed)
     instance.mkdir(parents=True, exist_ok=True)
     _atomic_json(
         instance / STAMP,

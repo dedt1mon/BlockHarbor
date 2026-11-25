@@ -161,20 +161,29 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(target.exists())
 
     def test_neoforge_installer_uses_official_checksum_for_fallback(self):
-        original = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.267/neoforge-21.1.267-installer.jar"
+        original = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.999/neoforge-21.1.999-installer.jar"
         target = self.root / "installer.jar"
+        seen = []
 
-        def fallback(url, output, limit, notify=lambda *_: None):
+        def fallback(url, output, limit, notify=lambda *_: None, *, deadline=None):
+            seen.append(url)
+            self.assertIsNotNone(deadline)
+            if url == original + ".sha1":
+                output.write((self.sha.upper() + "\n").encode())
+                return {}, url
             if url == original:
                 raise ConnectionError()
             output.write(Source.payload)
+            return {}, url
 
-        with (patch.object(preparation, "metadata_response", return_value=Mock(text=self.sha)) as metadata,
-              patch.object(preparation, "_receive", side_effect=TimeoutError),
+        with (patch.object(preparation, "_receive", side_effect=TimeoutError) as primary,
               patch.object(preparation, "_receive_requests", side_effect=fallback),
               patch.object(lifecycle, "wait")):
             preparation.Download(self.progress)(original, target)
-        metadata.assert_called_once_with(original + ".sha1", quick_catalog=True)
+        self.assertEqual(primary.call_args_list[0].args[0], original + ".sha1")
+        self.assertNotIn("quick_catalog", primary.call_args_list[0].kwargs)
+        self.assertEqual(seen, [original + ".sha1", original,
+                               original.replace(preparation._NEO_ORIGIN, preparation._NEO_INSTALLER_MIRROR)])
         self.assertEqual(target.read_bytes(), Source.payload)
 
     def test_neoforge_bad_mirror_hashes_fail_closed(self):

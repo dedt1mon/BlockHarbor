@@ -248,7 +248,7 @@ def export_build(store, pid, file, worlds=False, *, catalog_name=None, max_bytes
         raise ValueError("Сохранённые файлы загрузчика доступны только для личного ZIP сборки.")
     bundle = loader_files.export_plan(store, profile, meta.get("loaderVersion")) if include_loader_files else None
     if bundle:
-        meta["formatVersion"] = 2
+        meta["formatVersion"] = bundle["formatVersion"]
         meta["loaderFiles"] = True
     sections = list(KINDS)
     if not catalog or include_configs:
@@ -454,7 +454,7 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
                 not isinstance(meta, dict)
                 or meta.get("format") != "BlockHarbor"
                 or type(meta.get("formatVersion")) is not int
-                or meta["formatVersion"] not in (1, 2)
+                or meta["formatVersion"] not in (1, 2, 3)
             ):
                 raise ValueError("Неизвестный формат архива BlockHarbor.")
             name, version, loader = input_profile(
@@ -469,7 +469,7 @@ def import_build(store, file, *, catalog_listing=None, max_bytes=MAX_ZIP):
             pin = _pin(meta.get("loaderVersion"))
             bundled = meta.get("loaderFiles") is True
             if ("loaderFiles" in meta and type(meta["loaderFiles"]) is not bool
-                    or (meta["formatVersion"] == 2) != bundled
+                    or (meta["formatVersion"] in (2, 3)) != bundled
                     or bundled and catalog_listing is not None):
                 raise ValueError("Неподдерживаемое описание сохранённых файлов загрузчика.")
             options = meta.get("packOptions", [])

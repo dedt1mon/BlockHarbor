@@ -27,6 +27,41 @@ class BuildErrorsTest(unittest.TestCase):
         self.assertTrue(rows[0]["events"][0]["evidence"].endswith("51"))
         self.assertFalse(build_errors.history(self.store, other)["groups"])
 
+    def test_neoforge_route_timeouts_are_visible_as_download_failures(self):
+        message = (
+            "Не удалось подготовить neoforge-21.1.267-installer.jar. "
+            "Загрузка с neoforged.forgecdn.net не завершена. "
+            "Проверь подключение и снова нажми «Играть». Скачанные файлы сохраняются. "
+            "Проверенные маршруты: maven.neoforged.net (urllib): тайм-аут; "
+            "maven.neoforged.net (requests): тайм-аут; "
+            "neoforged.forgecdn.net (requests): тайм-аут; "
+            "neoforged.forgecdn.net (urllib): тайм-аут. "
+            "Полученная часть установщика сохранена для следующей попытки. "
+            "Резервная загрузка также не завершена."
+        )
+        stage = "Скачиваем installer.jar · 0.0 МБ / 6.7 МБ"
+        build_errors.record_operation(self.store, self.pid, stage, message)
+        group = build_errors.history(Store(self.store.root), self.pid)["groups"][0]
+        self.assertEqual(group["title"], "Не удалось получить файл или сведения о нём")
+        self.assertEqual(group["events"][0]["stage"], stage)
+        self.assertEqual(group["events"][0]["evidence"], message)
+
+    def test_download_evidence_preserves_integrity_and_dependency_classification(self):
+        cases = (
+            ("Не удалось подготовить installer.jar: тайм-аут", "download"),
+            ("Не удалось подготовить installer.jar: истекло время ожидания ответа", "download"),
+            ("Загрузка с neoforged.forgecdn.net не завершена.", "download"),
+            ("Контрольная сумма installer.jar не совпала. Ранее: тайм-аут.", "integrity"),
+            ("Нет обязательной зависимости testlib. Ранее: тайм-аут.", "dependency"),
+            ("Не удалось подготовить профиль запуска.", "operation"),
+        )
+        for message, category in cases:
+            with self.subTest(message=message):
+                build_errors.record_operation(self.store, self.pid, "Подготовка", message)
+                with self.store.connection() as db:
+                    actual = db.execute("SELECT category FROM build_errors ORDER BY id DESC LIMIT 1").fetchone()[0]
+                self.assertEqual(actual, category)
+
     def test_large_crash_report_retains_root_exception_at_top(self):
         reports = self.store.folder(self.pid) / "crash-reports"
         reports.mkdir()

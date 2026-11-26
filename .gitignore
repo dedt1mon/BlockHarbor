@@ -22,3 +22,4 @@ logs/
 *.sqlite3
 .session/
 artifacts/
+/bundled/neoforge-21.1.267/

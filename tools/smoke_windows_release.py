@@ -153,8 +153,8 @@ def test_runtime(installed, root, version):
         print("PASS: NeoForge installer SHA-256 " + primary["verified"]["sha256"])
         print("PASS: actual release payload downloads NeoForge 21.1.267, verifies fallback and reuses its cache offline")
         # The original failure can also occur after installer.jar has arrived.
-        # Prepare the actual loader with the exact shipped interpreter, force a
-        # Maven outage, then transfer its real ZIP to another isolated store.
+        # Import an ordinary old ZIP with both NeoForge origins unavailable,
+        # then transfer its prepared ZIP to another isolated store.
         smoke_root = root / "neoforge-install"
         reports = Path.cwd() / "artifacts" / "windows-release-smoke"
         reports.mkdir(parents=True, exist_ok=True)
@@ -179,9 +179,15 @@ def test_runtime(installed, root, version):
         full_report = json.loads((smoke_root / "report.json").read_bytes())
         assert full_report["ok"] and len(full_report["phases"]) == 3
         assert all(row["ok"] for row in full_report["phases"])
+        cold = full_report["phases"][0]
+        assert cold["legacyZipWithoutLoaderFiles"] and cold["bundledFilesAvailable"] == 52
+        assert cold["bundledFilesUsed"] > 1
+        assert cold["blockedOrigins"] == ["maven.neoforged.net", "neoforged.forgecdn.net"]
+        assert cold["networkDeniedAttempts"] == 0
         assert full_report["phases"][1]["networkDeniedAttempts"] == 0
+        assert full_report["phases"][1]["sourceDocumentsTransferred"] == 34
         assert full_report["phases"][2]["networkDeniedAttempts"] == 0
-        print("PASS: actual release installs NeoForge with primary Maven unavailable, transfers verified inputs in ZIP and replays offline")
+        print("PASS: actual release imports an old ZIP with both NeoForge origins blocked, verifies 52 shipped files, transfers prepared inputs and replays offline")
     finally:
         if process.poll() is None:
             # This is our isolated CI test process tree only.

@@ -17,7 +17,7 @@ import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from . import lifecycle, preparation
+from . import bundled_loaders, lifecycle, preparation
 
 SECTION = "loader-files"
 STAGED = ".blockharbor-loader-files"
@@ -29,6 +29,9 @@ MAX_FILE = 512 * 1024**2
 _SHA1 = re.compile(r"[a-f0-9]{40}\Z")
 _SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 _PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9+._-]{0,149}\Z")
+_DOCUMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,179}\.(?:zip|jar|tar\.gz|tgz|tar\.xz|tar\.bz2|txt|md)\Z", re.I)
+_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *("COM" + str(i) for i in range(1, 10)),
+                 *("LPT" + str(i) for i in range(1, 10))}
 # The original notice is retained beside the unmodified NeoForm artifact.
 # Source: https://github.com/neoforged/NeoForm/blob/obfuscated/LICENSE
 _NEOFORM_NOTICE = """Copyright (c) 2018 Forge Development LLC
@@ -109,6 +112,101 @@ def _local_digest(cache: Path, url: str):
     return preparation.Download._cached_installer_digest(record, url) if _regular(record) else None
 
 
+def _bundled_source(url, sha1, *, expected_size=None):
+    """Read a shipped input using the same independent digest as the cache."""
+    if not sha1:
+        return None
+    try:
+        path = bundled_loaders.verified_source(url, sha1)
+        if path is None:
+            return None
+        actual = _hashes(path, expected_size=expected_size)
+    except OSError as error:
+        raise bundled_loaders.BundleError("Не удалось прочитать встроенный файл NeoForge.") from error
+    if not actual or actual["sha1"] != sha1:
+        raise bundled_loaders.BundleError("Повреждён встроенный файл NeoForge. Переустанови BlockHarbor.")
+    return path, actual
+
+
+def _installer_source(cache: Path, url: str):
+    installer, _ = _installer_paths(cache, url)
+    trusted = _local_digest(cache, url)
+    if not trusted:
+        return None
+    try:
+        actual = _hashes(installer)
+    except OSError:
+        actual = None
+    if actual and actual["sha1"] == trusted:
+        return installer, actual
+    return _bundled_source(url, trusted)
+
+
+def _document_name(name):
+    return (isinstance(name, str) and bool(_DOCUMENT.fullmatch(name))
+            and name.split(".", 1)[0].upper() not in _DEVICE_NAMES)
+
+
+def _distribution_documents(profile, pin):
+    """The packaged distribution's documentation accompanies its exact runtime."""
+    manifest = bundled_loaders.load_manifest()
+    if not manifest or (manifest["minecraft"], manifest["loader"], manifest["loaderVersion"]) != (
+            profile["version"], profile["loader"], pin):
+        return []
+    try:
+        documents = bundled_loaders.distribution_sources()
+        verified, names = [], set()
+        for item in documents:
+            lifecycle.check()
+            name = item["name"]
+            if (not _document_name(name) or item["kind"] not in {"source", "notice"}
+                    or name.casefold() in names):
+                raise bundled_loaders.BundleError("Некорректный список исходников и лицензий NeoForge.")
+            expected = {key: item[key] for key in ("size", "sha1", "sha256")}
+            actual = _hashes(item["path"], expected_size=expected["size"])
+            if actual != expected:
+                raise bundled_loaders.BundleError("Исходники или лицензии встроенного комплекта NeoForge повреждены.")
+            names.add(name.casefold())
+            verified.append((item["path"], {"name": name, "kind": item["kind"], **expected}))
+        return verified
+    except OSError as error:
+        raise bundled_loaders.BundleError("Не удалось прочитать исходники и лицензии встроенного комплекта NeoForge.") from error
+
+
+def _staged_documents(store, profile, pin, installer_digest):
+    """Keep an imported archive's opaque documents when re-exporting its inputs.
+
+    Imported hashes still confer no code authority. The already independently
+    verified installer must match before accompanying documentation is retained,
+    and these objects never participate in cache promotion or execution.
+    """
+    instance = store._profile_directory(store.instances, profile["id"])
+    stage = _contained(instance, STAGED)
+    manifest = _contained(stage, MANIFEST)
+    if not _regular(manifest):
+        return []
+    with manifest.open("rb") as source:
+        raw = source.read(MAX_MANIFEST + 1)
+    if len(raw) > MAX_MANIFEST:
+        raise ValueError("Список исходников и лицензий NeoForge превышает допустимый размер.")
+    candidate = json.loads(raw)
+    if (not isinstance(candidate, dict) or not candidate.get("documents")
+            or (candidate.get("minecraft"), candidate.get("loader"), candidate.get("loaderVersion")) != (
+                profile["version"], profile["loader"], pin)):
+        return []
+    metadata, _ = _metadata(raw, profile["version"], profile["loader"], pin)
+    if metadata["installer"] != installer_digest:
+        return []
+    documents = []
+    for item in metadata["documents"]:
+        source = _contained(stage, "objects/" + item["sha256"])
+        actual = _hashes(source, expected_size=item["size"])
+        if actual != {key: item[key] for key in ("size", "sha1", "sha256")}:
+            raise ValueError("Сохранённые исходники или лицензии NeoForge повреждены. Повтори импорт сборки.")
+        documents.append((source, item))
+    return documents
+
+
 def _redistributable(entry):
     """Keep base Minecraft and generated/patched game files out of this bundle."""
     path = entry.get("path", "")
@@ -121,11 +219,13 @@ def _redistributable(entry):
 
 
 def prepare_export(store, pid, status=lambda *_: None):
-    """Warm the exact installer for an old completed build before manual export.
+    """Find a shipped exact installer or warm one for an old completed build.
 
     The caller owns the installation lock and cancellation scope. This optional
     step never resolves a latest version, installs a game, or runs Java. Catalog
-    exports do not call it. A network outage leaves ordinary ZIP export usable.
+    exports do not call it. A shipped installer also supports a pin-only imported
+    build, without networking or modifying its cache. Otherwise a network outage
+    leaves ordinary ZIP export usable.
     """
     profile = store.profile(pid)
     if profile["loader"] != "neoforge":
@@ -142,8 +242,7 @@ def prepare_export(store, pid, status=lambda *_: None):
         pin = saved.get("loader_version")
         url = installer_url(pin)
         installer, _ = _installer_paths(cache, url)
-        trusted, actual = _local_digest(cache, url), _hashes(installer)
-        if trusted and actual and actual["sha1"] == trusted:
+        if _installer_source(cache, url):
             return True
         installed = "neoforge-" + pin
         # An imported pin alone is not proof that the sender ever prepared this
@@ -182,17 +281,16 @@ def prepare_export(store, pid, status=lambda *_: None):
 
 
 def export_plan(store, profile, pin):
-    """Return an optional bundle of locally available inputs; never download on export."""
+    """Use verified cache or shipped inputs; never download or run Java on export."""
     if profile["loader"] != "neoforge" or not pin:
         return None
     cache = (store.root / "game-cache").resolve()
     url = installer_url(pin)
     try:
-        installer, _ = _installer_paths(cache, url)
-        trusted = _local_digest(cache, url)
-        digest = _hashes(installer)
-        if not trusted or not digest or digest["sha1"] != trusted:
+        source = _installer_source(cache, url)
+        if source is None:
             return None
+        installer, digest = source
         from .neoforge_install import installer_artifacts
         declared = installer_artifacts(installer, profile["version"], pin)
     except lifecycle.OperationCancelled:
@@ -213,9 +311,12 @@ def export_plan(store, profile, pin):
             path = _contained(cache, "libraries/" + entry["path"])
             found = _hashes(path, expected_size=entry.get("size"))
         except OSError:
-            continue
+            found = None
         if not found or found["sha1"] != entry["sha1"]:
-            continue
+            source = _bundled_source(entry["url"], entry["sha1"], expected_size=entry.get("size"))
+            if source is None:
+                continue
+            path, found = source
         if found["sha256"] not in files:
             if len(files) >= MAX_FILES or total + found["size"] > MAX_TOTAL:
                 break
@@ -224,10 +325,20 @@ def export_plan(store, profile, pin):
         metadata["libraries"].append({"path": entry["path"], **found})
         if entry["path"].startswith("net/neoforged/neoform/"):
             metadata["notices"] = {"NeoForm": _NEOFORM_NOTICE}
+    documents = _distribution_documents(profile, pin) or _staged_documents(store, profile, pin, digest)
+    for path, item in documents:
+        key = item["sha256"]
+        if key not in files:
+            if len(files) >= MAX_FILES or total + item["size"] > MAX_TOTAL:
+                raise ValueError("Файлы NeoForge вместе с исходниками и лицензиями превышают лимиты ZIP.")
+            files[key] = (path, {field: item[field] for field in ("size", "sha1", "sha256")})
+            total += item["size"]
+        metadata.setdefault("documents", []).append(item)
     raw = json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode()
     if len(raw) > MAX_MANIFEST:
         raise ValueError("Список сохранённых файлов NeoForge слишком велик.")
-    return {"manifest": raw, "files": files, "total": total + len(raw)}
+    return {"manifest": raw, "files": files, "total": total + len(raw),
+            "formatVersion": 3 if metadata.get("documents") else 2}
 
 
 def allowed(parts, directory=False):
@@ -270,15 +381,21 @@ def _metadata(raw, minecraft, loader, pin):
             or (data.get("minecraft"), data.get("loader"), data.get("loaderVersion")) != (minecraft, loader, pin)
             or not isinstance(data.get("libraries"), list) or len(data["libraries"]) > MAX_FILES):
         raise ValueError("Сохранённые файлы NeoForge не соответствуют версии сборки.")
+    documents = data.get("documents", [])
+    if not isinstance(documents, list) or len(documents) > MAX_FILES:
+        raise ValueError("Некорректный список исходников и лицензий NeoForge.")
     installer_url(pin)
-    objects, paths = {}, set()
-    for item in [data.get("installer"), *data["libraries"]]:
+    objects, paths, document_names = {}, set(), set()
+    items = [("installer", data.get("installer")),
+             *(("library", item) for item in data["libraries"]),
+             *(("document", item) for item in documents)]
+    for kind, item in items:
         if (not isinstance(item, dict) or not isinstance(item.get("sha1"), str)
                 or not _SHA1.fullmatch(item["sha1"]) or not isinstance(item.get("sha256"), str)
                 or not _SHA256.fullmatch(item["sha256"]) or type(item.get("size")) is not int
                 or not 0 < item["size"] <= MAX_FILE):
             raise ValueError("Некорректная запись сохранённого файла NeoForge.")
-        if item is not data["installer"]:
+        if kind == "library":
             path = item.get("path")
             parts = PurePosixPath(path).parts if isinstance(path, str) else ()
             if (not parts or path != "/".join(parts) or len(path) > 512 or len(parts) > 16
@@ -286,6 +403,14 @@ def _metadata(raw, minecraft, loader, pin):
                     or not path.endswith((".jar", ".zip")) or path.casefold() in paths):
                 raise ValueError("Недопустимый путь библиотеки NeoForge.")
             paths.add(path.casefold())
+        elif kind == "document":
+            name = item.get("name")
+            if (set(item) != {"name", "kind", "size", "sha1", "sha256"}
+                    or not _document_name(name) or not isinstance(item.get("kind"), str)
+                    or item["kind"] not in {"source", "notice"}
+                    or name.casefold() in document_names):
+                raise ValueError("Недопустимое имя исходников или лицензий NeoForge.")
+            document_names.add(name.casefold())
         key = item["sha256"]
         old = objects.setdefault(key, {k: item[k] for k in ("size", "sha1", "sha256")})
         if any(old[k] != item[k] for k in ("size", "sha1")):
@@ -304,6 +429,8 @@ def import_plan(archive, meta):
         raise ValueError("Список файлов NeoForge превышает допустимый размер.")
     raw = archive.read(info)
     data, objects = _metadata(raw, meta["minecraft"], meta["loader"], meta.get("loaderVersion"))
+    if (meta["formatVersion"] == 3) != bool(data.get("documents")):
+        raise ValueError("Версия архива не соответствует списку исходников и лицензий NeoForge.")
     expected = {SECTION + "/" + MANIFEST, *(SECTION + "/objects/" + key for key in objects)}
     actual = {item.filename for item in archive.infolist()
               if item.filename.startswith(SECTION + "/") and not item.is_dir()}

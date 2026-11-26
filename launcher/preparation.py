@@ -865,6 +865,19 @@ class Download:
         relative = _neo_path(url)
         if relative is not None:
             url = _NEO_ORIGIN + relative
+        if not compressed:
+            from . import bundled_loaders
+
+            try:
+                bundled = bundled_loaders.copy_file(url, path, sha1)
+            except bundled_loaders.BundleError as error:
+                raise DownloadError(str(error), url=url) from error
+            if bundled:
+                self.progress("Подготовка файлов NeoForge · используем комплект BlockHarbor: " + path.name)
+                if partial is not None:
+                    partial.unlink(missing_ok=True)
+                    partial.with_suffix(".json").unlink(missing_ok=True)
+                return True
         routes = _neo_routes(url, sha1)
         if relative is not None:
             deadline = deadline if deadline is not None else time.monotonic() + MAVEN_SECONDS

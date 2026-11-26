@@ -2,13 +2,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from launcher import build_archive, loader_files, preparation
+from launcher import build_archive, bundled_loaders, loader_files, preparation
 from launcher.store import Store
 
 
@@ -43,6 +44,14 @@ class LoaderFilesTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.application = self.root / "application"
+        self.bundle_manifest = self.application / "launcher" / "neoforge_bundle.json"
+        # Each fixture controls its shipped application component, irrespective
+        # of whether the test runner is a source checkout or a packaged build.
+        for name, value in (("ROOT", self.application), ("MANIFEST", self.bundle_manifest)):
+            setting = patch.object(bundled_loaders, name, value)
+            setting.start()
+            self.addCleanup(setting.stop)
         self.source = Store(self.root / "sender")
         self.recipient = Store(self.root / "recipient")
         self.pid = self.source.create("Сборка друзей", "1.21.1", "neoforge")
@@ -89,6 +98,289 @@ class LoaderFilesTests(unittest.TestCase):
 
     def apply(self, instance):
         return loader_files.apply(instance, self.recipient.root / "game-cache", "1.21.1", "neoforge", self.pin)
+
+    def ship_inputs(self):
+        objects = self.application / "bundled" / ("neoforge-" + self.pin) / "objects"
+        objects.mkdir(parents=True)
+        inputs = [("installer", preparation._neo_path(self.url), self.url, self.installer_data)]
+        for library, data in zip(self.libraries, (self.jar_data, self.zip_data)):
+            artifact = library["downloads"]["artifact"]
+            inputs.append(("library", artifact["path"], artifact["url"], data))
+        entries = []
+        for kind, relative, url, data in inputs:
+            hashes = digest(data)
+            (objects / hashes["sha256"]).write_bytes(data)
+            entries.append({"kind": kind, "path": relative, "url": url,
+                            "object": hashes["sha256"], **hashes})
+        self.bundle_manifest.parent.mkdir(parents=True)
+        self.bundle_manifest.write_text(json.dumps({
+            "format": 1, "minecraft": "1.21.1", "loader": "neoforge", "loaderVersion": self.pin,
+            "directory": "neoforge-" + self.pin, "files": entries, "notices": []}))
+        self.ship_documents(objects)
+        return objects
+
+    def ship_documents(self, objects):
+        source = io.BytesIO()
+        with zipfile.ZipFile(source, "w") as zipped:
+            zipped.writestr("src/main/java/SourceOnly.java", "class SourceOnly {}")
+            zipped.writestr("build.gradle", "// This build script must never be executed by the launcher.\n")
+            zipped.writestr("LICENSE.txt", "Original upstream license\r\n")
+        self.source_document = source.getvalue()
+        self.upstream_notice = b"Original copyright and license notice\r\n"
+        self.generated_notice = b"All upstream licenses and corresponding source archives\n" + self.upstream_notice
+        manifest = json.loads(self.bundle_manifest.read_text())
+        for kind, relative, payload in (
+                ("source", "example/SourceOnly/archive/source.zip", self.source_document),
+                ("notice", "example/SourceOnly/NOTICE.txt", self.upstream_notice)):
+            hashes = digest(payload)
+            manifest["files"].append({"kind": kind, "sourceProject": "SourceOnly", "path": relative,
+                                       "url": "https://github.com/" + relative,
+                                       "object": hashes["sha256"], **hashes})
+            (objects / hashes["sha256"]).write_bytes(payload)
+        manifest["documentation"] = {"THIRD-PARTY-NOTICES.txt": digest(self.generated_notice)}
+        (objects.parent / "THIRD-PARTY-NOTICES.txt").write_bytes(self.generated_notice)
+        self.bundle_manifest.write_text(json.dumps(manifest))
+
+    def cold_sender(self, pin=None):
+        shutil.rmtree(self.cache)
+        stamp = {"version": "1.21.1", "loader": "neoforge", "loader_version": pin or self.pin}
+        (self.instance / build_archive.STAMP).write_text(json.dumps(stamp))
+        return stamp
+
+    def test_pin_only_cold_sender_exports_shipped_inputs_without_network_or_cache_writes(self):
+        self.ship_inputs()
+        stamp = self.cold_sender()
+        with (patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")),
+              patch.object(preparation, "_installer_checksum", side_effect=AssertionError("No checksum request"))):
+            self.assertTrue(loader_files.prepare_export(self.source, self.pid))
+            payload = self.export()
+            self.assertFalse(self.cache.exists())
+            self.assertEqual(json.loads((self.instance / build_archive.STAMP).read_text()), stamp)
+            with zipfile.ZipFile(payload) as zipped:
+                manifest = json.loads(zipped.read(build_archive.MANIFEST))
+                self.assertEqual(manifest["formatVersion"], 3)
+                self.assertEqual(manifest["loaderVersion"], self.pin)
+                bundle = json.loads(zipped.read("loader-files/manifest.json"))
+                self.assertEqual(len(bundle["libraries"]), 2)
+                self.assertEqual(bundle["notices"]["NeoForm"], loader_files._NEOFORM_NOTICE)
+                documents = bundle["documents"]
+                self.assertEqual(len(documents), 3)
+                self.assertEqual({item["sha256"] for item in documents}, {
+                    digest(payload)["sha256"] for payload in (
+                        self.source_document, self.upstream_notice, self.generated_notice)})
+                notices = next(item for item in documents if item["name"] == "THIRD-PARTY-NOTICES.txt")
+                self.assertEqual(zipped.read("loader-files/objects/" + notices["sha256"]), self.generated_notice)
+            folder = self.imported(payload)
+            for item in documents:
+                candidate = folder / loader_files.STAGED / "objects" / item["sha256"]
+                self.assertEqual(digest(candidate.read_bytes()), {key: item[key] for key in ("size", "sha1", "sha256")})
+            self.assertEqual(self.apply(folder), 3)
+        installer, _ = loader_files._installer_paths(self.recipient.root / "game-cache", self.url)
+        self.assertEqual(installer.read_bytes(), self.installer_data)
+        for library, data in zip(self.libraries, (self.jar_data, self.zip_data)):
+            target = self.recipient.root / "game-cache/libraries" / library["downloads"]["artifact"]["path"]
+            self.assertEqual(target.read_bytes(), data)
+        # Documents remain opaque staged objects; no source, notice, build script
+        # or extra library is promoted into the game execution cache.
+        cached_files = [path for path in (self.recipient.root / "game-cache").rglob("*") if path.is_file()]
+        self.assertEqual(len(cached_files), 4)  # installer, source receipt, two declared libraries
+        self.assertFalse((folder / "src").exists())
+        self.assertFalse((folder / "build.gradle").exists())
+
+    def test_corrupt_shipped_sources_and_notices_abort_before_zip_writing(self):
+        objects = self.ship_inputs()
+        self.cold_sender()
+        candidates = [(objects / digest(data)["sha256"], data)
+                      for data in (self.source_document, self.upstream_notice)]
+        candidates.append((objects.parent / "THIRD-PARTY-NOTICES.txt", self.generated_notice))
+        for path, data in candidates:
+            with self.subTest(document=path.name):
+                path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+                output = io.BytesIO()
+                try:
+                    with (patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")),
+                          self.assertRaises(bundled_loaders.BundleError)):
+                        build_archive.export_build(self.source, self.pid, output, include_loader_files=True)
+                    self.assertEqual(output.getvalue(), b"")
+                    self.assertFalse(self.cache.exists())
+                finally:
+                    path.write_bytes(data)
+
+    def test_reexport_preserves_verified_staged_documents_without_an_application_bundle(self):
+        self.ship_inputs()
+        folder = self.imported()
+        self.assertEqual(self.apply(folder), 3)
+        pid = self.recipient.all()[0]["id"]
+        output = io.BytesIO()
+        with (patch.object(bundled_loaders, "MANIFEST", self.root / "unpackaged" / "neoforge_bundle.json"),
+              patch.object(bundled_loaders, "ROOT", self.root / "unpackaged"),
+              patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network"))):
+            build_archive.export_build(self.recipient, pid, output, include_loader_files=True)
+            with zipfile.ZipFile(output) as zipped:
+                self.assertEqual(json.loads(zipped.read(build_archive.MANIFEST))["formatVersion"], 3)
+                documents = json.loads(zipped.read("loader-files/manifest.json"))["documents"]
+                self.assertEqual(len(documents), 3)
+                for item in documents:
+                    original = folder / loader_files.STAGED / "objects" / item["sha256"]
+                    self.assertEqual(zipped.read("loader-files/objects/" + item["sha256"]), original.read_bytes())
+            source = folder / loader_files.STAGED / "objects" / digest(self.source_document)["sha256"]
+            source.write_bytes(b"corrupt staged documentation")
+            broken = io.BytesIO()
+            with self.assertRaisesRegex(ValueError, "исходники.*повреждены"):
+                build_archive.export_build(self.recipient, pid, broken, include_loader_files=True)
+            self.assertEqual(broken.getvalue(), b"")
+
+    def test_document_damage_or_missing_objects_roll_back_import(self):
+        self.ship_inputs()
+        payload = self.export()
+        key = "loader-files/objects/" + digest(self.source_document)["sha256"]
+        def damage(entries):
+            entries[key] = bytes([entries[key][0] ^ 1]) + entries[key][1:]
+        def missing(entries):
+            entries.pop(key)
+        for mutate in (damage, missing):
+            with self.subTest(change=mutate.__name__), self.assertRaises(ValueError):
+                self.imported(rewrite_zip(payload, mutate))
+        self.assertEqual(self.recipient.all(), [])
+        self.assertFalse((self.recipient.root / "game-cache").exists())
+
+    def test_document_metadata_rejects_paths_executables_duplicate_names_and_bad_roles(self):
+        self.ship_inputs()
+        payload = self.export()
+        invalid = [{"name": name} for name in ("../source.zip", "source.zip/other.txt", "C:\\source.zip",
+                   "/source.zip", "CON.txt", "aux.zip", "source.exe", "source.zip\x00.txt")]
+        invalid.extend(({"kind": "library"}, {"kind": []}, {"path": "libraries/evil.jar"},
+                        {"size": loader_files.MAX_FILE + 1}, {"sha1": "untrusted"}))
+        def change(entries, fields):
+            metadata = json.loads(entries["loader-files/manifest.json"])
+            metadata["documents"][0].update(fields)
+            entries["loader-files/manifest.json"] = json.dumps(metadata).encode()
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self.imported(rewrite_zip(payload, lambda entries: change(entries, fields)))
+        def duplicate(entries):
+            metadata = json.loads(entries["loader-files/manifest.json"])
+            metadata["documents"][1]["name"] = metadata["documents"][0]["name"].upper()
+            entries["loader-files/manifest.json"] = json.dumps(metadata).encode()
+        with self.assertRaisesRegex(ValueError, "имя"):
+            self.imported(rewrite_zip(payload, duplicate))
+        self.assertEqual(self.recipient.all(), [])
+
+    def test_document_bytes_and_count_are_included_in_export_and_import_limits(self):
+        self.ship_inputs()
+        payload = self.export()
+        runtime_size = sum(map(len, (self.installer_data, self.jar_data, self.zip_data)))
+        for limit, value in (("MAX_TOTAL", runtime_size), ("MAX_FILES", 3)):
+            with self.subTest(limit=limit), patch.object(loader_files, limit, value):
+                output = io.BytesIO()
+                with self.assertRaisesRegex(ValueError, "лимиты"):
+                    build_archive.export_build(self.source, self.pid, output, include_loader_files=True)
+                self.assertEqual(output.getvalue(), b"")
+                with self.assertRaises(ValueError):
+                    self.imported(payload)
+        self.assertEqual(self.recipient.all(), [])
+
+    def test_format_three_requires_documents_and_documented_bundle_cannot_claim_format_two(self):
+        legacy = self.export()
+        def version(entries, value):
+            manifest = json.loads(entries[build_archive.MANIFEST])
+            manifest["formatVersion"] = value
+            entries[build_archive.MANIFEST] = json.dumps(manifest).encode()
+        with self.assertRaisesRegex(ValueError, "Версия архива"):
+            self.imported(rewrite_zip(legacy, lambda entries: version(entries, 3)))
+        self.ship_inputs()
+        with self.assertRaisesRegex(ValueError, "Версия архива"):
+            self.imported(rewrite_zip(self.export(), lambda entries: version(entries, 2)))
+
+    def test_shipped_inputs_never_replace_an_unsupported_pinned_version(self):
+        self.ship_inputs()
+        stamp = self.cold_sender("21.1.266")
+        with patch.object(preparation.Download, "__call__", side_effect=AssertionError("No latest resolution")):
+            self.assertFalse(loader_files.prepare_export(self.source, self.pid))
+            with zipfile.ZipFile(self.export()) as zipped:
+                manifest = json.loads(zipped.read(build_archive.MANIFEST))
+                self.assertEqual(manifest["formatVersion"], 1)
+                self.assertEqual(manifest["loaderVersion"], "21.1.266")
+                self.assertFalse(any(name.startswith("loader-files/") for name in zipped.namelist()))
+        self.assertEqual(json.loads((self.instance / build_archive.STAMP).read_text()), stamp)
+        self.assertFalse(self.cache.exists())
+
+    def test_shipped_installer_must_also_match_the_minecraft_version(self):
+        self.ship_inputs()
+        self.cold_sender()
+        profile = {**self.source.profile(self.pid), "version": "1.20.1"}
+        with patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")):
+            self.assertIsNone(loader_files.export_plan(self.source, profile, self.pin))
+        self.assertFalse(self.cache.exists())
+
+    def test_export_skips_mojang_declarations_and_undeclared_shipped_inputs(self):
+        excluded = [library("com.mojang:logging:1.0", b"Mojang logging"),
+                    library("net.minecraft:client:1.21.1", b"Minecraft"),
+                    library("org.example:basegame:1.0", b"Mojang-hosted library")]
+        hosted = excluded[-1]["downloads"]["artifact"]
+        hosted["url"] = "https://libraries.minecraft.net/" + hosted["path"]
+        def extend(entries):
+            for name in ("install_profile.json", "version.json"):
+                document = json.loads(entries[name])
+                document["libraries"].extend(excluded)
+                entries[name] = json.dumps(document).encode()
+        self.installer_data = rewrite_zip(io.BytesIO(self.installer_data), extend).getvalue()
+        objects = self.ship_inputs()
+        lock = json.loads(self.bundle_manifest.read_text())
+        undeclared = library("org.example:undeclared:1.0", b"Unrequested library")
+        payloads = (b"Mojang logging", b"Minecraft", b"Mojang-hosted library", b"Unrequested library")
+        artifact = undeclared["downloads"]["artifact"]
+        hashes = digest(payloads[-1])
+        lock["files"].append({"kind": "library", "path": artifact["path"], "url": artifact["url"],
+                              "object": hashes["sha256"], **hashes})
+        (objects / hashes["sha256"]).write_bytes(payloads[-1])
+        self.bundle_manifest.write_text(json.dumps(lock))
+        self.cold_sender()
+        with (patch.dict(preparation._NEO_INSTALLER_SHA1, {preparation._neo_path(self.url): digest(self.installer_data)["sha1"]}),
+              patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")),
+              patch.object(bundled_loaders, "verified_source", wraps=bundled_loaders.verified_source) as sources,
+              zipfile.ZipFile(self.export()) as zipped):
+            bundle = json.loads(zipped.read("loader-files/manifest.json"))
+            self.assertEqual(len(bundle["libraries"]), 2)
+            for data in payloads:
+                self.assertNotIn("loader-files/objects/" + digest(data)["sha256"], zipped.namelist())
+            for item in excluded:
+                self.assertNotIn(item["downloads"]["artifact"]["url"],
+                                 [call.args[0] for call in sources.call_args_list])
+        self.assertFalse(self.cache.exists())
+
+    def test_corrupt_shipped_installer_or_library_is_rejected_before_writing_zip(self):
+        objects = self.ship_inputs()
+        self.cold_sender()
+        for data in (self.installer_data, self.jar_data):
+            with self.subTest(installer=data is self.installer_data):
+                path = objects / digest(data)["sha256"]
+                path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+                output = io.BytesIO()
+                try:
+                    with (patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")),
+                          self.assertRaisesRegex(bundled_loaders.BundleError, "повреждён")):
+                        build_archive.export_build(self.source, self.pid, output, include_loader_files=True)
+                    self.assertEqual(output.getvalue(), b"")
+                    self.assertFalse(self.cache.exists())
+                    if data is self.installer_data:
+                        with self.assertRaises(bundled_loaders.BundleError):
+                            loader_files.prepare_export(self.source, self.pid)
+                finally:
+                    path.write_bytes(data)
+
+    def test_shipped_inputs_replace_corrupt_cache_only_inside_export(self):
+        self.ship_inputs()
+        installer, _ = loader_files._installer_paths(self.cache, self.url)
+        installer.write_bytes(b"corrupt cached installer")
+        cached_library = self.cache / "libraries" / self.libraries[0]["downloads"]["artifact"]["path"]
+        cached_library.write_bytes(b"corrupt cached library")
+        with patch.object(preparation.Download, "__call__", side_effect=AssertionError("No network")):
+            self.assertTrue(loader_files.prepare_export(self.source, self.pid))
+            folder = self.imported()
+            self.assertEqual(self.apply(folder), 3)
+        self.assertEqual(installer.read_bytes(), b"corrupt cached installer")
+        self.assertEqual(cached_library.read_bytes(), b"corrupt cached library")
 
     def test_round_trip_transfers_inputs_without_trusting_or_copying_runtime_state(self):
         # None of these completed/runtime/private files belongs in a transferable input bundle.

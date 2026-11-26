@@ -1,8 +1,9 @@
 """Real NeoForge preparation and ZIP transfer, without launching a game session.
 
-Run only against a dedicated smoke directory. The first phase prepares vanilla
-Minecraft/managed Java and NeoForge 21.1.267 from an empty cache while the primary
-NeoForge Maven is deliberately unavailable. The second imports an actual ZIP
+Run only against a dedicated smoke directory. The first phase imports an old
+ordinary ZIP and prepares Minecraft/managed Java and NeoForge 21.1.267 from an
+empty cache while both NeoForge Maven and ForgeCDN are unavailable. Shipped
+verified inputs must avoid both origins entirely. The second imports an actual ZIP
 into a separate store that has only officially acquired Minecraft/Java inputs,
 then installs NeoForge with network access forbidden. A fresh process verifies the resulting completed
 installation without running its installer or making a network request.
@@ -11,6 +12,7 @@ installation without running its installer or making a network request.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import platform
@@ -29,7 +31,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from launcher import build_archive, game, lifecycle, loader_files, neoforge_install, preparation
+from launcher import build_archive, bundled_loaders, game, lifecycle, loader_files, neoforge_install, preparation
 from launcher.store import Store
 from launcher.version import VERSION as LAUNCHER_VERSION
 
@@ -38,6 +40,7 @@ NEOFORGE = "21.1.267"
 INSTALLED = "neoforge-" + NEOFORGE
 MARKER = ".blockharbor-neoforge-install-smoke.json"
 PURPOSE = {"format": 1, "purpose": "isolated-neoforge-install-smoke"}
+BLOCKED_ORIGINS = {"maven.neoforged.net", "neoforged.forgecdn.net"}
 
 
 def require(condition, message):
@@ -107,7 +110,8 @@ def worker(phase, root):
     started = time.monotonic()
     store = Store(root / ("sender" if phase == "cold" else "recipient"))
     cache = store.root / "game-cache"
-    trace, primary_failures, forbidden, java_runs = [], [], [], []
+    trace, forbidden, java_runs, bundled_copies = [], [], [], []
+    source_document_count = 0
     status_log = root / (phase + ".log")
     last_status = ["", 0.0]
     log = status_log.open("w", encoding="utf-8", buffering=1)
@@ -122,9 +126,26 @@ def worker(phase, root):
             last_status[:] = [message, now]
 
     if phase == "cold":
-        pid = store.create("Проверка NeoForge", MINECRAFT, "neoforge")
-        game._atomic_json(store.folder(pid) / game.STAMP,
-                         {"version": MINECRAFT, "loader": "neoforge", "loader_version": NEOFORGE})
+        require(not cache.exists() or not any(cache.iterdir()), "Cold test cache is not empty")
+        shipped = bundled_loaders.entries()
+        require(len(shipped) == 52, "Expected the complete pinned NeoForge runtime bundle")
+        for entry in shipped:
+            require(bundled_loaders.verified_source(entry["url"], entry["sha1"]) is not None,
+                    "Missing shipped component: " + entry["path"])
+        # A recipient must recover an existing ordinary ZIP. Re-exporting the
+        # sender's build must not be a prerequisite for fixing this failure.
+        legacy_zip = io.BytesIO()
+        with zipfile.ZipFile(legacy_zip, "w") as archive:
+            archive.writestr(build_archive.MANIFEST, json.dumps({
+                "format": "BlockHarbor", "formatVersion": 1,
+                "name": "Старый ZIP NeoForge", "minecraft": MINECRAFT,
+                "loader": "neoforge", "loaderVersion": NEOFORGE,
+            }, ensure_ascii=False))
+        legacy_zip.seek(0)
+        imported = build_archive.import_build(store, legacy_zip)
+        pid = imported["id"]
+        require(not (store.folder(pid) / loader_files.STAGED).exists(),
+                "Ordinary ZIP unexpectedly contains loader files")
         write_json(root / "sender.json", {"id": pid})
     elif phase == "transfer":
         sender = Store(root / "sender")
@@ -134,8 +155,16 @@ def worker(phase, root):
             build_archive.export_build(sender, sender_id, archive, include_loader_files=True)
             with zipfile.ZipFile(archive) as bundle:
                 metadata = json.loads(bundle.read(build_archive.MANIFEST))
-                require(metadata.get("formatVersion") == 2 and metadata.get("loaderFiles") is True,
+                require(metadata.get("formatVersion") == 3 and metadata.get("loaderFiles") is True,
                         "ZIP did not include verified loader inputs")
+                loader_manifest = json.loads(bundle.read(loader_files.SECTION + "/" + loader_files.MANIFEST))
+                documents = loader_manifest.get("documents", [])
+                expected_sources = bundled_loaders.distribution_sources()
+                require(bool(expected_sources) and
+                        {item["sha256"] for item in documents} ==
+                        {item["sha256"] for item in expected_sources},
+                        "ZIP did not carry all matching source archives and notices")
+                source_document_count = len(documents)
             archive.seek(0)
             imported = build_archive.import_build(store, archive)
         pid = imported["id"]
@@ -151,9 +180,9 @@ def worker(phase, root):
     def traced(original, transport):
         def receive(url, output, *args, **kwargs):
             host = urlsplit(url).hostname
-            if host == "maven.neoforged.net":
-                primary_failures.append(transport)
-                raise TimeoutError("Smoke-injected NeoForge primary outage")
+            if host in BLOCKED_ORIGINS:
+                forbidden.append({"host": host, "transport": transport})
+                raise AssertionError("Bundled preparation attempted the blocked NeoForge origin: " + host)
             before = output.tell()
             response = original(url, output, *args, **kwargs)
             trace.append({"host": host, "transport": transport,
@@ -163,18 +192,47 @@ def worker(phase, root):
         return receive
 
     original_run = lifecycle.run
+    original_copy = bundled_loaders.copy_file
+    original_lookup = socket.getaddrinfo
+
+    def tracked_copy(url, target, sha1):
+        result = original_copy(url, target, sha1)
+        if result:
+            bundled_copies.append(url)
+        return result
+
+    def checked_lookup(host, *args, **kwargs):
+        normalized = host.decode("ascii") if isinstance(host, bytes) else host
+        if normalized in BLOCKED_ORIGINS:
+            forbidden.append({"host": normalized, "transport": "direct-dns"})
+            raise AssertionError("Direct connection to a blocked NeoForge origin")
+        return original_lookup(host, *args, **kwargs)
+
+    # Reserve an unlistened local port. Actual Java HTTP/HTTPS connections must
+    # fail too, independently of Python's network interception and --offline.
+    java_proxy = socket.socket()
+    java_proxy.bind(("127.0.0.1", 0))
+    proxy_port = str(java_proxy.getsockname()[1])
 
     def tracked_run(command, *args, **kwargs):
         if isinstance(command, (list, tuple)) and "net.minecraftforge.installer.SimpleInstaller" in command:
             require("--offline" in command, "NeoForge Java installer still has network access enabled")
             require(phase != "replay", "Completed receipt unexpectedly reran the installer")
-            java_runs.append({"offline": True})
+            command = [argument for argument in command
+                       if not str(argument).startswith("-Djava.net.useSystemProxies=")]
+            command[1:1] = ["-Djava.net.useSystemProxies=false",
+                            "-Dhttp.proxyHost=127.0.0.1", "-Dhttp.proxyPort=" + proxy_port,
+                            "-Dhttps.proxyHost=127.0.0.1", "-Dhttps.proxyPort=" + proxy_port,
+                            "-Dhttp.nonProxyHosts=", "-Dhttps.nonProxyHosts="]
+            java_runs.append({"offline": True, "closedHttpHttpsProxy": True})
         return original_run(command, *args, **kwargs)
 
     try:
         with ExitStack() as stack:
             stack.enter_context(patch.object(lifecycle, "run", side_effect=tracked_run))
+            stack.enter_context(patch.object(bundled_loaders, "copy_file", side_effect=tracked_copy))
             if phase == "cold":
+                stack.enter_context(patch.object(socket, "getaddrinfo", side_effect=checked_lookup))
                 for name in ("_receive", "_receive_requests"):
                     stack.enter_context(patch.object(preparation, name, traced(getattr(preparation, name), name)))
             else:
@@ -190,9 +248,11 @@ def worker(phase, root):
             require(game._completed_loader(cache, MINECRAFT, "neoforge", NEOFORGE, installed),
                     "Completed installation receipt was not written")
             if phase == "cold":
-                require(len(primary_failures) >= 2, "The primary outage was not exercised")
-                require(any(row["host"] == "neoforged.forgecdn.net" and row["bytes"] > 0 for row in trace),
-                        "No live verified fallback transfer occurred")
+                require(not forbidden, "Old ZIP still attempted NeoForge Maven or ForgeCDN")
+                require(loader_files.installer_url(NEOFORGE) in bundled_copies,
+                        "Cold installer was not copied from the actual shipped component")
+                require(len(set(bundled_copies)) > 1,
+                        "Cold preparation did not consume shipped loader libraries")
                 require(len(java_runs) == 1, "The actual NeoForge installer did not run exactly once")
             elif phase == "transfer":
                 require(len(java_runs) == 1, "ZIP import did not prepare the loader on the recipient")
@@ -200,11 +260,16 @@ def worker(phase, root):
             else:
                 require(not java_runs and not forbidden, "Completed cache replay was not local")
         return {"phase": phase, "ok": True, "seconds": round(time.monotonic() - started, 2),
-                "installed": installed, "injectedPrimaryTimeouts": len(primary_failures),
+                "installed": installed, "blockedOrigins": sorted(BLOCKED_ORIGINS),
                 "networkDeniedAttempts": len(forbidden), "javaInstallers": java_runs,
+                "bundledFilesUsed": len(set(bundled_copies)),
+                "bundledFilesAvailable": len(shipped) if phase == "cold" else None,
+                "sourceDocumentsTransferred": source_document_count,
+                "legacyZipWithoutLoaderFiles": phase == "cold",
                 "officialMinecraftInputsPreseeded": phase == "transfer",
                 "network": trace, "minecraftLaunched": False}
     finally:
+        java_proxy.close()
         log.close()
 
 

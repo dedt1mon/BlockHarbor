@@ -20,6 +20,7 @@ from urllib.request import urlopen
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from windows_resources import write_object
+from prepare_neoforge_bundle import prepare as prepare_neoforge_bundle, verify_staged
 
 TOOLS = Path(__file__).resolve().parent
 PROJECT = TOOLS.parent
@@ -123,10 +124,18 @@ def build_stub(go, stage):
 
 def pack_program(stage, target):
     """Append the compressed runtime and application as one verified PE overlay."""
+    # Do not publish an EXE which silently returns to the unavailable upstream
+    # Maven servers because a pinned installer/library/source object was omitted.
+    verify_staged(stage)
     files = []
     for base in (stage, PROJECT):
         for path in base.rglob("*"):
             rel = path.relative_to(base)
+            # A development smoke test may unpack a bundle beside the source.
+            # Release bytes always come from the verified, freshly staged copy.
+            if (base == PROJECT and len(rel.parts) > 1
+                    and rel.parts[:2] == ("bundled", "neoforge-21.1.267")):
+                continue
             if not path.is_file() or any(
                 part.startswith(".") or part == "__pycache__" for part in rel.parts
             ):
@@ -186,6 +195,7 @@ def main():
         stage = Path(temp) / "distribution"
         stage.mkdir()
         install_archives(cache, stage)
+        prepare_neoforge_bundle(cache, stage)
         if not args.runtime_only:
             build_stub(args.go, stage)
             release = Path(temp) / "release"

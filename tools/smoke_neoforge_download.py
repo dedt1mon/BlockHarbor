@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from launcher import preparation
+from launcher import bundled_loaders, preparation
 
 
 VERSION = "21.1.267"
@@ -109,6 +109,11 @@ def worker(phase, root):
 
     try:
         with ExitStack() as stack:
+            # These phases certify the actual HTTP transports and persistent
+            # download cache, independently of the shipped offline component.
+            # The full installation smoke exercises the production bundle path
+            # with both NeoForge origins unavailable.
+            stack.enter_context(patch.object(bundled_loaders, "copy_file", return_value=False))
             if phase == "cache":
                 # These fail loudly rather than returning synthetic responses.
                 # Also forbid lower-level connections to catch future adapters.
@@ -190,6 +195,7 @@ def main():
               "platform": platform.platform(), "python": platform.python_version(),
               "version": VERSION, "primary": PRIMARY, "checksumSource": PRIMARY + ".sha1",
               "runDirectory": str(run), "timeoutSeconds": args.timeout,
+              "bundledComponentBypassedForTransportRegression": True,
               "minecraftLaunched": False, "javaLaunched": False, "phases": [], "ok": False}
     try:
         for phase in ("primary", "fallback", "cache"):
